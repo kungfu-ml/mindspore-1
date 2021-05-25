@@ -22,13 +22,14 @@ echo "It is better to use absolute path."
 echo "======================================================================================="
 
 RANK_SIZE=4
-EPOCH_SIZE=1
-DATA_DIR=/home/marcel/Mindspore/wiki
-SCHEMA_DIR=""
+EPOCH_SIZE=8
+DATA_DIR="/home/marcel/Mindspore/pretrainingdata"
+SCHEMA_DIR="/home/marcel/Mindspore/schema.json"
 
-/home/marcel/Mindspore/kungfu-mindspore/ld_library_path.sh
+. /home/marcel/Mindspore/kungfu-mindspore/ld_library_path.sh
+export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore/mindspore)
 
-mpirun --allow-run-as-root \
+/home/marcel/.local/bin/mpirun --allow-run-as-root \
     -n $RANK_SIZE \
     --output-filename log_output \
     python run_pretrain.py        \
@@ -44,6 +45,5 @@ mpirun --allow-run-as-root \
         --save_checkpoint_steps=10000  \
         --save_checkpoint_num=1      \
         --data_dir=$DATA_DIR      \
-        > log.txt 2>&1
-
-        # --schema_dir=$SCHEMA_DIR > log.txt 2>&1
+        --train_steps=32 \
+        --schema_dir=$SCHEMA_DIR > log.txt 2>&1
