@@ -14,31 +14,36 @@
 # limitations under the License.
 # ============================================================================
 
-echo "=============================================================================================================="
-echo "Please run the scipt as: "
+echo "======================================================================================="
+echo "Please run the script as: "
 echo "bash run_distributed_pretrain.sh DEVICE_NUM EPOCH_SIZE DATA_DIR SCHEMA_DIR"
 echo "for example: bash run_distributed_pretrain.sh 8 40 /path/zh-wiki/ /path/Schema.json"
 echo "It is better to use absolute path."
-echo "=============================================================================================================="
+echo "======================================================================================="
 
-RANK_SIZE=$1
-EPOCH_SIZE=$2
-DATA_DIR=$3
-SCHEMA_DIR=$4
+RANK_SIZE=4
+EPOCH_SIZE=1
+DATA_DIR=/home/marcel/Mindspore/wiki
+SCHEMA_DIR=""
 
-mpirun --allow-run-as-root -n $RANK_SIZE --output-filename log_output --merge-stderr-to-stdout \
-  python run_pretrain.py        \
-    --device_target="GPU"      \
-    --distribute="true"        \
-    --epoch_size=$EPOCH_SIZE    \
-    --enable_save_ckpt="true"    \
-    --enable_lossscale="false"    \
-    --do_shuffle="true"        \
-    --enable_data_sink="true"    \
-    --data_sink_steps=20        \
-    --load_checkpoint_path=""      \
-    --save_checkpoint_steps=10000  \
-    --save_checkpoint_num=1      \
-    --data_dir=$DATA_DIR      \
-    --schema_dir=$SCHEMA_DIR > log.txt 2>&1 &
+/home/marcel/Mindspore/kungfu-mindspore/ld_library_path.sh
 
+mpirun --allow-run-as-root \
+    -n $RANK_SIZE \
+    --output-filename log_output \
+    python run_pretrain.py        \
+        --device_target="GPU"      \
+        --distribute="true"        \
+        --epoch_size=$EPOCH_SIZE    \
+        --enable_save_ckpt="true"    \
+        --enable_lossscale="true"    \
+        --do_shuffle="true"        \
+        --enable_data_sink="true"    \
+        --data_sink_steps=20        \
+        --load_checkpoint_path=""      \
+        --save_checkpoint_steps=10000  \
+        --save_checkpoint_num=1      \
+        --data_dir=$DATA_DIR      \
+        > log.txt 2>&1
+
+        # --schema_dir=$SCHEMA_DIR > log.txt 2>&1
