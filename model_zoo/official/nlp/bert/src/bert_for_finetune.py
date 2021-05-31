@@ -49,7 +49,17 @@ def _tensor_grad_overflow(grad):
 
 class BertFinetuneCell(nn.Cell):
     """
-    Especifically defined for finetuning where only four inputs tensor are needed.
+    Especially defined for finetuning where only four inputs tensor are needed.
+
+    Append an optimizer to the training network after that the construct
+    function can be called to create the backward graph.
+
+    Different from the builtin loss_scale wrapper cell, we apply grad_clip before the optimization.
+
+    Args:
+        network (Cell): The training network. Note that loss function should have been added.
+        optimizer (Optimizer): Optimizer for updating the weights.
+        scale_update_cell (Cell): Cell to do the loss scale. Default: None.
     """
     def __init__(self, network, optimizer, scale_update_cell=None):
 
@@ -81,9 +91,8 @@ class BertFinetuneCell(nn.Cell):
         else:
             self.alloc_status = P.NPUAllocFloatStatus()
             self.get_status = P.NPUGetFloatStatus()
-            self.clear_before_grad = P.NPUClearFloatStatus()
+            self.clear_status = P.NPUClearFloatStatus()
         self.reduce_sum = P.ReduceSum(keep_dims=False)
-        self.depend_parameter_use = P.ControlDepend(depend_mode=1)
         self.base = Tensor(1, mstype.float32)
         self.less_equal = P.LessEqual()
         self.hyper_map = C.HyperMap()
@@ -113,9 +122,9 @@ class BertFinetuneCell(nn.Cell):
 
         if not self.gpu_target:
             init = self.alloc_status()
-            clear_before_grad = self.clear_before_grad(init)
-            F.control_depend(loss, init)
-            self.depend_parameter_use(clear_before_grad, scaling_sens)
+            init = F.depend(init, loss)
+            clear_status = self.clear_status(init)
+            scaling_sens = F.depend(scaling_sens, clear_status)
         grads = self.grad(self.network, weights)(input_ids,
                                                  input_mask,
                                                  token_type_id,
@@ -127,10 +136,10 @@ class BertFinetuneCell(nn.Cell):
         if self.reducer_flag:
             grads = self.grad_reducer(grads)
         if not self.gpu_target:
-            flag = self.get_status(init)
+            init = F.depend(init, grads)
+            get_status = self.get_status(init)
+            init = F.depend(init, get_status)
             flag_sum = self.reduce_sum(init, (0,))
-            F.control_depend(grads, flag)
-            F.control_depend(flag, flag_sum)
         else:
             flag_sum = self.hyper_map(F.partial(_grad_overflow), grads)
             flag_sum = self.addn(flag_sum)
@@ -173,11 +182,17 @@ class BertSquadCell(nn.Cell):
             self.grad_reducer = DistributedGradReducer(optimizer.parameters, mean, degree)
         self.is_distributed = (self.parallel_mode != ParallelMode.STAND_ALONE)
         self.cast = P.Cast()
-        self.alloc_status = P.NPUAllocFloatStatus()
-        self.get_status = P.NPUGetFloatStatus()
-        self.clear_before_grad = P.NPUClearFloatStatus()
+        self.gpu_target = False
+        if context.get_context("device_target") == "GPU":
+            self.gpu_target = True
+            self.float_status = P.FloatStatus()
+            self.addn = P.AddN()
+            self.reshape = P.Reshape()
+        else:
+            self.alloc_status = P.NPUAllocFloatStatus()
+            self.get_status = P.NPUGetFloatStatus()
+            self.clear_status = P.NPUClearFloatStatus()
         self.reduce_sum = P.ReduceSum(keep_dims=False)
-        self.depend_parameter_use = P.ControlDepend(depend_mode=1)
         self.base = Tensor(1, mstype.float32)
         self.less_equal = P.LessEqual()
         self.hyper_map = C.HyperMap()
@@ -197,7 +212,7 @@ class BertSquadCell(nn.Cell):
                   sens=None):
         """BertSquad"""
         weights = self.weights
-        init = self.alloc_status()
+        init = False
         loss = self.network(input_ids,
                             input_mask,
                             token_type_id,
@@ -209,6 +224,11 @@ class BertSquadCell(nn.Cell):
             scaling_sens = self.loss_scale
         else:
             scaling_sens = sens
+        if not self.gpu_target:
+            init = self.alloc_status()
+            init = F.depend(init, loss)
+            clear_status = self.clear_status(init)
+            scaling_sens = F.depend(scaling_sens, clear_status)
         grads = self.grad(self.network, weights)(input_ids,
                                                  input_mask,
                                                  token_type_id,
@@ -218,22 +238,24 @@ class BertSquadCell(nn.Cell):
                                                  is_impossible,
                                                  self.cast(scaling_sens,
                                                            mstype.float32))
-        clear_before_grad = self.clear_before_grad(init)
-        F.control_depend(loss, init)
-        self.depend_parameter_use(clear_before_grad, scaling_sens)
         grads = self.hyper_map(F.partial(grad_scale, scaling_sens), grads)
         grads = self.hyper_map(F.partial(clip_grad, GRADIENT_CLIP_TYPE, GRADIENT_CLIP_VALUE), grads)
         if self.reducer_flag:
             grads = self.grad_reducer(grads)
-        flag = self.get_status(init)
-        flag_sum = self.reduce_sum(init, (0,))
+        if not self.gpu_target:
+            init = F.depend(init, grads)
+            get_status = self.get_status(init)
+            init = F.depend(init, get_status)
+            flag_sum = self.reduce_sum(init, (0,))
+        else:
+            flag_sum = self.hyper_map(F.partial(_grad_overflow), grads)
+            flag_sum = self.addn(flag_sum)
+            flag_sum = self.reshape(flag_sum, (()))
         if self.is_distributed:
             flag_reduce = self.allreduce(flag_sum)
             cond = self.less_equal(self.base, flag_reduce)
         else:
             cond = self.less_equal(self.base, flag_sum)
-        F.control_depend(grads, flag)
-        F.control_depend(flag, flag_sum)
         overflow = cond
         if sens is None:
             overflow = self.loss_scaling_manager(self.loss_scale, cond)
