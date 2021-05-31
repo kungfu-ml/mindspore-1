@@ -43,5 +43,5 @@ python ${PROJECT_DIR}/../run_squad.py  \
     --load_pretrain_checkpoint_path="/home/marcel/Mindspore/bertbase_ascend_v111_zhwiki_offical_nlp_bs256_loss3.7.ckpt" \
     --load_finetune_checkpoint_path="" \
     --train_data_file_path="/data/squad1/train.tf_record" \
-    --eval_json_path="/data/squad1/dev-v1.1.json" \
-    --schema_file_path="" > squad_log.txt 2>&1
+    --eval_json_path="/data/squad1/dev-v1.1.json" > squad_log.txt 2>&1
+    # --schema_file_path="/home/marcel/Mindspore/squad_schema.json" > squad_log.txt 2>&1
