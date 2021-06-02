@@ -20,6 +20,7 @@ Bert finetune and evaluation model script.
 import mindspore.nn as nn
 from mindspore.common.initializer import TruncatedNormal
 from mindspore.ops import operations as P
+from mindspore.ops import functional as F
 from .bert_model import BertModel
 
 class BertCLSModel(nn.Cell):
@@ -86,9 +87,12 @@ class BertSquadModel(nn.Cell):
         logits = P.Reshape()(logits, (batch_size, seq_length, self.num_labels))
         logits = self.log_softmax(logits)
 
-        logits = self.transpose(logits, self.perm)
-        logits = self.log_softmax(logits)
-        logits = self.transpose(logits, self.perm)
+        x_transpose = self.transpose(logits, self.perm)
+        x_shape = F.shape(x_transpose)
+        x_reshape = F.reshape(x_transpose, (x_shape[0] * x_shape[1], -1))
+        y_reshape = self.log_softmax(x_reshape)
+        y_transpose = F.reshape(y_reshape, x_shape)
+        logits = self.transpose(y_transpose, self.perm)
 
         return logits
 
