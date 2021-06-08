@@ -20,14 +20,13 @@ Bert finetune and evaluation model script.
 import mindspore.nn as nn
 from mindspore.common.initializer import TruncatedNormal
 from mindspore.ops import operations as P
-from mindspore.ops import functional as F
 from .bert_model import BertModel
 
 class BertCLSModel(nn.Cell):
     """
     This class is responsible for classification task evaluation, i.e. XNLI(num_labels=3),
     LCQMC(num_labels=2), Chnsenti(num_labels=2). The returned output represents the final
-    logits as the results of log_softmax is propotional to that of softmax.
+    logits as the results of log_softmax is proportional to that of softmax.
     """
     def __init__(self, config, is_training, num_labels=2, dropout_prob=0.0, use_one_hot_embeddings=False,
                  assessment_method=""):
@@ -83,14 +82,15 @@ class BertSquadModel(nn.Cell):
         logits = P.Cast()(logits, self.dtype)
         logits = P.Reshape()(logits, (batch_size, seq_length, self.num_labels))
         logits = P.Transpose()(logits, (0, 2, 1))
-        logits = self.log_softmax(logits)
-        logits = P.Transpose()(logits, (0, 2, 1))
+        logits_shape = P.Shape()(logits)
+        logits = self.log_softmax(P.Reshape()(logits, (-1, logits_shape[2])))
+        logits = P.Transpose()(P.Reshape()(logits, logits_shape), (0, 2, 1))
         return logits
 
 class BertNERModel(nn.Cell):
     """
     This class is responsible for sequence labeling task evaluation, i.e. NER(num_labels=11).
-    The returned output represents the final logits as the results of log_softmax is propotional to that of softmax.
+    The returned output represents the final logits as the results of log_softmax is proportional to that of softmax.
     """
     def __init__(self, config, is_training, num_labels=11, use_crf=False, dropout_prob=0.0,
                  use_one_hot_embeddings=False):
