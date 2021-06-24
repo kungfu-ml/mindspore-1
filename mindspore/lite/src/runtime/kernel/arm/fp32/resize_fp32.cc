@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <map>
+#include <utility>
 #include "src/runtime/kernel/arm/fp32/resize_fp32.h"
 #include "schema/model_generated.h"
 #include "src/kernel_registry.h"
@@ -25,11 +27,18 @@ using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_INVALID_OP_ATTR;
 using mindspore::lite::RET_NULL_PTR;
 using mindspore::lite::RET_OK;
+using mindspore::schema::CoordinateTransformMode_ALIGN_CORNERS;
+using mindspore::schema::CoordinateTransformMode_ASYMMETRIC;
+using mindspore::schema::CoordinateTransformMode_HALF_PIXEL;
 using mindspore::schema::PrimitiveType_Resize;
 
 namespace mindspore::kernel {
 int ResizeCPUKernel::Init() {
   auto ret = ResizeBaseCPUKernel::Init();
+  if (ret != RET_OK) {
+    return ret;
+  }
+  ret = SelectCalculatorFunc();
   if (ret != RET_OK) {
     return ret;
   }
@@ -40,98 +49,106 @@ int ResizeCPUKernel::Init() {
 }
 
 int ResizeCPUKernel::ReSize() {
-  int ret = RET_OK;
-  if (method_ == static_cast<int>(schema::ResizeMethod_LINEAR)) {
-    if (!const_shape_) {
-      new_height_ = out_tensors_.at(0)->shape()[1];
-      new_width_ = out_tensors_.at(0)->shape()[2];
-    }
+  if (method_ == static_cast<int>(schema::ResizeMethod_NEAREST)) {
+    return RET_OK;
+  }
+
+  if (!const_shape_) {
+    new_height_ = out_tensors_.at(0)->shape()[1];
+    new_width_ = out_tensors_.at(0)->shape()[2];
+  }
+
+  auto ret = MallocTmpBuffer();
+  if (ret != RET_OK) {
     FreeTmpBuffer();
-    ret = MallocTmpBuffer();
-    if (ret != RET_OK) {
-      FreeTmpBuffer();
-      return ret;
-    }
-
-    auto input = in_tensors_.at(0);
-    auto input_shape = input->shape();
-    ret = PrepareResizeBilinear(input_shape.data(), out_tensors_.at(0)->shape().data(), align_corners_, y_bottoms_,
-                                y_tops_, x_lefts_, x_rights_, y_bottom_weights_, x_left_weights_);
-    if (ret != RET_OK) {
-      FreeTmpBuffer();
-    }
-  }
-  return ret;
-}
-
-int ResizeCPUKernel::MallocTmpBuffer() {
-  int c = in_tensors_.at(0)->Channel();
-  int h = new_height_;
-  int w = new_width_;
-  y_bottoms_ = reinterpret_cast<int *>(malloc(sizeof(int) * h));
-  if (y_bottoms_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
-  }
-  y_tops_ = reinterpret_cast<int *>(malloc(sizeof(int) * h));
-  if (y_tops_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
-  }
-  y_bottom_weights_ = reinterpret_cast<float *>(malloc(sizeof(float) * h));
-  if (y_bottom_weights_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
+    return ret;
   }
 
-  x_lefts_ = reinterpret_cast<int *>(malloc(sizeof(int) * w));
-  if (x_lefts_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
+  ret = ResizePrepare();
+  if (ret != RET_OK) {
+    FreeTmpBuffer();
+    return ret;
   }
-  x_rights_ = reinterpret_cast<int *>(malloc(sizeof(int) * w));
-  if (x_rights_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
-  }
-  x_left_weights_ = reinterpret_cast<float *>(malloc(sizeof(float) * w));
-  if (x_left_weights_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
-  }
-  line_buffer_ = reinterpret_cast<float *>(malloc(sizeof(float) * w * c * 2 * context_->thread_num_));
-  if (line_buffer_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_NULL_PTR;
-  }
-
   return RET_OK;
 }
-void ResizeCPUKernel::FreeTmpBuffer() {
-  if (y_bottoms_ != nullptr) {
-    free(y_bottoms_);
-    y_bottoms_ = nullptr;
+
+// Bilinear interpolation :
+// Bilinear interpolation considers the closest 2x2 neighborhood of known pixel values surrounding the unknown pixel.
+// It takes a weighted average of these 4 pixels to arrive at its final interpolated value. Thus, we need to reserve
+// twice bigger space than coordinates arrays for weight arrays. It means x_weight_len is twice as much as x_len in
+// detail.
+//
+// Bicubic interpolation:
+// Bicubic goes one step beyond bilinear by considering the closest 4x4 neighborhood of known pixels --- for a total of
+// 16 pixels. Since these are at various distances from the unknown pixel, closer pixels are given a higher weighting in
+// the calculation.
+void ResizeCPUKernel::CalTmpBufferLen(int *x_len, int *y_len, int *x_weight_len, int *y_weight_len) {
+  if (method_ == static_cast<int>(schema::ResizeMethod_LINEAR)) {
+    *x_len = new_width_;
+    *y_len = new_height_;
+    *x_weight_len = new_width_;
+    *y_weight_len = new_height_;
   }
-  if (y_tops_ != nullptr) {
-    free(y_tops_);
-    y_tops_ = nullptr;
+  if (method_ == static_cast<int>(schema::ResizeMethod_CUBIC)) {
+    *x_len = new_width_ * 4;
+    *y_len = new_height_ * 4;
+    *x_weight_len = new_width_ * 4;
+    *y_weight_len = new_height_ * 4;
   }
-  if (y_bottom_weights_ != nullptr) {
-    free(y_bottom_weights_);
-    y_bottom_weights_ = nullptr;
+}
+
+// If resize method is bicubic, x_lefts_ array stores four elements (index - 1, index, index + 1, index + 2) for every
+// output coordinate index.
+int ResizeCPUKernel::MallocTmpBuffer() {
+  if (method_ != static_cast<int>(schema::ResizeMethod_LINEAR) &&
+      method_ != static_cast<int>(schema::ResizeMethod_CUBIC)) {
+    return RET_OK;
+  }
+  // make sure y_bottoms_, y_tops_, etc. are null before malloc
+  FreeTmpBuffer();
+
+  int x_len = 0, y_len = 0, x_weight_len = 0, y_weight_len = 0;
+  CalTmpBufferLen(&x_len, &y_len, &x_weight_len, &y_weight_len);
+
+  // malloc memory for x, y coordinates
+  {
+    coordinate_.x_lefts_ = reinterpret_cast<int *>(malloc(sizeof(int) * x_len));
+    CHECK_MALLOC_RES(coordinate_.x_lefts_, RET_NULL_PTR)
+    coordinate_.y_tops_ = reinterpret_cast<int *>(malloc(sizeof(int) * y_len));
+    CHECK_MALLOC_RES(coordinate_.y_tops_, RET_NULL_PTR)
+    if (method_ == static_cast<int>(schema::ResizeMethod_LINEAR)) {
+      coordinate_.x_rights_ = reinterpret_cast<int *>(malloc(sizeof(int) * x_len));
+      CHECK_MALLOC_RES(coordinate_.x_rights_, RET_NULL_PTR)
+      coordinate_.y_bottoms_ = reinterpret_cast<int *>(malloc(sizeof(int) * y_len));
+      CHECK_MALLOC_RES(coordinate_.y_bottoms_, RET_NULL_PTR)
+    }
   }
 
-  if (x_lefts_ != nullptr) {
-    free(x_lefts_);
-    x_lefts_ = nullptr;
+  // malloc memory for weights of x, y axes
+  {
+    x_weights_ = reinterpret_cast<float *>(malloc(sizeof(float) * x_weight_len));
+    CHECK_MALLOC_RES(x_weights_, RET_NULL_PTR)
+    y_weights_ = reinterpret_cast<float *>(malloc(sizeof(float) * y_weight_len));
+    CHECK_MALLOC_RES(y_weights_, RET_NULL_PTR)
   }
-  if (x_rights_ != nullptr) {
-    free(x_rights_);
-    x_rights_ = nullptr;
+
+  {
+    line_buffer_ = reinterpret_cast<float *>(
+      malloc(sizeof(float) * x_len * in_tensors_.at(0)->Channel() * 2 * context_->thread_num_));
+    CHECK_MALLOC_RES(line_buffer_, RET_NULL_PTR)
   }
-  if (x_left_weights_ != nullptr) {
-    free(x_left_weights_);
-    x_left_weights_ = nullptr;
+  return RET_OK;
+}
+
+void ResizeCPUKernel::FreeTmpBuffer() {
+  coordinate_.FreeData();
+  if (y_weights_ != nullptr) {
+    free(y_weights_);
+    y_weights_ = nullptr;
+  }
+  if (x_weights_ != nullptr) {
+    free(x_weights_);
+    x_weights_ = nullptr;
   }
   if (line_buffer_ != nullptr) {
     free(line_buffer_);
@@ -151,60 +168,40 @@ int ResizeImpl(void *cdata, int task_id) {
 
 int ResizeCPUKernel::RunImpl(int task_id) {
   auto input = in_tensors_.at(0);
-  auto input_data = reinterpret_cast<float *>(input->MutableData());
-  if (input_data == nullptr) {
-    return RET_NULL_PTR;
-  }
-  auto output_data = reinterpret_cast<float *>(out_tensors_.at(0)->MutableData());
-  if (output_data == nullptr) {
-    return RET_NULL_PTR;
-  }
-  auto input_shape = input->shape();
-  if (context_ == nullptr) {
-    return RET_NULL_PTR;
-  }
+  auto input_data = reinterpret_cast<float *>(input->data_c());
+  auto output_data = reinterpret_cast<float *>(out_tensors_.at(0)->data_c());
+  MSLITE_CHECK_PTR(context_);
+  MSLITE_CHECK_PTR(input_data);
+  MSLITE_CHECK_PTR(output_data);
 
-  int ret = 0;
+  auto input_shape = input->shape();
+  int unit = UP_DIV(new_height_, context_->thread_num_);
+  int h_begin = unit * task_id;
+  int h_end = std::min(h_begin + unit, new_height_);
+  int c = input_shape.at(3);
   switch (method_) {
     case static_cast<int>(schema::ResizeMethod_LINEAR): {
-      int n_h_begin, n_h_end;
-      int n = out_tensors_.at(0)->shape().at(0);
-      int h = new_height_;
-      int unit = UP_DIV(n * h, context_->thread_num_);
-      n_h_begin = unit * task_id;
-      n_h_end = std::min(n_h_begin + unit, n * h);
-      int c = in_tensors_.at(0)->shape().at(3);
       float *line0 = line_buffer_ + new_width_ * c * 2 * task_id;
       float *line1 = line0 + new_width_ * c;
-      ret = ResizeBilinear2(input_data, output_data, input_shape.data(), out_tensors_.at(0)->shape().data(), y_bottoms_,
-                            y_tops_, x_lefts_, x_rights_, y_bottom_weights_, x_left_weights_, line0, line1, n_h_begin,
-                            n_h_end);
-
-      break;
+      return ResizeBilinear(input_data, output_data, input_shape.data(), out_tensors_.at(0)->shape().data(),
+                            coordinate_.y_bottoms_, coordinate_.y_tops_, coordinate_.x_lefts_, coordinate_.x_rights_,
+                            y_weights_, x_weights_, line0, line1, h_begin, h_end);
     }
     case static_cast<int>(schema::ResizeMethod_NEAREST): {
-      if (in_tensors_.size() == lite::kDoubleNum && !const_shape_) {
-        auto out_shape = in_tensors_.at(1);
-        auto data = reinterpret_cast<int32_t *>(out_shape->MutableData());
-        if (data == nullptr) {
-          MS_LOG(ERROR) << "The out shape data is nullptr.";
-          return RET_NULL_PTR;
-        } else {
-          out_tensors_.at(0)->shape().at(1) = static_cast<int64_t>(data[0]);
-          out_tensors_.at(0)->shape().at(2) = static_cast<int64_t>(data[1]);
-        }
-      }
-      ret = ResizeNearestNeighbor(input_data, output_data, input_shape.data(), out_tensors_[0]->shape().data(),
-                                  align_corners_, task_id, context_->thread_num_);
-      break;
+      return ResizeNearestNeighbor(input_data, output_data, input_shape.data(), out_tensors_[0]->shape().data(),
+                                   calculate_, coordinate_transform_mode_, task_id, context_->thread_num_);
     }
-    case schema::ResizeMethod_UNKNOW:
+    case static_cast<int>(schema::ResizeMethod_CUBIC): {
+      float *line_buffer = line_buffer_ + new_width_ * c * 4 * task_id;
+      return ResizeBicubic(input_data, output_data, input_shape.data(), out_tensors_.at(0)->shape().data(),
+                           coordinate_.y_tops_, coordinate_.x_lefts_, y_weights_, x_weights_, line_buffer, h_begin,
+                           h_end);
+    }
     default: {
       MS_LOG(ERROR) << "Resize unknown method " << method_;
-      ret = RET_ERROR;
+      return RET_ERROR;
     }
   }
-  return ret;
 }
 
 int ResizeCPUKernel::Run() {
@@ -214,7 +211,39 @@ int ResizeCPUKernel::Run() {
     FreeTmpBuffer();
     return RET_ERROR;
   }
+  return RET_OK;
+}
 
+int ResizeCPUKernel::ResizePrepare() {
+  auto input_shape = in_tensors_.at(0)->shape();
+  if (method_ == static_cast<int>(schema::ResizeMethod_LINEAR)) {
+    return PrepareResizeBilinear(input_shape.data(), out_tensors_.at(0)->shape().data(), calculate_,
+                                 coordinate_.y_bottoms_, coordinate_.y_tops_, coordinate_.x_lefts_,
+                                 coordinate_.x_rights_, y_weights_, x_weights_);
+  }
+  if (method_ == static_cast<int>(schema::ResizeMethod_CUBIC)) {
+    auto cubic_coeff = reinterpret_cast<ResizeParameter *>(op_parameter_)->cubic_coeff_;
+    return PrepareResizeBicubic(input_shape.data(), out_tensors_.at(0)->shape().data(), calculate_, coordinate_.y_tops_,
+                                coordinate_.x_lefts_, y_weights_, x_weights_, cubic_coeff);
+  }
+  return RET_OK;
+}
+
+int ResizeCPUKernel::SelectCalculatorFunc() {
+  std::map<int, CalculateOriginalCoordinate> cal_fuc_list = {
+    std::make_pair(CoordinateTransformMode_ASYMMETRIC, CalculateAsymmetric),
+    std::make_pair(CoordinateTransformMode_ALIGN_CORNERS, CalculateAlignCorners),
+    std::make_pair(CoordinateTransformMode_HALF_PIXEL, CalculateHalfPixel)};
+
+  auto fun_pair = cal_fuc_list.find(coordinate_transform_mode_);
+  if (fun_pair != cal_fuc_list.end()) {
+    calculate_ = fun_pair->second;
+  } else {
+    MS_LOG(ERROR) << "Do not support coordinate transform mode. Mode is"
+                  << schema::EnumNameCoordinateTransformMode(
+                       static_cast<schema::CoordinateTransformMode>(coordinate_transform_mode_));
+    return RET_ERROR;
+  }
   return RET_OK;
 }
 

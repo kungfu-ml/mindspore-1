@@ -17,9 +17,10 @@
 #include "src/net_runner.h"
 #include <math.h>
 #include <getopt.h>
+#include <algorithm>
 #include <cstring>
-#include <iostream>
 #include <fstream>
+#include <iostream>
 #include "include/context.h"
 #include "src/utils.h"
 
@@ -69,7 +70,7 @@ void NetRunner::InitAndFigureInputs() {
   context.device_list_[0].device_info_.cpu_device_info_.cpu_bind_mode_ = mindspore::lite::NO_BIND;
   context.thread_num_ = 1;
 
-  session_ = mindspore::session::TrainSession::CreateSession(ms_file_, &context);
+  session_ = mindspore::session::TrainSession::CreateTransferSession(ms_backbone_file_, ms_head_file_, &context);
   MS_ASSERT(nullptr != session_);
 
   auto inputs = session_->GetInputs();
@@ -113,7 +114,7 @@ std::vector<int> NetRunner::FillInputData(const std::vector<DataLabelTuple> &dat
     int label = 0;
     char *data = nullptr;
     std::tie(data, label) = dataset[idx];
-    std::memcpy(input_data + i * data_size_, data, data_size_);
+    std::copy(data, data + data_size_, input_data + i * data_size_);
     labels[i * num_of_classes_ + label] = 1.0;  // Model expects labels in onehot representation
     labels_vec.push_back(label);
   }
@@ -184,7 +185,8 @@ int NetRunner::TrainLoop() {
     if (min_loss > loss) min_loss = loss;
 
     if (save_checkpoint_ != 0 && (i + 1) % save_checkpoint_ == 0) {
-      auto cpkt_fn = ms_file_.substr(0, ms_file_.find_last_of('.')) + "_trained_" + std::to_string(i + 1) + ".ms";
+      auto cpkt_fn =
+        ms_head_file_.substr(0, ms_head_file_.find_last_of('.')) + "_trained_" + std::to_string(i + 1) + ".ms";
       session_->SaveToFile(cpkt_fn);
     }
 
@@ -210,23 +212,27 @@ int NetRunner::Main() {
   std::cout << "accuracy on validation data = " << acc << std::endl;
 
   if (cycles_ > 0) {
-    auto trained_fn = ms_file_.substr(0, ms_file_.find_last_of('.')) + "_trained.ms";
+    auto trained_fn = ms_head_file_.substr(0, ms_head_file_.find_last_of('.')) + "_trained.ms";
     session_->SaveToFile(trained_fn);
   }
   return 0;
 }
 
 void NetRunner::Usage() {
-  std::cout << "Usage: net_runner -f <.ms model file> -d <data_dir> [-c <num of training cycles>] "
-            << "[-v (verbose mode)] [-s <save checkpoint every X iterations>]" << std::endl;
+  std::cout << "Usage: net_runner -f <.ms head model file> -b <.ms backbone model file> -d <data_dir> "
+            << "[-c <num of training cycles>] [-v (verbose mode)] "
+            << "[-s <save checkpoint every X iterations>]" << std::endl;
 }
 
 bool NetRunner::ReadArgs(int argc, char *argv[]) {
   int opt;
-  while ((opt = getopt(argc, argv, "f:e:d:s:ihc:v")) != -1) {
+  while ((opt = getopt(argc, argv, "b:f:e:d:s:ihc:v")) != -1) {
     switch (opt) {
+      case 'b':
+        ms_backbone_file_ = std::string(optarg);
+        break;
       case 'f':
-        ms_file_ = std::string(optarg);
+        ms_head_file_ = std::string(optarg);
         break;
       case 'e':
         cycles_ = atoi(optarg);

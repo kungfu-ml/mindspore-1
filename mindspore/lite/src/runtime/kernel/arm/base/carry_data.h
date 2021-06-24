@@ -25,16 +25,15 @@ namespace mindspore::kernel {
 class CarryDataKernel : public LiteKernel {
  public:
   CarryDataKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                  const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                  const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                  const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~CarryDataKernel() override = default;
 
  protected:
   int MoveData(std::vector<lite::Tensor *>::iterator dst_begin, std::vector<lite::Tensor *>::iterator dst_end,
                std::vector<lite::Tensor *>::iterator src_begin, std::vector<lite::Tensor *>::iterator src_limit);
   static int MoveTensorData(lite::Tensor *dst_tensor, lite::Tensor *src_tensor);
-  static int MoveTensorLiteData(lite::TensorList *dst_tensor, lite::TensorList *src_tensor);
+  static int MoveTensorListData(lite::TensorList *dst_tensor, lite::TensorList *src_tensor);
 };
 }  // namespace mindspore::kernel
 

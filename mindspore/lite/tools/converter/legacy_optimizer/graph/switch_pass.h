@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,6 +50,7 @@ class SingleSwitchPass {
   STATUS ConcatBodySubgraphInputAndOutput();
   bool IsLoop();
   STATUS InsertMerge();
+  std::unique_ptr<schema::CNodeT> MakeMergeNode(const std::string &name, const std::vector<size_t> &const_in);
 
   // function for if
   STATUS InsertPartialAndMergeAfterSwitch();

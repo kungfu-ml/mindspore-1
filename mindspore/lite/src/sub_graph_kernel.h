@@ -17,9 +17,11 @@
 #ifndef MINDSPORE_LITE_SRC_SUB_GRAPH_H
 #define MINDSPORE_LITE_SRC_SUB_GRAPH_H
 
+#include <atomic>
 #include <utility>
 #include <string>
 #include <vector>
+#include <map>
 #include "src/lite_kernel.h"
 #include "src/executor.h"
 #include "src/common/log_adapter.h"
@@ -31,9 +33,9 @@ namespace mindspore::kernel {
 // store origin data and allocator of input tensor of subgraph for PreProcess and PostProcess
 struct DataStore {
   void *data_ = nullptr;
-  lite::Allocator *allocator_ = nullptr;
-  static DataStore *CreateDataStore(void *data = nullptr, lite::Allocator *data_allocator = nullptr,
-                                    lite::Allocator *allocator = nullptr) {
+  mindspore::Allocator *allocator_ = nullptr;
+  static DataStore *CreateDataStore(void *data = nullptr, mindspore::Allocator *data_allocator = nullptr,
+                                    mindspore::Allocator *allocator = nullptr) {
     DataStore *data_store = nullptr;
     if (allocator == nullptr) {
       data_store = static_cast<DataStore *>(malloc(sizeof(DataStore)));
@@ -55,7 +57,7 @@ class SubGraphKernel : public LiteKernel {
   SubGraphKernel(const std::vector<lite::Tensor *> &inputs, const std::vector<lite::Tensor *> &outputs,
                  std::vector<LiteKernel *> in_kernels, std::vector<LiteKernel *> out_kernels,
                  std::vector<LiteKernel *> nodes, const lite::InnerContext *ctx)
-      : LiteKernel(nullptr, inputs, outputs, ctx, nullptr),
+      : LiteKernel(nullptr, inputs, outputs, ctx),
         nodes_(std::move(nodes)),
         in_nodes_(std::move(in_kernels)),
         out_nodes_(std::move(out_kernels)) {
@@ -144,7 +146,8 @@ class CpuFp32SubGraph : public CpuSubGraph {
                   std::vector<LiteKernel *> nodes, const lite::InnerContext *ctx)
       : CpuSubGraph(inputs, outputs, std::move(in_kernels), std::move(out_kernels), std::move(nodes), ctx) {
     subgraph_type_ = kCpuFP32SubGraph;
-    this->name_ = "CpuFP32SubGraph";
+    static std::atomic_int index = 0;
+    this->name_ = "CpuFP32SubGraph" + std::to_string(index++);
   }
 
   ~CpuFp32SubGraph() override = default;
@@ -157,6 +160,7 @@ class CpuFp32SubGraph : public CpuSubGraph {
   int PostProcess() override { return CpuSubGraph::PostProcess(); }
 };
 
+#ifdef ENABLE_FP16
 class CpuFp16SubGraph : public CpuSubGraph {
  public:
   CpuFp16SubGraph(const std::vector<lite::Tensor *> &inputs, const std::vector<lite::Tensor *> &outputs,
@@ -164,7 +168,8 @@ class CpuFp16SubGraph : public CpuSubGraph {
                   std::vector<LiteKernel *> nodes, const lite::InnerContext *ctx)
       : CpuSubGraph(inputs, outputs, std::move(in_kernels), std::move(out_kernels), std::move(nodes), ctx) {
     subgraph_type_ = kCpuFP16SubGraph;
-    this->name_ = "CpuFP16SubGraph";
+    static std::atomic_int index = 0;
+    this->name_ = "CpuFP16SubGraph" + std::to_string(index++);
   }
 
   ~CpuFp16SubGraph() override = default;
@@ -178,9 +183,12 @@ class CpuFp16SubGraph : public CpuSubGraph {
 
  private:
   void FreeOriginInputData();
+  int Float32TensorToFloat16Tensor(lite::Tensor *tensor);
+  int Float16TensorToFloat32Tensor(lite::Tensor *tensor);
 
  private:
-  std::vector<DataStore *> origin_input_data_{};
+  std::map<lite::Tensor *, DataStore *> origin_input_data_;
 };
+#endif
 }  // namespace mindspore::kernel
 #endif  // MINDSPORE_LITE_SRC_SUB_GRAPH_H

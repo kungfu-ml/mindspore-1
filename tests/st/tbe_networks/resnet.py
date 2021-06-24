@@ -94,7 +94,7 @@ class ResidualBlock(nn.Cell):
         self.bn3 = bn_with_initialize_last(out_channels)
 
         self.relu = P.ReLU()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x):
         identity = x
@@ -141,7 +141,7 @@ class ResidualBlockWithDown(nn.Cell):
 
         self.conv_down_sample = conv1x1(in_channels, out_channels, stride=stride, padding=0)
         self.bn_down_sample = bn_with_initialize(out_channels)
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x):
         identity = x
@@ -249,7 +249,7 @@ class ResNet(nn.Cell):
 
         self.bn1 = bn_with_initialize(64)
         self.relu = P.ReLU()
-        self.maxpool = P.MaxPoolWithArgmax(ksize=3, strides=2, padding="SAME")
+        self.maxpool = P.MaxPoolWithArgmax(kernel_size=3, strides=2, pad_mode="SAME")
 
         self.layer1 = MakeLayer0(block, in_channels=64, out_channels=256, stride=1)
         self.layer2 = MakeLayer1(block, in_channels=256, out_channels=512, stride=2)

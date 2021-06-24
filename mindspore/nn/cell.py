@@ -23,8 +23,9 @@ import numpy
 
 from mindspore import log as logger
 from mindspore.common.parameter import PARAMETER_NAME_DEFAULT
+from mindspore.context import ParallelMode
 from .. import context
-from .._c_expression import init_pipeline, Cell_
+from .._c_expression import init_pipeline, Cell_, FuncGraph
 from .._checkparam import Validator
 from ..common import dtype as mstype
 from ..common.api import _executor, _pynative_exec
@@ -68,7 +69,7 @@ class Cell(Cell_):
     """
     IGNORE_LIST = ['_scope', '_cell_init_args', '_auto_prefix', '_cells', '_params', '_construct_inputs_names',
                    '_construct_inputs_num', '_create_time', '_mindspore_flags', '_parallel_inputs_run',
-                   '_parameter_layout_dict', '_already_run', '_params_list', '_tensor_list', '_phase',
+                   '_parameter_layout_dict', '_params_list', '_tensor_list', '_phase',
                    '_auto_parallel_mode', '_backward_hook', '_bprop_debug', '_is_run', '_param_prefix',
                    '_attr_synced', 'enable_hook', 'pynative', 'requires_grad',
                    '_auto_parallel_compile_and_run', 'cell_type']
@@ -88,8 +89,11 @@ class Cell(Cell_):
         self._scope = None
         self._phase = 'train'
         self._parameter_layout_dict = {}
+        self._parallel_parameter_name_list = ()
+        self._parallel_parameter_merge_net_dict = {}
         self._create_time = int(time.time() * 1e9)
         self.phase_prefix = ""
+        self.parameter_broadcast_done = False
         init_pipeline()
 
         # call gc to release GE session resources used by non-used cell objects
@@ -105,14 +109,8 @@ class Cell(Cell_):
         self._backward_hook = None
         self.enable_hook = False
         self._bprop_debug = False
-        self._already_run = False
         self.cell_type = None
         self._auto_parallel_compile_and_run = False
-        self._support_non_tensor_inputs = False
-
-    @property
-    def already_run(self):
-        return self._already_run
 
     def __getstate__(self):
         base = Cell_.__getstate__(self)
@@ -125,34 +123,9 @@ class Cell(Cell_):
         self._attr_synced = False
 
     @property
-    def support_non_tensor_inputs(self):
-        """
-        Whether support non tensor inputs in outermost net in GRAPH MODE.
-        This property only used in forward net, and is not supported in grad net.
-        The default value of the property is the `False`, that is,
-        it does not support passing non tensor inputs to the outermost net.
-        If you want to support, set the property to the `True`.
-
-        """
-        return self._support_non_tensor_inputs
-
-    @support_non_tensor_inputs.setter
-    def support_non_tensor_inputs(self, value):
-        """
-        Set attr 'support_non_tensor_inputs'.
-        """
-        if not isinstance(value, bool):
-            raise ValueError("When set 'support_non_tensor_inputs' for cell, the value should be bool.")
-        self._support_non_tensor_inputs = value
-
-    @property
     def _cell_tag(self):
         # `<class 'xxxxxxx'>` to `xxxxxxx`
         return str(self.__class__)[8:-2]
-
-    @already_run.setter
-    def already_run(self, value):
-        self._already_run = value
 
     @property
     def create_time(self):
@@ -242,6 +215,26 @@ class Cell(Cell_):
             raise TypeError("'parameter_layout_dict' must be dict type.")
         self._parameter_layout_dict = value
 
+    @property
+    def parallel_parameter_name_list(self):
+        return self._parallel_parameter_name_list
+
+    @parallel_parameter_name_list.setter
+    def parallel_parameter_name_list(self, value):
+        if not isinstance(value, list):
+            raise TypeError("'parallel_parameter_name_list' must be list type.")
+        self._parallel_parameter_name_list = value
+
+    @property
+    def parallel_parameter_merge_net_dict(self):
+        return self._parallel_parameter_merge_net_dict
+
+    @parallel_parameter_merge_net_dict.setter
+    def parallel_parameter_merge_net_dict(self, value):
+        if not isinstance(value, dict):
+            raise TypeError("'parallel_parameter_merge_net_dict' must be dict type.")
+        self._parallel_parameter_merge_net_dict = value
+
     def get_func_graph_proto(self):
         """Return graph binary proto."""
         return _executor._get_func_graph_proto(self, self.phase + "." + str(self.create_time), "anf_ir", True)
@@ -274,7 +267,7 @@ class Cell(Cell_):
 
     def __del__(self):
         if context.get_context is not None and context.get_context("mode") == context.PYNATIVE_MODE:
-            _pynative_exec.clear(str(id(self)))
+            _pynative_exec.del_cell(str(id(self)))
         if hasattr(self, "_create_time"):
             _executor.del_net_res(str(self._create_time))
 
@@ -314,6 +307,23 @@ class Cell(Cell_):
                 res.append(cast(item, dst_type))
         return tuple(res)
 
+    def do_parameter_broadcast(self):
+        if context.get_auto_parallel_context("parallel_mode") == ParallelMode.DATA_PARALLEL:
+            if not self.parameter_broadcast_done:
+                _pynative_exec.parameter_broadcast(self, self.phase, self._auto_parallel_mode)
+                self.parameter_broadcast_done = True
+
+    def run_construct(self, cast_inputs, kwargs):
+        if self.enable_hook:
+            _pynative_exec.enter_construct(self)
+            output = self._hook_construct(*cast_inputs, **kwargs)
+            _pynative_exec.leave_construct(self)
+        else:
+            _pynative_exec.enter_construct(self)
+            output = self.construct(*cast_inputs, **kwargs)
+            _pynative_exec.leave_construct(self)
+        return output
+
     def __call__(self, *inputs, **kwargs):
         if self.__class__.construct is Cell.construct:
             logger.warning(f"The '{self.__class__}' does not override the method 'construct', "
@@ -331,6 +341,7 @@ class Cell(Cell_):
             out = self.compile_and_run(*inputs)
             return out
 
+        self.do_parameter_broadcast()
         for item in inputs:
             if isinstance(item, numpy.ndarray):
                 raise TypeError("cell inputs should not be numpy array.")
@@ -351,21 +362,13 @@ class Cell(Cell_):
                 cast_inputs = self._cast_mixed_precision_inputs(inputs, mstype.float32)
         if not cast_inputs:
             cast_inputs = inputs
-        if self.enable_hook:
-            _pynative_exec.enter_construct(self)
-            output = self._hook_construct(*cast_inputs, **kwargs)
-            _pynative_exec.leave_construct(self)
-        else:
-            _pynative_exec.enter_construct(self)
-            output = self.construct(*cast_inputs, **kwargs)
-            _pynative_exec.leave_construct(self)
+        output = self.run_construct(cast_inputs, kwargs)
         if isinstance(output, Parameter):
             output = output.data
         if self.requires_grad is True:
             _pynative_exec.end_graph(self, output, *inputs, **kwargs)
             for i, cell in enumerate(self.cells()):
                 cell.set_grad(origin_grad[i])
-            self._already_run = True
         return output
 
     def _add_attr(self, name, value):
@@ -396,46 +399,63 @@ class Cell(Cell_):
             self._add_attr(key, value)
         self._attr_synced = True
 
+    def _set_attr_for_parameter(self, name, value):
+        """Set attr for parameter."""
+        cells = self.__dict__.get('_cells')
+        params = self.__dict__.get('_params')
+        if params is None:
+            raise AttributeError("Can not assign params before Cell.__init__() call.")
+        if name in self.__dict__:
+            if self.__dict__[name] is not None:
+                raise TypeError("The type of value should not be Parameter or Cell, but got Parameter.")
+            del self.__dict__[name]
+        if cells and name in cells:
+            raise TypeError("The type of value should be Cell, but got Parameter.")
+        self.insert_param_to_cell(name, value)
+
+    def _set_attr_for_parameter_tuple(self, name, value):
+        """Set attr for parameter tuple."""
+        params = self.__dict__.get('_params')
+        params_list = self.__dict__.get('_params_list')
+        if params is None:
+            raise AttributeError("Can not assign params before Cell.__init__() call.")
+        for item in value:
+            self.insert_param_to_cell(item.name, item, check_name=False)
+        if context.get_context("mode") == context.PYNATIVE_MODE:
+            if name in self.__dict__:
+                del self.__dict__[name]
+            if name in params:
+                del params[name]
+            params_list[name] = value
+        else:
+            object.__setattr__(self, name, value)
+
+    def _set_attr_for_cell(self, name, value):
+        """Set attr for cell."""
+        cells = self.__dict__.get('_cells')
+        params = self.__dict__.get('_params')
+        if cells is None:
+            raise AttributeError("Can not assign cells before Cell.__init__() call.")
+        if name in self.__dict__:
+            del self.__dict__[name]
+        if params and name in params:
+            raise TypeError("The type of value should be Parameter, but got Cell.")
+        if self._auto_prefix:
+            value.update_parameters_name(name + '.')
+        cells[name] = value
+        if hasattr(self, '_cell_init_args'):
+            self.cell_init_args += str({name: value})
+
     def __setattr__(self, name, value):
         cells = self.__dict__.get('_cells')
         params = self.__dict__.get('_params')
-        params_list = self.__dict__.get('_params_list')
         tensor_list = self.__dict__.get('_tensor_list')
         if isinstance(value, Parameter):
-            if params is None:
-                raise AttributeError("Can not assign params before Cell.__init__() call.")
-            if name in self.__dict__:
-                if self.__dict__[name] is not None:
-                    raise TypeError("The type of value should not be Parameter or Cell, but got Parameter.")
-                del self.__dict__[name]
-            if cells and name in cells:
-                raise TypeError("The type of value should be Cell, but got Parameter.")
-            self.insert_param_to_cell(name, value)
+            self._set_attr_for_parameter(name, value)
         elif isinstance(value, ParameterTuple):
-            if params is None:
-                raise AttributeError("Can not assign params before Cell.__init__() call.")
-            for item in value:
-                self.insert_param_to_cell(item.name, item, check_name=False)
-            if context.get_context("mode") == context.PYNATIVE_MODE:
-                if name in self.__dict__:
-                    del self.__dict__[name]
-                if name in params:
-                    del params[name]
-                params_list[name] = value
-            else:
-                object.__setattr__(self, name, value)
+            self._set_attr_for_parameter_tuple(name, value)
         elif isinstance(value, Cell):
-            if cells is None:
-                raise AttributeError("Can not assign cells before Cell.__init__() call.")
-            if name in self.__dict__:
-                del self.__dict__[name]
-            if params and name in params:
-                raise TypeError("The type of value should be Parameter, but got Cell.")
-            if self._auto_prefix:
-                value.update_parameters_name(name + '.')
-            cells[name] = value
-            if hasattr(self, '_cell_init_args'):
-                self.cell_init_args += str({name: value})
+            self._set_attr_for_cell(name, value)
         elif params and name in params:
             if isinstance(value, Tensor) and self._params[name] is not None:
                 self._params[name].set_data(value)
@@ -591,6 +611,8 @@ class Cell(Cell_):
         for i in inputs:
             if isinstance(i, Tensor):
                 new_inputs.append(i)
+            elif context.get_context("grad_for_scalar") and isinstance(i, (int, float)):
+                new_inputs.append(i)
 
         if self._auto_parallel_mode:
             if new_inputs and isinstance(new_inputs[0], Tensor) and inputs[0].virtual_flag:
@@ -680,21 +702,38 @@ class Cell(Cell_):
         """
         Defines the computation to be performed. This method must be overridden by all subclasses.
 
-        Note:
-            The outermost net only supports tensor inputs by default.
-            If want to support non tensor inputs, set the property `support_non_tensor_inputs` to the `True`.
-            Refer to the property `support_non_tensor_inputs` description.
-
         Returns:
             Tensor, returns the computed result.
         """
         return None
 
+    def remove_redundant_parameters(self):
+        """Remove the redundant parameters"""
+        cells = self.cells_and_names()
+        for _, cell in cells:
+            params = cell._params.items()
+            for param_name, param in list(params):
+                if param.name not in self.parallel_parameter_name_list:
+                    cell._params.pop(param_name)
+                    logger.info("remove the redundant parameter: %s", param.name)
+                    continue
+            cell_dict = cell.__dict__
+            for key in cell_dict:
+                if isinstance(cell_dict[key], ParameterTuple):
+                    param_tuple = cell_dict[key]
+                    new_param_tuple = []
+                    for param in param_tuple:
+                        if param.name not in self.parallel_parameter_name_list:
+                            logger.info("remove the redundant parameter: %s in ParameterTuple", param.name)
+                            continue
+                        new_param_tuple.append(param)
+                    cell.__dict__[key] = ParameterTuple(new_param_tuple)
+
     def init_parameters_data(self, auto_parallel_mode=False):
         """
         Initialize all parameters and replace the original saved parameters in cell.
 
-        Notes:
+        Note:
             trainable_params() and other similar interfaces may return different parameter instance after
             `init_parameters_data`, do not save these result.
 
@@ -784,7 +823,7 @@ class Cell(Cell_):
         """
         Returns all trainable parameters.
 
-        Returns a list of all trainable parmeters.
+        Returns a list of all trainable parameters.
 
         Args:
             recurse (bool): Whether contains the trainable parameters of subcells. Default: True.
@@ -913,8 +952,8 @@ class Cell(Cell_):
         """Sets the name on the first time."""
         if self._scope is None:
             self._scope = name
-        elif self._scope == 'recomputed':
-            self._scope = self._scope + "_" + name
+        elif self._scope == 'recompute_':
+            self._scope = self._scope + name
 
     def _children_scope_recursive(self, parent_prefix='Default'):
         """Generates the scope of each layer of the network recursively."""
@@ -999,7 +1038,9 @@ class Cell(Cell_):
 
     def set_grad(self, requires_grad=True):
         """
-        Sets the cell flag for gradient.
+        Sets the cell flag for gradient. In pynative mode, this parameter specifies whether the network require
+        gradients. If True, the backward network needed to compute the gradients will be generated when the forward
+        network is executed.
 
         Args:
             requires_grad (bool): Specifies if the net need to grad, if it is
@@ -1012,7 +1053,9 @@ class Cell(Cell_):
         """
         Sets the cell to training mode.
 
-        The cell itself and all children cells will be set to training mode.
+        The cell itself and all children cells will be set to training mode. Layers that have different constructions
+        for training and predicting, such as `BatchNorm`, will distinguish between the branches by this attribute. If
+        set to True, the training branch will be executed, otherwise another branch.
 
         Args:
             mode (bool): Specifies whether the model is training. Default: True.
@@ -1062,7 +1105,7 @@ class Cell(Cell_):
         Note:
             fn must be defined as the following code. `cell_name` is the name of registered cell.
             `grad_input` is gradient passed to the cell. `grad_output` is the gradient computed and passed to the
-            next cell or primitve, which may be modified and returned.
+            next cell or primitive, which may be modified and returned.
             hook_fn(cell_name, grad_input, grad_output) -> Tensor or None.
 
         Args:
@@ -1090,22 +1133,52 @@ class Cell(Cell_):
             param.set_param_ps(init_in_server)
 
     def set_comm_fusion(self, fusion_type, recurse=True):
-        Validator.check_is_int(fusion_type)
+        """
+        Set `comm_fusion` for all the parameters in the Net. Please refer to the description of
+        `mindspore.common.parameter.comm_fusion`.
+
+        Note:
+            The value of attribute will be overwritten when the function is called multiply.
+
+        Args:
+            fusion_type (int): The value of `comm_fusion`.
+            recurse (bool): Whether sets the trainable parameters of subcells. Default: True.
+        """
+        Validator.check_non_negative_int(fusion_type)
         for param in self.trainable_params(recurse):
             param.comm_fusion = fusion_type
         return self
 
+    def _set_recompute_scope(self, mode):
+        prefix = 'recompute_'
+        if mode is True:
+            if self._scope is None:
+                self._scope = prefix
+            elif not self._scope.startswith(prefix):
+                self._scope = prefix + self._scope
+        elif not self._scope is None and self._scope.startswith(prefix):
+            self._scope = self._scope[len(prefix):]
+
     def recompute(self, mode=True):
         """
-        Set the cell recomputed. All the primitive in the cell will be set recomputed. If a primitive feeds into a grad
-        node and is set recomputed, we will compute it again for the grad node after the forward computation.
+        Set the cell recomputed. All the primitive in the cell will be set recomputed. If a primitive
+        set recomputed feeds into some backward nodes for computing gradient, rather than storing the
+        intermediate activation computed in forward pass, we will recompute it in backward pass.
+
+        Note:
+
+            - If the computation involves something like randomization or global variable, the equivalence
+              is not guaranteed currently.
+            - If the recompute api of a primitive in this cell is also called, the recompute mode of this
+              primitive is subject to the recompute api of the primitive.
+
         Args:
             mode (bool): Specifies whether the cell is recomputed. Default: True.
         """
-        if mode is True:
-            self._set_scope("recompute")
-        else:
-            self._set_scope("no_recompute")
+        if context.get_context("mode") == context.PYNATIVE_MODE:
+            raise TypeError("Recompute is not supported in pynative mode currently.")
+        Validator.check_bool(mode)
+        self._set_recompute_scope(mode)
         for cell in self.cells():
             cell.recompute(mode)
 
@@ -1120,6 +1193,9 @@ class GraphKernel(Cell):
     Args:
         auto_prefix (bool): Recursively generate namespaces. Default: True.
         flags (dict) : Set graph flags. Default: None.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> class Relu(nn.GraphKernel):
@@ -1138,3 +1214,42 @@ class GraphKernel(Cell):
 
     def construct(self):
         raise NotImplementedError
+
+
+class GraphCell(Cell):
+    """
+    Base class for running the graph loaded from a MindIR.
+
+    This feature is still under development. Currently `GraphCell` do not support modifying the structure of the
+    diagram, and can only use data that shape and type are the same as the input when exporting the MindIR.
+
+    Args:
+        graph (object): A compiled graph loaded from MindIR.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
+
+    Examples:
+        >>> import numpy as np
+        >>> import mindspore.nn as nn
+        >>> from mindspore import Tensor
+        >>> from mindspore.train import export, load
+        >>>
+        >>> net = nn.Conv2d(1, 1, kernel_size=3)
+        >>> input = Tensor(np.ones([1, 1, 3, 3]).astype(np.float32))
+        >>> export(net, input, file_name="net", file_format="MINDIR")
+        >>> graph = load("net.mindir")
+        >>> net = nn.GraphCell(graph)
+        >>> output = net(input)
+    """
+    def __init__(self, graph):
+        super(GraphCell, self).__init__(auto_prefix=True)
+        if not isinstance(graph, FuncGraph):
+            raise TypeError(f"graph must be a FuncGraph loaded from MindIR, but got {type(graph)}.")
+        self.graph = graph
+
+    def construct(self, *inputs):
+        return self.graph(*inputs)
+
+    def __call__(self, *inputs):
+        return self.compile_and_run(*inputs)

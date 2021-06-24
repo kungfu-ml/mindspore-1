@@ -47,11 +47,15 @@ class GPUKernelRuntime : public KernelRuntime {
   bool Run(session::KernelGraph *graph, bool is_task_sink) override;
   bool GenDynamicKernel(const session::KernelGraph *graph) override { return true; }
   bool RunDynamicKernelAsync(const session::KernelGraph *graph) override { return true; }
+  DeviceAddressType GetTargetDeviceAddressType() const override { return DeviceAddressType::kGPU; };
+  void *compute_stream() const override { return stream_; }
+  void *communication_stream() const override { return communication_stream_; }
 
  protected:
   DeviceAddressPtr CreateDeviceAddress(void *device_ptr, size_t device_size, const string &format,
                                        TypeId type_id) override;
   bool SyncStream() override;
+  bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind) override;
 
  private:
   GPUKernelRuntime(const GPUKernelRuntime &);

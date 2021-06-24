@@ -31,8 +31,6 @@
 #include <condition_variable>
 #include <unordered_set>
 
-#include "proto/comm.pb.h"
-#include "proto/ps.pb.h"
 #include "ps/core/node.h"
 #include "utils/log_adapter.h"
 #include "utils/convert_utils_base.h"
@@ -63,7 +61,7 @@ class NodeManager {
   std::vector<ServersMeta> FetchServersMeta();
   void UpdateClusterState();
   void CheckClusterTimeout();
-  void AddFinishNode(const FinishMessage &finish_message);
+  void AddFinishNode(const std::string &finish_message);
   std::unordered_map<std::string, NodeInfo> nodes_info();
   bool is_cluster_ready();
   bool is_cluster_finish();

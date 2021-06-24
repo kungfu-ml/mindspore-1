@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,84 +24,89 @@
 
 namespace mindspore {
 namespace lite {
-static const std::vector<schema::PrimitiveType> nhwcOpList = {
-#ifdef SUPPORT_TRAIN
-  schema::PrimitiveType_Conv2DGradFilter,
-  schema::PrimitiveType_Conv2DGradInput,
-  schema::PrimitiveType_GroupConv2DGradInput,
-  schema::PrimitiveType_PoolingGrad,
-  schema::PrimitiveType_BiasGrad,
-  schema::PrimitiveType_BNGrad,
-  schema::PrimitiveType_ActivationGrad,
-  schema::PrimitiveType_ApplyMomentum,
-  schema::PrimitiveType_Sgd,
-  schema::PrimitiveType_Adam,
-#endif
-  schema::PrimitiveType_Conv2D,
-  schema::PrimitiveType_DeConv2D,
-  schema::PrimitiveType_DepthwiseConv2D,
-  schema::PrimitiveType_DeDepthwiseConv2D,
-  schema::PrimitiveType_Pooling,
-  schema::PrimitiveType_LocalResponseNormalization,
-  schema::PrimitiveType_Resize,
-  schema::PrimitiveType_BatchNorm,
-  schema::PrimitiveType_FusedBatchNorm,
-  schema::PrimitiveType_PReLU,
-  schema::PrimitiveType_BiasAdd,
-  schema::PrimitiveType_InstanceNorm,
-  schema::PrimitiveType_SpaceToDepth,
-  schema::PrimitiveType_DepthToSpace,
-  schema::PrimitiveType_TopK};
+static const std::vector<schema::PrimitiveType> nhwcOpList = {schema::PrimitiveType_Conv2DBackpropFilterFusion,
+                                                              schema::PrimitiveType_Conv2DBackpropInputFusion,
+                                                              schema::PrimitiveType_AvgPoolGrad,
+                                                              schema::PrimitiveType_MaxPoolGrad,
+                                                              schema::PrimitiveType_BiasAddGrad,
+                                                              schema::PrimitiveType_BatchNormGrad,
+                                                              schema::PrimitiveType_ApplyMomentum,
+                                                              schema::PrimitiveType_SGD,
+                                                              schema::PrimitiveType_Adam,
+                                                              schema::PrimitiveType_ResizeGrad,
+                                                              schema::PrimitiveType_AvgPoolFusion,
+                                                              schema::PrimitiveType_MaxPoolFusion,
+                                                              schema::PrimitiveType_Conv2DFusion,
+                                                              schema::PrimitiveType_Conv2dTransposeFusion,
+                                                              schema::PrimitiveType_LRN,
+                                                              schema::PrimitiveType_Resize,
+                                                              schema::PrimitiveType_BatchNorm,
+                                                              schema::PrimitiveType_FusedBatchNorm,
+                                                              schema::PrimitiveType_PReLUFusion,
+                                                              schema::PrimitiveType_BiasAdd,
+                                                              schema::PrimitiveType_SpaceToDepth,
+                                                              schema::PrimitiveType_DepthToSpace,
+                                                              schema::PrimitiveType_TopKFusion,
+                                                              schema::PrimitiveType_BatchToSpace,
+                                                              schema::PrimitiveType_SpaceToBatch,
+                                                              schema::PrimitiveType_SpaceToBatchND};
+
+static const std::vector<schema::PrimitiveType> nchwOpList = {schema::PrimitiveType_InstanceNorm};
 
 static const std::vector<schema::PrimitiveType> nhwcOpAllInputList = {
-#ifdef SUPPORT_TRAIN
-  schema::PrimitiveType_PoolingGrad, schema::PrimitiveType_ActivationGrad, schema::PrimitiveType_Conv2DGradFilter,
-  schema::PrimitiveType_BNGrad
-#endif
-};
+  schema::PrimitiveType_AvgPoolGrad,    schema::PrimitiveType_MaxPoolGrad,
+  schema::PrimitiveType_ActivationGrad, schema::PrimitiveType_Conv2DBackpropFilterFusion,
+  schema::PrimitiveType_BatchNormGrad,  schema::PrimitiveType_ResizeGrad};
+
+// index {} mean all inputs need insert
+static std::unordered_map<schema::PrimitiveType, std::vector<int>> extNhwcInsertIndex = {
+  {schema::PrimitiveType_BatchNormGrad, {0, 1}},
+  {schema::PrimitiveType_Conv2DBackpropFilterFusion, {0, 1}},
+  {schema::PrimitiveType_ApplyMomentum, {3}},
+  {schema::PrimitiveType_SGD, {1}},
+  {schema::PrimitiveType_Adam, {9}}};
 
 static const std::vector<schema::PrimitiveType> fp32FullOpList = {
-  schema::PrimitiveType_Concat, schema::PrimitiveType_Add,
+  schema::PrimitiveType_Concat, schema::PrimitiveType_AddFusion,
   schema::PrimitiveType_Floor};  // fp32 ops support C4 and nhwc in fp32
 
 static const std::vector<schema::PrimitiveType> int8NeedNhwcOpList = {};
 
-static const std::vector<schema::PrimitiveType> int8OpList = {schema::PrimitiveType_Conv2D,
-                                                              schema::PrimitiveType_DepthwiseConv2D,
-                                                              schema::PrimitiveType_Add,
+static const std::vector<schema::PrimitiveType> int8OpList = {schema::PrimitiveType_Conv2DFusion,
+                                                              schema::PrimitiveType_Conv2dTransposeFusion,
+                                                              schema::PrimitiveType_AddFusion,
                                                               schema::PrimitiveType_Transpose,
-                                                              schema::PrimitiveType_Pooling,
+                                                              schema::PrimitiveType_AvgPoolFusion,
+                                                              schema::PrimitiveType_MaxPoolFusion,
                                                               schema::PrimitiveType_Concat,
-                                                              schema::PrimitiveType_SoftMax,
+                                                              schema::PrimitiveType_Softmax,
                                                               schema::PrimitiveType_Reshape,
                                                               schema::PrimitiveType_Activation,
                                                               schema::PrimitiveType_Resize,
                                                               schema::PrimitiveType_FullConnection,
-                                                              schema::PrimitiveType_ArgMax,
-                                                              schema::PrimitiveType_ArgMin,
+                                                              schema::PrimitiveType_ArgMaxFusion,
+                                                              schema::PrimitiveType_ArgMinFusion,
                                                               schema::PrimitiveType_BatchNorm,
                                                               schema::PrimitiveType_FusedBatchNorm,
                                                               schema::PrimitiveType_BiasAdd,
-                                                              schema::PrimitiveType_Div,
-                                                              schema::PrimitiveType_Mul,
-                                                              schema::PrimitiveType_Slice,
-                                                              schema::PrimitiveType_SoftMax,
+                                                              schema::PrimitiveType_DivFusion,
+                                                              schema::PrimitiveType_MulFusion,
+                                                              schema::PrimitiveType_SliceFusion,
                                                               schema::PrimitiveType_Split,
                                                               schema::PrimitiveType_Squeeze,
-                                                              schema::PrimitiveType_Sub,
+                                                              schema::PrimitiveType_SubFusion,
                                                               schema::PrimitiveType_StridedSlice,
-                                                              schema::PrimitiveType_TopK,
+                                                              schema::PrimitiveType_TopKFusion,
                                                               schema::PrimitiveType_Unsqueeze,
                                                               schema::PrimitiveType_MatMul,
-                                                              schema::PrimitiveType_Pad,
-                                                              schema::PrimitiveType_DeConv2D,
-                                                              schema::PrimitiveType_Scale,
+                                                              schema::PrimitiveType_PadFusion,
+                                                              schema::PrimitiveType_ScaleFusion,
                                                               schema::PrimitiveType_Cast,
                                                               schema::PrimitiveType_Shape,
                                                               schema::PrimitiveType_ExpandDims,
                                                               schema::PrimitiveType_BatchToSpace,
                                                               schema::PrimitiveType_BatchToSpaceND,
-                                                              schema::PrimitiveType_Reduce,
+                                                              schema::PrimitiveType_ReduceFusion,
                                                               schema::PrimitiveType_Round,
                                                               schema::PrimitiveType_Floor,
                                                               schema::PrimitiveType_Ceil,
@@ -116,9 +121,9 @@ static const std::vector<schema::PrimitiveType> int8OpList = {schema::PrimitiveT
                                                               schema::PrimitiveType_SpaceToBatch,
                                                               schema::PrimitiveType_SpaceToBatchND,
                                                               schema::PrimitiveType_DepthToSpace,
-                                                              schema::PrimitiveType_Power,
+                                                              schema::PrimitiveType_PowFusion,
                                                               schema::PrimitiveType_GatherNd,
-                                                              schema::PrimitiveType_LeakyReLU,
+                                                              schema::PrimitiveType_LeakyRelu,
                                                               schema::PrimitiveType_Gather,
                                                               schema::PrimitiveType_Equal,
                                                               schema::PrimitiveType_NotEqual,
@@ -126,27 +131,19 @@ static const std::vector<schema::PrimitiveType> int8OpList = {schema::PrimitiveT
                                                               schema::PrimitiveType_Greater,
                                                               schema::PrimitiveType_GreaterEqual,
                                                               schema::PrimitiveType_Eltwise,
-                                                              schema::PrimitiveType_DeDepthwiseConv2D,
                                                               schema::PrimitiveType_DetectionPostProcess,
                                                               schema::PrimitiveType_Crop,
                                                               schema::PrimitiveType_PriorBox,
                                                               schema::PrimitiveType_QuantDTypeCast,
-                                                              schema::PrimitiveType_LayerNorm,
-                                                              schema::PrimitiveType_L2Norm};
+                                                              schema::PrimitiveType_LayerNormFusion,
+                                                              schema::PrimitiveType_L2NormalizeFusion};
 
 static const std::vector<schema::PrimitiveType> needInsertOpList = {
-#ifdef SUPPORT_TRAIN
-  schema::PrimitiveType_Eltwise, schema::PrimitiveType_Activation,   schema::PrimitiveType_Concat,
-  schema::PrimitiveType_Power,   schema::PrimitiveType_StridedSlice, schema::PrimitiveType_Split,
-  schema::PrimitiveType_Slice,   schema::PrimitiveType_Crop,         schema::PrimitiveType_Mul,
-  schema::PrimitiveType_Add
-#else
-  schema::PrimitiveType_Eltwise, schema::PrimitiveType_Activation,   schema::PrimitiveType_Concat,
-  schema::PrimitiveType_Power,   schema::PrimitiveType_StridedSlice, schema::PrimitiveType_Add,
-  schema::PrimitiveType_Split,   schema::PrimitiveType_Slice,        schema::PrimitiveType_Crop,
-  schema::PrimitiveType_Mul,     schema::PrimitiveType_Maximum
-#endif
-};
+  schema::PrimitiveType_Eltwise,       schema::PrimitiveType_Activation,   schema::PrimitiveType_Concat,
+  schema::PrimitiveType_PowFusion,     schema::PrimitiveType_StridedSlice, schema::PrimitiveType_AddFusion,
+  schema::PrimitiveType_AddN,          schema::PrimitiveType_Split,        schema::PrimitiveType_SliceFusion,
+  schema::PrimitiveType_Crop,          schema::PrimitiveType_MulFusion,    schema::PrimitiveType_Maximum,
+  schema::PrimitiveType_ActivationGrad};
 
 static const std::unordered_map<int, int> nc2NhAxisMap = {{0, 0}, {1, -1}, {2, 1}, {3, 2}};
 
@@ -158,11 +155,22 @@ std::vector<schema::PrimitiveType> Getfp32FullOpList() { return fp32FullOpList; 
 
 std::vector<schema::PrimitiveType> GetNhwcOpList() { return nhwcOpList; }
 
+std::vector<schema::PrimitiveType> GetNchwOpList() { return nchwOpList; }
+
+std::unordered_map<schema::PrimitiveType, std::vector<int>> GetExtNhwcIndexes() { return extNhwcInsertIndex; }
+
 std::vector<schema::PrimitiveType> GetNhwcAllInputOpList() { return nhwcOpAllInputList; }
 
 std::vector<schema::PrimitiveType> GetUint8NhwcOpList() { return int8NeedNhwcOpList; }
 
 std::vector<schema::PrimitiveType> GetInt8OpList() { return int8OpList; }
+
+const schema::Primitive *ConvertToPrimitive(schema::PrimitiveT *primitive_t, flatbuffers::FlatBufferBuilder *fbb) {
+  auto prim_offset = schema::CreatePrimitive(*fbb, primitive_t);
+  fbb->Finish(prim_offset);
+  auto prim_buf = fbb->GetBufferPointer();
+  return flatbuffers::GetRoot<schema::Primitive>(prim_buf);
+}
 
 STATUS NodeUtils::ConvertDims(mindspore::schema::Format src_format, const std::vector<int32_t> &src_dims,
                               mindspore::schema::Format dst_format, std::vector<int32_t> *dst_dims) {
@@ -220,6 +228,26 @@ STATUS NodeUtils::ConvertDims(mindspore::schema::Format src_format, const std::v
   return RET_OK;
 }
 
+static bool IsKCHWSource(kTransFilterType type) {
+  return (type == kKCHW2HWCK || type == kKCHW2HWKC || type == kKCHW2KHWC || type == kKCHW2CKHW);
+}
+
+static bool IsCKHWSource(kTransFilterType type) {
+  return (type == kCKHW2HWCK || type == kCKHW2HWKC || type == kCKHW2KHWC);
+}
+
+static bool IsHWCKSource(kTransFilterType type) { return (type == kHWCK2KCHW || type == kHWCK2CKHW); }
+
+static bool IsHWKCSource(kTransFilterType type) { return (type == kHWKC2KCHW || type == kHWKC2CKHW); }
+
+static bool IsNHWCSource(kTransFilterType type) {
+  return (type == kNHWC2KCHW || type == kNHWC2HWCK || type == kNHWC2CKHW);
+}
+
+static bool IsCHWKSource(kTransFilterType type) { return (type == kCHWK2HWCK || type == kCHWK2KHWC); }
+
+static bool IsKHWCSource(kTransFilterType type) { return (type == kKHWC2HWCK || type == kKHWC2CHWK); }
+
 STATUS GetFilterDim(const std::vector<int32_t> &oriDims, kTransFilterType type, int32_t *filterK, int32_t *filterC,
                     int32_t *filterH, int32_t *filterW) {
   if (filterK == nullptr || filterC == nullptr || filterH == nullptr || filterW == nullptr) {
@@ -227,37 +255,37 @@ STATUS GetFilterDim(const std::vector<int32_t> &oriDims, kTransFilterType type, 
     return RET_NULL_PTR;
   }
   MS_ASSERT(oriDims.size() == 4);
-  if (type == kKCHW2HWCK || type == kKCHW2HWKC || type == kKCHW2KHWC || type == kKCHW2CKHW) {
+  if (IsKCHWSource(type)) {
     *filterK = oriDims.at(KCHW_K);
     *filterC = oriDims.at(KCHW_C);
     *filterH = oriDims.at(KCHW_H);
     *filterW = oriDims.at(KCHW_W);
-  } else if (type == kCKHW2HWCK || type == kCKHW2HWKC || type == kCKHW2KHWC) {
+  } else if (IsCKHWSource(type)) {
     *filterC = oriDims.at(CKHW_C);
     *filterK = oriDims.at(CKHW_K);
     *filterH = oriDims.at(CKHW_H);
     *filterW = oriDims.at(CKHW_W);
-  } else if (type == kHWCK2KCHW || type == kHWCK2CKHW) {
+  } else if (IsHWCKSource(type)) {
     *filterH = oriDims.at(HWCK_H);
     *filterW = oriDims.at(HWCK_W);
     *filterC = oriDims.at(HWCK_C);
     *filterK = oriDims.at(HWCK_K);
-  } else if (type == kHWKC2KCHW || type == kHWKC2CKHW) {
+  } else if (IsHWKCSource(type)) {
     *filterH = oriDims.at(HWKC_H);
     *filterW = oriDims.at(HWKC_W);
     *filterK = oriDims.at(HWKC_K);
     *filterC = oriDims.at(HWKC_C);
-  } else if (type == kNHWC2KCHW || type == kNHWC2HWCK || type == kNHWC2CKHW) {
+  } else if (IsNHWCSource(type)) {
     *filterK = oriDims.at(NHWC_N);
     *filterH = oriDims.at(NHWC_H);
     *filterW = oriDims.at(NHWC_W);
     *filterC = oriDims.at(NHWC_C);
-  } else if (type == kCHWK2HWCK || type == kCHWK2KHWC) {
+  } else if (IsCHWKSource(type)) {
     *filterC = oriDims.at(CHWK_C);
     *filterH = oriDims.at(CHWK_H);
     *filterW = oriDims.at(CHWK_W);
     *filterK = oriDims.at(CHWK_K);
-  } else if (type == kKHWC2HWCK || type == kKHWC2CHWK) {
+  } else if (IsKHWCSource(type)) {
     *filterK = oriDims.at(KHWC_K);
     *filterH = oriDims.at(KHWC_H);
     *filterW = oriDims.at(KHWC_W);
@@ -291,6 +319,37 @@ STATUS SetFilterDim(schema::TensorT *tensor, kTransFilterType type, int32_t filt
   return RET_OK;
 }
 
+static int Convert2KHWC(int srcFormat) {
+  if (srcFormat == schema::Format::Format_KCHW) return kKCHW2KHWC;
+  if (srcFormat == schema::Format::Format_CKHW) return kCKHW2KHWC;
+  if (srcFormat == schema::Format::Format_CHWK) return kCHWK2KHWC;
+  return -1;
+}
+
+static int Convert2HWCK(int srcFormat) {
+  if (srcFormat == schema::Format::Format_KCHW) return kKCHW2HWCK;
+  if (srcFormat == schema::Format::Format_KHWC) return kKHWC2HWCK;
+  if (srcFormat == schema::Format::Format_CKHW) return kCKHW2HWCK;
+  if (srcFormat == schema::Format::Format_CHWK) return kCHWK2HWCK;
+  return -1;
+}
+
+static int Convert2KCHW(int srcFormat) {
+  if (srcFormat == schema::Format::Format_HWCK) return kHWCK2KCHW;
+  if (srcFormat == schema::Format::Format_HWKC) return kHWKC2KCHW;
+  if (srcFormat == schema::Format::Format_KHWC) return kKHWC2KCHW;
+  if (srcFormat == schema::Format::Format_CKHW) return kCKHW2KCHW;
+  if (srcFormat == schema::Format::Format_CHWK) return kCHWK2KCHW;
+  return -1;
+}
+
+static int Convert2CKHW(int srcFormat) {
+  if (srcFormat == schema::Format::Format_HWCK) return kHWCK2CKHW;
+  if (srcFormat == schema::Format::Format_HWKC) return kHWKC2CKHW;
+  if (srcFormat == schema::Format::Format_KCHW) return kKCHW2CKHW;
+  return -1;
+}
+
 STATUS TransFilterFormat(schema::TensorT *tensor, schema::Format dstFormat) {
   if (tensor == nullptr) {
     MS_LOG(ERROR) << "tensor is null";
@@ -304,231 +363,40 @@ STATUS TransFilterFormat(schema::TensorT *tensor, schema::Format dstFormat) {
   auto srcFormat = tensor->format;
   auto dataType = tensor->dataType;
   STATUS status;
+  int convert = -1;
+
+  if (dstFormat == srcFormat) return RET_OK;
+
   switch (dstFormat) {
-    case schema::Format::Format_KHWC: {
-      switch (srcFormat) {
-        case schema::Format::Format_KCHW:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kKCHW2KHWC);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kKCHW2KHWC);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kKCHW2KHWC);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CKHW:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kCKHW2KHWC);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kCKHW2KHWC);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kCKHW2KHWC);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CHWK:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kCHWK2KHWC);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kCHWK2KHWC);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kCHWK2KHWC);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_KHWC:
-          return RET_OK;
-        default:
-          MS_LOG(ERROR) << "Unsupported transform from " << EnumNameFormat(srcFormat) << " to "
-                        << EnumNameFormat(dstFormat);
-          return RET_ERROR;
-      }
-    } break;
-    case schema::Format::Format_HWCK: {
-      switch (srcFormat) {
-        case schema::Format::Format_KCHW:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kKCHW2HWCK);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kKCHW2HWCK);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kKCHW2HWCK);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_KHWC:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kKHWC2HWCK);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kKHWC2HWCK);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kKHWC2HWCK);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CKHW:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kCKHW2HWCK);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kCKHW2HWCK);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kCKHW2HWCK);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CHWK:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kCHWK2HWCK);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kCHWK2HWCK);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kCHWK2HWCK);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_HWCK:
-          return RET_OK;
-        default:
-          MS_LOG(ERROR) << "Unsupported transform from " << EnumNameFormat(srcFormat) << " to "
-                        << EnumNameFormat(dstFormat);
-          return RET_ERROR;
-      }
-    } break;
-    case schema::Format::Format_KCHW: {
-      switch (srcFormat) {
-        case schema::Format::Format_KCHW:
-          return RET_OK;
-        case schema::Format::Format_HWCK:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kHWCK2KCHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kHWCK2KCHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kHWCK2KCHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_HWKC:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kHWKC2KCHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kHWKC2KCHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kHWKC2KCHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_KHWC:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kKHWC2KCHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kKHWC2KCHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kKHWC2KCHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CKHW:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kCKHW2KCHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kCKHW2KCHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kCKHW2KCHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CHWK:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kCHWK2KCHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kCHWK2KCHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kCHWK2KCHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        default:
-          MS_LOG(ERROR) << "Unsupported transform from " << EnumNameFormat(srcFormat) << " to "
-                        << EnumNameFormat(dstFormat);
-          return RET_ERROR;
-      }
-    } break;
-    case schema::Format::Format_CKHW: {
-      switch (srcFormat) {
-        case schema::Format::Format_HWCK:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kHWCK2CKHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kHWCK2CKHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kHWCK2CKHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_HWKC:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kHWKC2CKHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kHWKC2CKHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kHWKC2CKHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_KCHW:
-          if (dataType == kNumberTypeFloat32) {
-            status = TransFilterFormat<float>(tensor, kKCHW2CKHW);
-          } else if (dataType == kNumberTypeUInt8) {
-            status = TransFilterFormat<uint8_t>(tensor, kKCHW2CKHW);
-          } else if (dataType == kNumberTypeInt8) {
-            status = TransFilterFormat<int8_t>(tensor, kKCHW2CKHW);
-          } else {
-            MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
-            return RET_ERROR;
-          }
-          break;
-        case schema::Format::Format_CKHW:
-          return RET_OK;
-        default:
-          MS_LOG(ERROR) << "Unsupported transform from " << EnumNameFormat(srcFormat) << " to "
-                        << EnumNameFormat(dstFormat);
-          return RET_ERROR;
-      }
-    } break;
+    case schema::Format::Format_KHWC:
+      convert = Convert2KHWC(srcFormat);
+      break;
+    case schema::Format::Format_HWCK:
+      convert = Convert2HWCK(srcFormat);
+      break;
+    case schema::Format::Format_KCHW:
+      convert = Convert2KCHW(srcFormat);
+      break;
+    case schema::Format::Format_CKHW:
+      convert = Convert2CKHW(srcFormat);
+      break;
     default:
-      MS_LOG(ERROR) << "Unsupported transform from " << EnumNameFormat(srcFormat) << " to "
-                    << EnumNameFormat(dstFormat);
-      return RET_ERROR;
+      convert = -1;
+  }
+  if (convert == -1) {
+    MS_LOG(ERROR) << "Unsupported transform from " << EnumNameFormat(srcFormat) << " to " << EnumNameFormat(dstFormat);
+    return RET_ERROR;
+  }
+
+  if (dataType == kNumberTypeFloat32) {
+    status = TransFilterFormat<float>(tensor, static_cast<kTransFilterType>(convert));
+  } else if (dataType == kNumberTypeUInt8) {
+    status = TransFilterFormat<uint8_t>(tensor, static_cast<kTransFilterType>(convert));
+  } else if (dataType == kNumberTypeInt8) {
+    status = TransFilterFormat<int8_t>(tensor, static_cast<kTransFilterType>(convert));
+  } else {
+    MS_LOG(ERROR) << "Unsupported dataType: " << dataType;
+    return RET_ERROR;
   }
   if (status != RET_OK) {
     MS_LOG(ERROR) << "TransFilterData failed: " << status;

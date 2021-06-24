@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,6 +46,9 @@ class TreeAdapter {
   // the Execution tree.
   Status Compile(std::shared_ptr<DatasetNode> root_ir, int32_t num_epochs = -1);
 
+  // Return the root node of the IR after cloned from the parsed IR tree
+  std::shared_ptr<DatasetNode> RootIRNode() const { return root_ir_; }
+
   // This is the main method TreeConsumer uses to interact with TreeAdapter
   // 1. GetNext will Launch() the ExeTree on its first call by iterator (tree is already prepared)
   // 2. GetNext will return empty row when eoe/eof is obtained
@@ -66,9 +69,6 @@ class TreeAdapter {
   // Set optional optimization pass
   void SetOptimize(bool value) { optimize_ = value; }
 
-  // function to override override the pre-pass
-  void SetPrePassOverride(std::function<OptPass(OptPass)> pre_pass_override) { pre_pass_override_ = pre_pass_override; }
-
   // Optional optimizations status
   bool OptimizationEnabled() const { return optimize_; }
 
@@ -83,21 +83,21 @@ class TreeAdapter {
   Status PostPass(std::shared_ptr<DatasetNode> ir);
 
   // Build an Execution tree
-  Status Build(std::shared_ptr<DatasetNode> root_ir, int32_t num_epochs);
+  Status Build(std::shared_ptr<DatasetNode> root_ir);
 
   // This RECURSIVE function walks the (optimized) IR tree in DFS to build its corresponding Execution tree.
   Status BuildExecutionTreeRecur(std::shared_ptr<DatasetNode> ir, std::shared_ptr<DatasetOp> *op);
 
   std::unique_ptr<DataBuffer> cur_db_;
   std::unordered_map<std::string, int32_t> column_name_map_;
-  std::unique_ptr<ExecutionTree> tree_;                // current connector capacity of root op, used for profiling
-  bool optimize_;                                      // Flag to enable optional optimization pass
-  std::shared_ptr<DatasetIteratorTracing> tracing_;    // trace profiling data
-  int32_t cur_batch_num_;                              // current batch number, used for profiling
-  int32_t cur_connector_size_;                         // current connector size of root op, used for profiling
-  int32_t cur_connector_capacity_;                     // current connector capacity of root op, used for profiling
-  std::function<OptPass(OptPass)> pre_pass_override_;  // function ptr that overrides pre pass, called in PrePrepare()
-  UsageFlag usage_;                                    // usage of this tree adapter (type of consumer)
+  std::shared_ptr<DatasetNode> root_ir_;
+  std::unique_ptr<ExecutionTree> tree_;              // current connector capacity of root op, used for profiling
+  bool optimize_;                                    // Flag to enable optional optimization pass
+  std::shared_ptr<DatasetIteratorTracing> tracing_;  // trace profiling data
+  int32_t cur_batch_num_;                            // current batch number, used for profiling
+  int32_t cur_connector_size_;                       // current connector size of root op, used for profiling
+  int32_t cur_connector_capacity_;                   // current connector capacity of root op, used for profiling
+  UsageFlag usage_;                                  // usage of this tree adapter (type of consumer)
   // State flags for the lifecycle of the tree
   enum CompileState {
     kCompileStateInit = 0,      // The freshly initialized state

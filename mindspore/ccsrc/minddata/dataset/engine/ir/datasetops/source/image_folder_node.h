@@ -75,6 +75,25 @@ class ImageFolderNode : public MappableSourceNode {
   Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
                         int64_t *dataset_size) override;
 
+  /// \brief Getter functions
+  const std::string &DatasetDir() const { return dataset_dir_; }
+  bool Decode() const { return decode_; }
+  bool Recursive() const { return recursive_; }
+  const std::map<std::string, int32_t> &ClassIndexing() const { return class_indexing_; }
+  const std::set<std::string> &Exts() const { return exts_; }
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
+
+  /// \brief Sampler getter
+  /// \return SamplerObj of the current node
+  std::shared_ptr<SamplerObj> Sampler() override { return sampler_; }
+
+  /// \brief Sampler setter
+  void SetSampler(std::shared_ptr<SamplerObj> sampler) override { sampler_ = sampler; }
+
  private:
   std::string dataset_dir_;
   bool decode_;

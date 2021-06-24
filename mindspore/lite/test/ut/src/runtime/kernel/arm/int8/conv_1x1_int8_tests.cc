@@ -17,7 +17,7 @@
 #include "common/common_test.h"
 #include "mindspore/lite/src/lite_kernel.h"
 #include "src/common/file_utils.h"
-#include "nnacl/quantization/quantize.h"
+#include "mindspore/lite/nnacl/int8/quantize.h"
 #include "nnacl/common_func.h"
 #include "mindspore/lite/src/runtime/kernel/arm/int8/convolution_1x1_int8.h"
 
@@ -125,8 +125,8 @@ TEST_F(TestConv1x1Int8, Conv1x1TestPerChannel) {
   ctx->thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, ctx->Init());
   int total_size = Conv1x1Int8TestInit1_perchannel(&inputs_, &outputs_, conv_param, &correct);
-  kernel::Convolution1x1Int8CPUKernel *conv1x1 = new kernel::Convolution1x1Int8CPUKernel(
-    reinterpret_cast<OpParameter *>(conv_param), inputs_, outputs_, ctx, nullptr);
+  kernel::Convolution1x1Int8CPUKernel *conv1x1 =
+    new kernel::Convolution1x1Int8CPUKernel(reinterpret_cast<OpParameter *>(conv_param), inputs_, outputs_, ctx);
 
   conv1x1->Init();
   conv1x1->Run();
@@ -194,8 +194,8 @@ TEST_F(TestConv1x1Int8, Conv1x1Int8Test1) {
   ctx->thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, ctx->Init());
   int total_size = Conv1x1Int8TestInit1(&inputs_, &outputs_, conv_param, &correct);
-  kernel::Convolution1x1Int8CPUKernel *conv1x1 = new kernel::Convolution1x1Int8CPUKernel(
-    reinterpret_cast<OpParameter *>(conv_param), inputs_, outputs_, ctx, nullptr);
+  kernel::Convolution1x1Int8CPUKernel *conv1x1 =
+    new kernel::Convolution1x1Int8CPUKernel(reinterpret_cast<OpParameter *>(conv_param), inputs_, outputs_, ctx);
 
   conv1x1->Init();
   conv1x1->Run();
@@ -271,8 +271,8 @@ TEST_F(TestConv1x1Int8, Conv1x1Int8Test2) {
   ctx->thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, ctx->Init());
   int total_size = Conv1x1Int8TestInit2(&inputs_, &outputs_, conv_param, &correct);
-  auto *conv1x1 = new kernel::Convolution1x1Int8CPUKernel(reinterpret_cast<OpParameter *>(conv_param), inputs_,
-                                                          outputs_, ctx, nullptr);
+  auto *conv1x1 =
+    new kernel::Convolution1x1Int8CPUKernel(reinterpret_cast<OpParameter *>(conv_param), inputs_, outputs_, ctx);
 
   conv1x1->Init();
   conv1x1->Run();

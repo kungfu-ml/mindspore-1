@@ -40,35 +40,43 @@ class ArithmeticCPUKernel : public CPUKernel {
  private:
   void GenIndex(size_t num, std::vector<size_t> *tmp);
   template <typename T>
-  void Sub(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Sub(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Add(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Add(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Mul(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Mul(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void RealDiv(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void RealDiv(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Div(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Div(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Mod(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void FloorDiv(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Pow(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Mod(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void AssignAdd(T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Pow(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Less(const T *input1, const T *input2, bool *out, size_t start, size_t end);
+  void AssignAdd(T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void Equal(const T *input1, const T *input2, bool *out, size_t start, size_t end);
+  void Atan2(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void NotEqual(const T *input1, const T *input2, bool *out, size_t start, size_t end);
+  void Less(const T *input1, const T *input2, bool *out, size_t size);
   template <typename T>
-  void SquaredDifference(const T *input1, const T *input2, T *out, size_t start, size_t end);
+  void Equal(const T *input1, const T *input2, bool *out, size_t size);
   template <typename T>
-  void Greater(const T *input1, const T *input2, bool *out, size_t start, size_t end);
+  void NotEqual(const T *input1, const T *input2, bool *out, size_t size);
   template <typename T>
-  void GreaterEqual(const T *input1, const T *input2, bool *out, size_t start, size_t end);
+  void SquaredDifference(const T *input1, const T *input2, T *out, size_t size);
   template <typename T>
-  void LessEqual(const T *input1, const T *input2, bool *out, size_t start, size_t end);
+  void Greater(const T *input1, const T *input2, bool *out, size_t size);
+  template <typename T>
+  void GreaterEqual(const T *input1, const T *input2, bool *out, size_t size);
+  template <typename T>
+  void LessEqual(const T *input1, const T *input2, bool *out, size_t size);
+  template <typename T>
+  void LogicalAnd(const T *input1, const T *input2, bool *out, size_t size);
+  template <typename T>
+  void LogicalOr(const T *input1, const T *input2, bool *out, size_t size);
   std::vector<size_t> input_shape0_;
   std::vector<size_t> input_shape1_;
   std::vector<size_t> input_element_num0_;
@@ -116,6 +124,16 @@ MS_REG_CPU_KERNEL(
   ArithmeticCPUKernel);
 MS_REG_CPU_KERNEL(
   Div, KernelAttr().AddInputAttr(kNumberTypeFloat32).AddInputAttr(kNumberTypeFloat32).AddOutputAttr(kNumberTypeFloat32),
+  ArithmeticCPUKernel);
+MS_REG_CPU_KERNEL(
+  FloorDiv, KernelAttr().AddInputAttr(kNumberTypeInt64).AddInputAttr(kNumberTypeInt64).AddOutputAttr(kNumberTypeInt64),
+  ArithmeticCPUKernel);
+MS_REG_CPU_KERNEL(
+  FloorDiv, KernelAttr().AddInputAttr(kNumberTypeInt32).AddInputAttr(kNumberTypeInt32).AddOutputAttr(kNumberTypeInt32),
+  ArithmeticCPUKernel);
+MS_REG_CPU_KERNEL(
+  FloorDiv,
+  KernelAttr().AddInputAttr(kNumberTypeFloat32).AddInputAttr(kNumberTypeFloat32).AddOutputAttr(kNumberTypeFloat32),
   ArithmeticCPUKernel);
 MS_REG_CPU_KERNEL(
   Mod, KernelAttr().AddInputAttr(kNumberTypeInt32).AddInputAttr(kNumberTypeInt32).AddOutputAttr(kNumberTypeInt32),
@@ -248,39 +266,24 @@ MS_REG_CPU_KERNEL(
   KernelAttr().AddInputAttr(kNumberTypeInt64).AddInputAttr(kNumberTypeInt64).AddOutputAttr(kNumberTypeBool),
   ArithmeticCPUKernel);
 MS_REG_CPU_KERNEL(
-  LessEqual, KernelAttr().AddInputAttr(kNumberTypeBool).AddInputAttr(kNumberTypeBool).AddOutputAttr(kNumberTypeBool),
-  ArithmeticCPUKernel);
-MS_REG_CPU_KERNEL(
-  LessEqual, KernelAttr().AddInputAttr(kNumberTypeInt8).AddInputAttr(kNumberTypeInt8).AddOutputAttr(kNumberTypeBool),
-  ArithmeticCPUKernel);
-MS_REG_CPU_KERNEL(
-  LessEqual, KernelAttr().AddInputAttr(kNumberTypeInt16).AddInputAttr(kNumberTypeInt16).AddOutputAttr(kNumberTypeBool),
-  ArithmeticCPUKernel);
-MS_REG_CPU_KERNEL(
   LessEqual, KernelAttr().AddInputAttr(kNumberTypeInt32).AddInputAttr(kNumberTypeInt32).AddOutputAttr(kNumberTypeBool),
   ArithmeticCPUKernel);
 MS_REG_CPU_KERNEL(
-  LessEqual, KernelAttr().AddInputAttr(kNumberTypeUInt8).AddInputAttr(kNumberTypeUInt8).AddOutputAttr(kNumberTypeBool),
-  ArithmeticCPUKernel);
-MS_REG_CPU_KERNEL(
-  LessEqual,
-  KernelAttr().AddInputAttr(kNumberTypeUInt16).AddInputAttr(kNumberTypeUInt16).AddOutputAttr(kNumberTypeBool),
-  ArithmeticCPUKernel);
-MS_REG_CPU_KERNEL(
-  LessEqual,
-  KernelAttr().AddInputAttr(kNumberTypeUInt32).AddInputAttr(kNumberTypeUInt32).AddOutputAttr(kNumberTypeBool),
-  ArithmeticCPUKernel);
-MS_REG_CPU_KERNEL(
-  LessEqual,
-  KernelAttr().AddInputAttr(kNumberTypeFloat16).AddInputAttr(kNumberTypeFloat16).AddOutputAttr(kNumberTypeBool),
+  LessEqual, KernelAttr().AddInputAttr(kNumberTypeInt64).AddInputAttr(kNumberTypeInt64).AddOutputAttr(kNumberTypeBool),
   ArithmeticCPUKernel);
 MS_REG_CPU_KERNEL(
   LessEqual,
   KernelAttr().AddInputAttr(kNumberTypeFloat32).AddInputAttr(kNumberTypeFloat32).AddOutputAttr(kNumberTypeBool),
   ArithmeticCPUKernel);
 MS_REG_CPU_KERNEL(
-  LessEqual,
-  KernelAttr().AddInputAttr(kNumberTypeFloat64).AddInputAttr(kNumberTypeFloat64).AddOutputAttr(kNumberTypeBool),
+  LogicalAnd, KernelAttr().AddInputAttr(kNumberTypeBool).AddInputAttr(kNumberTypeBool).AddOutputAttr(kNumberTypeBool),
+  ArithmeticCPUKernel);
+MS_REG_CPU_KERNEL(
+  LogicalOr, KernelAttr().AddInputAttr(kNumberTypeBool).AddInputAttr(kNumberTypeBool).AddOutputAttr(kNumberTypeBool),
+  ArithmeticCPUKernel);
+MS_REG_CPU_KERNEL(
+  Atan2,
+  KernelAttr().AddInputAttr(kNumberTypeFloat32).AddInputAttr(kNumberTypeFloat32).AddOutputAttr(kNumberTypeFloat32),
   ArithmeticCPUKernel);
 }  // namespace kernel
 }  // namespace mindspore

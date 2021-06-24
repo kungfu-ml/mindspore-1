@@ -24,9 +24,8 @@ namespace mindspore::kernel {
 class PadFp16CPUKernel : public PadCPUKernel {
  public:
   PadFp16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                   const mindspore::lite::PrimitiveC *primitive)
-      : PadCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : PadCPUKernel(parameter, inputs, outputs, ctx) {}
 
   ~PadFp16CPUKernel() {}
 
@@ -35,9 +34,6 @@ class PadFp16CPUKernel : public PadCPUKernel {
   int RunMirrorPadImpl(int task_id) override;
 
  private:
-  void FreeInputAndOutput();
-  bool is_input_fp32_ = false;
-  bool is_output_fp32_ = false;
   float16_t *input_ = nullptr;
   float16_t *output_ = nullptr;
 };

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 
 #include "minddata/dataset/engine/datasetops/source/tf_reader_op.h"
 #include "minddata/dataset/engine/jagged_connector.h"
+#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/status.h"
 #include "utils/system/crc32c.h"
 
@@ -53,7 +54,7 @@ Status TFRecordNode::ValidateParams() {
   if (dataset_files_.empty()) {
     std::string err_msg = "TFRecordNode: dataset_files is not specified.";
     MS_LOG(ERROR) << err_msg;
-    return Status(StatusCode::kSyntaxError, __LINE__, __FILE__, err_msg);
+    return Status(StatusCode::kMDSyntaxError, __LINE__, __FILE__, err_msg);
   }
 
   for (const auto &f : dataset_files_) {
@@ -62,7 +63,7 @@ Status TFRecordNode::ValidateParams() {
       std::string err_msg = "TFRecordNode: dataset file: [" + f + "] is invalid or does not exist.";
       MS_LOG(ERROR) << err_msg;
 
-      return Status(StatusCode::kSyntaxError, __LINE__, __FILE__, err_msg);
+      return Status(StatusCode::kMDSyntaxError, __LINE__, __FILE__, err_msg);
     }
   }
 
@@ -70,14 +71,14 @@ Status TFRecordNode::ValidateParams() {
     std::string err_msg = "TFRecordNode: Invalid number of samples: " + std::to_string(num_samples_);
     MS_LOG(ERROR) << err_msg;
 
-    return Status(StatusCode::kSyntaxError, __LINE__, __FILE__, err_msg);
+    return Status(StatusCode::kMDSyntaxError, __LINE__, __FILE__, err_msg);
   }
 
   if (num_shards_ <= 0) {
     std::string err_msg = "TFRecordNode: Invalid num_shards: " + std::to_string(num_shards_);
     MS_LOG(ERROR) << err_msg;
 
-    return Status(StatusCode::kSyntaxError, __LINE__, __FILE__, err_msg);
+    return Status(StatusCode::kMDSyntaxError, __LINE__, __FILE__, err_msg);
   }
 
   if (shard_id_ < 0 || shard_id_ >= num_shards_) {
@@ -85,7 +86,7 @@ Status TFRecordNode::ValidateParams() {
                           ", num_shards: " + std::to_string(num_shards_);
     MS_LOG(ERROR) << err_msg;
 
-    return Status(StatusCode::kSyntaxError, __LINE__, __FILE__, err_msg);
+    return Status(StatusCode::kMDSyntaxError, __LINE__, __FILE__, err_msg);
   }
 
   std::vector<std::string> invalid_files(dataset_files_.size());
@@ -101,7 +102,7 @@ Status TFRecordNode::ValidateParams() {
       [](const std::string &accumulated, const std::string &next) { return accumulated + "    " + next + "\n"; });
     err_msg += accumulated_filenames;
   }
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kSyntaxError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDSyntaxError, __LINE__, __FILE__, err_msg);
 }
 
 // Function to build TFRecordNode
@@ -121,17 +122,10 @@ Status TFRecordNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_o
 
   bool shuffle_files = (shuffle_ == ShuffleMode::kGlobal || shuffle_ == ShuffleMode::kFiles);
 
-  // TFReaderOp by itself is a non-mappable dataset that does not support sampling.
-  // However, if a cache operator is injected at some other place higher in the tree, that cache can
-  // inherit this sampler from the leaf, providing sampling support from the caching layer.
-  // That is why we save the sampler here in a leaf node that does not use sampling.
-  std::shared_ptr<SamplerObj> sampler_ = SelectSampler(num_samples_, shuffle_files, num_shards_, shard_id_);
-
   // Create and initialize TFReaderOp
-  std::shared_ptr<TFReaderOp> tf_reader_op =
-    std::make_shared<TFReaderOp>(num_workers_, worker_connector_size_, rows_per_buffer_, num_samples_, sorted_dir_files,
-                                 std::move(data_schema), connector_que_size_, columns_list_, shuffle_files, num_shards_,
-                                 shard_id_, shard_equal_rows_, std::move(sampler_->Build()));
+  std::shared_ptr<TFReaderOp> tf_reader_op = std::make_shared<TFReaderOp>(
+    num_workers_, worker_connector_size_, rows_per_buffer_, num_samples_, sorted_dir_files, std::move(data_schema),
+    connector_que_size_, columns_list_, shuffle_files, num_shards_, shard_id_, shard_equal_rows_);
 
   RETURN_IF_NOT_OK(tf_reader_op->Init());
 
@@ -147,10 +141,12 @@ Status TFRecordNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_o
     // Add the shuffle op after this op
     RETURN_IF_NOT_OK(AddShuffleOp(sorted_dir_files.size(), num_shards_, num_rows, 0, connector_que_size_,
                                   rows_per_buffer_, &shuffle_op));
+    shuffle_op->set_total_repeats(GetTotalRepeats());
+    shuffle_op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
     node_ops->push_back(shuffle_op);
   }
-  RETURN_IF_NOT_OK(AddCacheOp(node_ops));
-
+  tf_reader_op->set_total_repeats(GetTotalRepeats());
+  tf_reader_op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
   // Add TFReaderOp
   node_ops->push_back(tf_reader_op);
   return Status::OK();
@@ -199,5 +195,68 @@ Status TFRecordNode::GetShardFileList(std::vector<std::string> *shard_filenames)
   return Status::OK();
 }
 
+Status TFRecordNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["num_parallel_workers"] = num_workers_;
+  args["dataset_files"] = dataset_files_;
+  args["schema"] = schema_path_;
+  args["columns_list"] = columns_list_;
+  args["num_samples"] = num_samples_;
+  args["shuffle_global"] = (shuffle_ == ShuffleMode::kGlobal);
+  args["shuffle_files"] = (shuffle_ == ShuffleMode::kGlobal || shuffle_ == ShuffleMode::kFiles);
+  args["shuffle"] = shuffle_;
+  args["num_shards"] = num_shards_;
+  args["shard_id"] = shard_id_;
+  args["shard_equal_rows"] = shard_equal_rows_;
+  if (cache_ != nullptr) {
+    nlohmann::json cache_args;
+    RETURN_IF_NOT_OK(cache_->to_json(&cache_args));
+    args["cache"] = cache_args;
+  }
+  if (schema_obj_ != nullptr) {
+    schema_obj_->set_dataset_type("TF");
+    schema_obj_->set_num_rows(num_samples_);
+    args["schema_json_string"] = schema_obj_->to_json();
+  } else {
+    args["schema_file_path"] = schema_path_;
+  }
+  *out_json = args;
+  return Status::OK();
+}
+
+// Note: The following two functions are common among NonMappableSourceNode and should be promoted to its parent class.
+// TFRecord by itself is a non-mappable dataset that does not support sampling.
+// However, if a cache operator is injected at some other place higher in the tree, that cache can
+// inherit this sampler from the leaf, providing sampling support from the caching layer.
+// That is why we setup the sampler for a leaf node that does not use sampling.
+Status TFRecordNode::SetupSamplerForCache(std::shared_ptr<SamplerObj> *sampler) {
+  bool shuffle_files = (shuffle_ == ShuffleMode::kGlobal || shuffle_ == ShuffleMode::kFiles);
+  *sampler = SelectSampler(num_samples_, shuffle_files, num_shards_, shard_id_);
+  return Status::OK();
+}
+
+// If a cache has been added into the ascendant tree over this TFRecord node, then the cache will be executing
+// a sampler for fetching the data.  As such, any options in the TFRecord node need to be reset to its defaults so
+// that this TFRecord node will produce the full set of data into the cache.
+Status TFRecordNode::MakeSimpleProducer() {
+  shard_id_ = 0;
+  num_shards_ = 1;
+  shuffle_ = ShuffleMode::kFalse;
+  num_samples_ = 0;
+  shard_equal_rows_ = false;
+  return Status::OK();
+}
+
+// Visitor accepting method for IRNodePass
+Status TFRecordNode::Accept(IRNodePass *p, bool *const modified) {
+  // Downcast shared pointer then call visitor
+  return p->Visit(shared_from_base<TFRecordNode>(), modified);
+}
+
+// Visitor accepting method for IRNodePass
+Status TFRecordNode::AcceptAfter(IRNodePass *p, bool *const modified) {
+  // Downcast shared pointer then call visitor
+  return p->VisitAfter(shared_from_base<TFRecordNode>(), modified);
+}
 }  // namespace dataset
 }  // namespace mindspore

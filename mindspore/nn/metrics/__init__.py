@@ -19,27 +19,51 @@ Functions to measure the performance of the machine learning models
 on the evaluation dataset. It's used to choose the best model.
 """
 from .accuracy import Accuracy
+from .hausdorff_distance import HausdorffDistance
 from .error import MAE, MSE
 from .metric import Metric
 from .precision import Precision
 from .recall import Recall
 from .fbeta import Fbeta, F1
+from .dice import Dice
+from .roc import ROC
+from .auc import auc
 from .topk import TopKCategoricalAccuracy, Top1CategoricalAccuracy, Top5CategoricalAccuracy
 from .loss import Loss
+from .mean_surface_distance import MeanSurfaceDistance
+from .root_mean_square_surface_distance import RootMeanSquareDistance
+from .bleu_score import BleuScore
+from .cosine_similarity import CosineSimilarity
+from .occlusion_sensitivity import OcclusionSensitivity
+from .perplexity import Perplexity
+from .confusion_matrix import ConfusionMatrixMetric, ConfusionMatrix
 
 __all__ = [
-    "names", "get_metric_fn",
+    "names",
+    "get_metric_fn",
     "Accuracy",
     "MAE", "MSE",
     "Metric",
     "Precision",
+    "HausdorffDistance",
     "Recall",
     "Fbeta",
+    "BleuScore",
+    "CosineSimilarity",
+    "OcclusionSensitivity",
     "F1",
+    "Dice",
+    "ROC",
+    "auc",
     "TopKCategoricalAccuracy",
     "Top1CategoricalAccuracy",
     "Top5CategoricalAccuracy",
     "Loss",
+    "MeanSurfaceDistance",
+    "RootMeanSquareDistance",
+    "Perplexity",
+    "ConfusionMatrix",
+    "ConfusionMatrixMetric",
 ]
 
 __factory__ = {
@@ -48,12 +72,24 @@ __factory__ = {
     'precision': Precision,
     'recall': Recall,
     'F1': F1,
+    'dice': Dice,
+    'roc': ROC,
+    'auc': auc,
+    'bleu_score': BleuScore,
+    'cosine_similarity': CosineSimilarity,
+    'occlusion_sensitivity': OcclusionSensitivity,
     'topk': TopKCategoricalAccuracy,
+    'hausdorff_distance': HausdorffDistance,
     'top_1_accuracy': Top1CategoricalAccuracy,
     'top_5_accuracy': Top5CategoricalAccuracy,
     'mae': MAE,
     'mse': MSE,
     'loss': Loss,
+    'mean_surface_distance': MeanSurfaceDistance,
+    'root_mean_square_distance': RootMeanSquareDistance,
+    'perplexity': Perplexity,
+    'confusion_matrix': ConfusionMatrix,
+    'confusion_matrix_metric': ConfusionMatrixMetric,
 }
 
 

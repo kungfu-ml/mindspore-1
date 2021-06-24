@@ -62,13 +62,22 @@ class FilterNode : public DatasetNode {
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status Accept(IRNodePass *p, bool *modified) override;
+  Status Accept(IRNodePass *const p, bool *const modified) override;
 
   /// \brief Base-class override for accepting IRNodePass visitor
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status AcceptAfter(IRNodePass *p, bool *modified) override;
+  Status AcceptAfter(IRNodePass *const p, bool *const modified) override;
+
+  /// \brief Getter functions
+  const std::shared_ptr<TensorOp> &Predicate() const { return predicate_; }
+  const std::vector<std::string> &InputColumns() const { return input_columns_; }
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
 
  private:
   std::shared_ptr<TensorOp> predicate_;

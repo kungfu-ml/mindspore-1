@@ -14,18 +14,17 @@
  * limitations under the License.
  */
 
-#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_1X1_H_
-#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_1X1_H_
+#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_1X1_FP32_H_
+#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_1X1_FP32_H_
 
 #include <float.h>
 #include <vector>
 #include "src/lite_kernel.h"
 #include "include/errorcode.h"
 #include "nnacl/op_base.h"
-#include "nnacl/winograd_transform.h"
 #include "src/runtime/kernel/arm/base/convolution_base.h"
 #include "src/runtime/kernel/arm/base/layout_transform.h"
-#include "nnacl/fp32/conv_fp32.h"
+#include "nnacl/base/conv1x1_base.h"
 #include "nnacl/fp32/common_func_fp32.h"
 #include "nnacl/matmul_parameter.h"
 #include "nnacl/fp32/matmul_fp32.h"
@@ -35,12 +34,15 @@ class Convolution1x1CPUKernel : public ConvolutionBaseCPUKernel {
  public:
   Convolution1x1CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                          const mindspore::lite::PrimitiveC *primitive)
-      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                          float *origin_weight, float *origin_bias)
+      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx),
+        origin_weight_(origin_weight),
+        origin_bias_(origin_bias) {}
   ~Convolution1x1CPUKernel();
   int Init() override;
   int Run() override;
   int ReSize() override;
+  int Eval() override;
 
  public:
   int DoConv1x1(int task_id);
@@ -52,6 +54,7 @@ class Convolution1x1CPUKernel : public ConvolutionBaseCPUKernel {
   void InitConv1x1MatmulParam();
   void FreeTmpBuffer();
   void PackMatmulInput(const float *src_ptr, float *dst_ptr, int row, int col);
+  void PackWeight();
 
  private:
   MatMulParameter *matmul_param_ = nullptr;
@@ -59,6 +62,8 @@ class Convolution1x1CPUKernel : public ConvolutionBaseCPUKernel {
   bool multi_thread_by_hw_ = false;
   int thread_count_ = 0;
   int thread_stride_ = 0;
+  float *origin_weight_;  // do not free
+  float *origin_bias_;    // do not free
   float *weight_ptr_ = nullptr;
   float *pack_input_ = nullptr;
   float *input_ptr_ = nullptr;
@@ -67,4 +72,4 @@ class Convolution1x1CPUKernel : public ConvolutionBaseCPUKernel {
   int col_tile_ = 0;
 };
 }  // namespace mindspore::kernel
-#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_1X1_H_
+#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_1X1_FP32_H_

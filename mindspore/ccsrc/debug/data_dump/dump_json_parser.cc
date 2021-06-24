@@ -66,7 +66,7 @@ bool DumpJsonParser::IsDumpEnabled() {
   auto context = MsContext::GetInstance();
   MS_EXCEPTION_IF_NULL(context);
   if (context->get_param<int>(MS_CTX_EXECUTION_MODE) == kPynativeMode) {
-    MS_LOG(INFO) << "Dump is disabled in PyNative mode";
+    MS_LOG(WARNING) << "Dump is disabled in PyNative mode";
     return false;
   }
   return true;
@@ -110,6 +110,31 @@ void DumpJsonParser::Parse() {
   ParseAsyncDumpSetting(j);
   ParseE2eDumpSetting(j);
   JudgeDumpEnabled();
+}
+
+void DumpJsonParser::CopyJsonToDir() {
+  this->Parse();
+  if (!IsDumpEnabled()) {
+    return;
+  }
+  auto dump_config_file = Common::GetConfigFile(kMindsporeDumpConfig);
+  if (!dump_config_file.has_value()) {
+    MS_LOG(EXCEPTION) << "Get dump config file failed";
+  }
+  std::ifstream json_file(dump_config_file.value());
+  if (async_dump_enabled_ || e2e_dump_enabled_) {
+    auto realpath = Common::GetRealPath(path_ + "/.metadata/data_dump.json");
+    if (!realpath.has_value()) {
+      MS_LOG(ERROR) << "Get real path failed in CopyJsonDir.";
+    }
+    std::ofstream json_copy(realpath.value());
+    json_copy << json_file.rdbuf();
+    json_copy.close();
+    ChangeFileMode(realpath.value(), S_IRUSR);
+  }
+}
+bool DumpJsonParser::GetIterDumpFlag() {
+  return e2e_dump_enabled_ && (iteration_ == 0 || cur_dump_iter_ == iteration_);
 }
 
 bool DumpJsonParser::DumpToFile(const std::string &filename, const void *data, size_t len) {

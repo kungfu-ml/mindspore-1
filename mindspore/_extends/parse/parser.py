@@ -66,6 +66,7 @@ AST_SUB_TYPE_NAME = 5                  # ast.Name
 AST_SUB_TYPE_TUPLE = 6                 # ast.Tuple
 AST_SUB_TYPE_SUBSCRIPT = 7             # ast.Subscript
 AST_SUB_TYPE_STARRED = 8               # ast.Starred
+AST_SUB_TYPE_ATTRIBUTE = 9             # ast.Attribute
 AST_SUB_TYPE_UNKNOWN = 0xFF            # unknown
 
 # Process expr statement white list
@@ -346,6 +347,113 @@ def get_object_description(obj, fname, fline):
     return str(obj)
 
 
+def expand_expr_statement(node):
+    """
+    Process the expr statement and expand it.
+
+    Returns:
+        tuple, (True, expr.value, x)/(False, None, None).
+    """
+    if isinstance(node, ast.Expr):
+        expr_value = node.value
+        if isinstance(expr_value, ast.Call):
+            func = expr_value.func
+            if isinstance(func, ast.Attribute) and \
+                    hasattr(func, "attr") and \
+                    hasattr(func, "value"):
+                method = func.attr
+                target = func.value
+                if method in parse_expr_statement_white_list:
+                    logger.debug("Expand expr, target:%s, method:%s", target, method)
+                    return True, expr_value, target
+        if not isinstance(expr_value, ast.Str):
+            return True, expr_value
+    return (False,)
+
+
+def get_ast_namespace_symbol(obj):
+    """Get obj type and namespace and symbol."""
+    # step 1:get symbol from object map
+    ops_info = parse_object_map.get(type(obj), SYMBOL_UNDEFINE)
+    logger.debug("ops info = %r", ops_info)
+    return ops_info
+
+
+def get_operation_namespace_symbol(var: str):
+    """Get operation namespace and symbol."""
+    ops_info = (trope_ns, var)
+    logger.debug("get operation ops info = %r", ops_info)
+    return ops_info
+
+
+def get_ast_type(node):
+    """Get the ast type."""
+    ast_type = AST_SUB_TYPE_UNKNOWN
+    if isinstance(node, ast.And):
+        ast_type = AST_SUB_TYPE_AND
+    elif isinstance(node, ast.Or):
+        ast_type = AST_SUB_TYPE_OR
+    elif isinstance(node, ast.Name):
+        ast_type = AST_SUB_TYPE_NAME
+    elif isinstance(node, ast.Tuple):
+        ast_type = AST_SUB_TYPE_TUPLE
+    elif isinstance(node, ast.Subscript):
+        ast_type = AST_SUB_TYPE_SUBSCRIPT
+    elif isinstance(node, ast.Starred):
+        ast_type = AST_SUB_TYPE_STARRED
+    elif isinstance(node, ast.Attribute):
+        ast_type = AST_SUB_TYPE_ATTRIBUTE
+    else:
+        ast_type = AST_SUB_TYPE_UNKNOWN
+    return ast_type
+
+
+def get_node_type(node):
+    """Process an ast node."""
+    method_name = f'{node.__class__.__name__}'
+    node_type = [method_name]
+    # judge the ast main type
+    if isinstance(node, ast.stmt):
+        node_type.append(AST_MAIN_TYPE_STMT)
+    elif isinstance(node, (ast.expr, ast.slice)) or node is None:
+        # ast.slice and ast.expr should be expr
+        node_type.append(AST_MAIN_TYPE_EXPR)
+    else:
+        node_type.append(AST_MAIN_TYPE_UNKNOWN)
+    return node_type
+
+
+def get_args_default_values(node):
+    """get the args'default values of parse object."""
+    nondefaults = [None] * (len(node.args.args) - len(node.args.defaults))
+    defaults = nondefaults + node.args.defaults + node.args.kw_defaults
+    if node.args.vararg:
+        defaults.append(None)
+    if node.args.kwarg:
+        defaults.append(None)
+    return defaults
+
+
+def get_args(node):
+    """Get the arg of parse object."""
+    args = []
+    # process position args
+    for arg in node.args.args:
+        args.append(arg)
+
+    # process kwonlyargs: kwonlyargs is append after position args
+    if node.args.kwonlyargs:
+        for kwarg in node.args.kwonlyargs:
+            args.append(kwarg)
+    # process vararg: vararg is append after kwonlyargs
+    if node.args.vararg:
+        args.append(node.args.vararg)
+    # process kwarg: kwarg is append after vararg
+    if node.args.kwarg:
+        args.append(node.args.kwarg)
+    return args
+
+
 class Parser:
     """
     Parser python code to ast tree.
@@ -391,100 +499,28 @@ class Parser:
                     idt_err.filename = self.filename
                     idt_err.lineno = self.line_offset
                     idt_err.msg = f"There are incorrect indentations in definition or comment of function: " \
-                                 f"'{self.fn.__qualname__}'."
+                                  f"'{self.fn.__qualname__}'."
                     raise idt_err
                 Parser.ast_cache[hexstr] = tree
         else:
             logger.error("Fn type is invalid")
         return tree
 
-    def get_args(self, node):
-        """Get the arg of parse object."""
-        args = []
-        # process position args
-        for arg in node.args.args:
-            args.append(arg)
-
-        # process kwonlyargs: kwonlyargs is append after position args
-        if node.args.kwonlyargs:
-            for kwarg in node.args.kwonlyargs:
-                args.append(kwarg)
-        # process vararg: vararg is append after kwonlyargs
-        if node.args.vararg:
-            args.append(node.args.vararg)
-        # process kwarg: kwarg is append after vararg
-        if node.args.kwarg:
-            args.append(node.args.kwarg)
-        return args
-
-    def get_args_default_values(self, node):
-        """get the args'default values of parse object."""
-        nondefaults = [None] * (len(node.args.args) - len(node.args.defaults))
-        defaults = nondefaults + node.args.defaults + node.args.kw_defaults
-        if node.args.vararg:
-            defaults.append(None)
-        if node.args.kwarg:
-            defaults.append(None)
-        return defaults
-
-    def get_node_type(self, node):
-        """Process an ast node."""
-        method_name = f'{node.__class__.__name__}'
-        node_type = [method_name]
-        # judge the ast main type
-        if isinstance(node, ast.stmt):
-            node_type.append(AST_MAIN_TYPE_STMT)
-        elif isinstance(node, (ast.expr, ast.slice)) or node is None:
-            # ast.slice and ast.expr should be expr
-            node_type.append(AST_MAIN_TYPE_EXPR)
-        else:
-            node_type.append(AST_MAIN_TYPE_UNKNOWN)
-        return node_type
-
-    def get_ast_type(self, node):
-        """Get the ast type."""
-        ast_type = AST_SUB_TYPE_UNKNOWN
-        if isinstance(node, ast.And):
-            ast_type = AST_SUB_TYPE_AND
-        elif isinstance(node, ast.Or):
-            ast_type = AST_SUB_TYPE_OR
-        elif isinstance(node, ast.Name):
-            ast_type = AST_SUB_TYPE_NAME
-        elif isinstance(node, ast.Tuple):
-            ast_type = AST_SUB_TYPE_TUPLE
-        elif isinstance(node, ast.Subscript):
-            ast_type = AST_SUB_TYPE_SUBSCRIPT
-        elif isinstance(node, ast.Starred):
-            ast_type = AST_SUB_TYPE_STARRED
-        else:
-            ast_type = AST_SUB_TYPE_UNKNOWN
-        return ast_type
-
     def get_namespace_symbol(self, var: str):
+
         """Get symbol type and namespace and symbol."""
         if var in self.closure_namespace:
-            ops_info = (self.closure_namespace, var)
             logger.debug("in closure_namespace")
-        elif var in self.global_namespace:
-            ops_info = (self.global_namespace, var)
+            return self.closure_namespace, var
+        if var in self.global_namespace:
             logger.debug("in global_namespace")
-        else:
-            ops_info = parse_object_map.get(SYMBOL_UNDEFINE)
-            ops_info = [ops_info[0], var]
-        return ops_info
-
-    def get_operation_namespace_symbol(self, var: str):
-        """Get operation namespace and symbol."""
-        ops_info = (trope_ns, var)
-        logger.debug("get operation ops info = %r", ops_info)
-        return ops_info
-
-    def get_ast_namespace_symbol(self, obj):
-        """Get obj type and namespace and symbol."""
-        # step 1:get symbol from object map
-        ops_info = parse_object_map.get(type(obj), SYMBOL_UNDEFINE)
-        logger.debug("ops info = %r", ops_info)
-        return ops_info
+            value = self.global_namespace[var]
+            if isinstance(value, type(abs)) and self.global_namespace[var] not in convert_object_map:
+                error_info = f"The builtin function '{var}' is not supported in graph mode."
+                return None, var, error_info
+            return self.global_namespace, var
+        error_info = f"The name '{var}' is not defined."
+        return None, var, error_info
 
     def analyze_super(self, class_type_node, subclass_instance):
         """Analyze super and return a class instance."""
@@ -545,25 +581,3 @@ class Parser:
             else:
                 ret = ret + [0, 0, 0, 0]
         return ret
-
-    def expand_expr_statement(self, node):
-        """
-        Process the expr statement and expand it.
-
-        Returns:
-            tuple, (True, expr.value, x)/(False, None, None).
-        """
-        if isinstance(node, ast.Expr) and hasattr(node, "value"):
-            expr_value = node.value
-            if isinstance(expr_value, ast.Call):
-                func = expr_value.func
-                if isinstance(func, ast.Attribute) and \
-                        hasattr(func, "attr") and \
-                        hasattr(func, "value"):
-                    method = func.attr
-                    target = func.value
-                    if method in parse_expr_statement_white_list:
-                        logger.debug("Expand expr, target:%s, method:%s", target, method)
-                        return True, expr_value, target
-                return True, expr_value
-        return False, None, None

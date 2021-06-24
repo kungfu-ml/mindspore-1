@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,10 +17,9 @@
 #include <algorithm>
 #include <utility>
 #include <iomanip>
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/engine/data_buffer.h"
 #include "minddata/dataset/engine/db_connector.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/core/config_manager.h"
 #include "minddata/dataset/core/global_context.h"
 #include "minddata/dataset/util/log_adapter.h"
@@ -123,7 +122,7 @@ Status ZipOp::prepare(TensorQTable *const table) {
   draining_ = false;
   buffer_id_ = 0;
   if (table == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid data, ZipOp prepare phase requires a tensor table, but got nullptr.");
   }
   // fill initial row
@@ -148,7 +147,7 @@ Status ZipOp::prepare(TensorQTable *const table) {
 // fillBuffer always expects a new table to fill
 Status ZipOp::fillBuffer(TensorQTable *const table) {
   if (table == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid data, ZipOp fillBuffer null table pointer.");
   }
   TensorRow new_row;
@@ -159,6 +158,8 @@ Status ZipOp::fillBuffer(TensorQTable *const table) {
       return Status::OK();
     }
     // else we got a row so pack it into the tensor table.
+    // Currently we don't support printing error info after zip
+    new_row.setPath({});
     table->push_back(std::move(new_row));
   }
   return Status::OK();
@@ -197,7 +198,7 @@ Status ZipOp::getNextTensorRow(TensorRow *const new_zip_row) {
 Status ZipOp::drainPipeline() {
   // we don't need to drain if we reached eof
   if (eof_) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "ZipOp draining should not be done if already at eof!");
   }
   for (int32_t con = 0; con < children_num_; ++con) {
@@ -234,18 +235,6 @@ Status ZipOp::EofReceived(int32_t) {
 Status ZipOp::EoeReceived(int32_t) {
   state_ = OpState::kDeOpIdle;
   return Status::OK();
-}
-
-// Visitor pre-accept method for NodePass
-Status ZipOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->PreRunOnNode(shared_from_base<ZipOp>(), modified);
-}
-
-// Visitor accept method for NodePass
-Status ZipOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<ZipOp>(), modified);
 }
 
 Status ZipOp::ComputeColMap() {

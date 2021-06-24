@@ -14,6 +14,7 @@
 # ============================================================================
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
+from mindspore.ops import _constants as Constants
 
 select = P.Select()
 maximum = P.Maximum()
@@ -23,8 +24,8 @@ real_div = P.RealDiv()
 mul = P.Mul()
 sub = P.Sub()
 lamb_update_with_lr = Primitive('LambUpdateWithLR')
-make_tuple = Primitive('make_tuple')
-tuple_getitem = Primitive('tuple_getitem')
+make_tuple = Primitive('MakeTuple')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
 
 
 class FnDict:

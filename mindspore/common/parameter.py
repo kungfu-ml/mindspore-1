@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +16,11 @@
 """Parameter for cell."""
 from copy import copy
 import numbers
+import numpy as np
 from .._c_expression import ParamInfo
 from . import dtype as mstype
+from .. import context
+from ..parallel._utils import _get_parallel_mode
 from .initializer import initializer
 from .tensor import Tensor
 from .._checkparam import Validator
@@ -72,7 +75,7 @@ class Parameter(Tensor_):
         otherwise, the parameter name may be different than expected.
 
     Args:
-        default_input (Union[Tensor, Number]): Parameter data, to be set initialized.
+        default_input (Union[Tensor, int, float, numpy.ndarray, list]): Parameter data, to be set initialized.
         name (str): Name of the child parameter. Default: None.
         requires_grad (bool): True if the parameter requires gradient. Default: True.
         layerwise_parallel (bool): When layerwise_parallel is true in data parallel mode,
@@ -81,7 +84,7 @@ class Parameter(Tensor_):
             mode. It works only when enable parallel optimizer in `mindspore.context.set_auto_parallel_context()`.
             Default: True.
 
-    Example:
+    Examples:
         >>> from mindspore import Parameter, Tensor
         >>> from mindspore.common import initializer as init
         >>> from mindspore.ops import operations as P
@@ -94,33 +97,30 @@ class Parameter(Tensor_):
         ...     def __init__(self):
         ...         super(Net, self).__init__()
         ...         self.matmul = P.MatMul()
-        ...         self.weight = Parameter(Tensor(np.ones((1,2))), name="w", requires_grad=True)
+        ...         self.weight = Parameter(Tensor(np.ones((1, 2)), mindspore.float32), name="w", requires_grad=True)
         ...
         ...     def construct(self, x):
         ...         out = self.matmul(self.weight, x)
         ...         return out
-        >>> context.set_context(mode=context.GRAPH_MODE, device_target="CPU")
         >>> net = Net()
-        >>> x = Tensor(np.ones((2,1)))
+        >>> x = Tensor(np.ones((2, 1)), mindspore.float32)
         >>> print(net(x))
         [[2.]]
-        >>> net.weight.set_data(Tensor(np.zeros((1,2))))
-        Parameter (name=w)
+        >>> _ = net.weight.set_data(Tensor(np.zeros((1, 2)), mindspore.float32))
         >>> print(net(x))
         [[0.]]
     """
     __base_type__ = {}
 
     def __new__(cls, default_input, *args, **kwargs):
+        init_data_flag = bool(isinstance(default_input, Tensor) and default_input.has_init)
         input_class, *class_init_args = Parameter._get_parameter_new_args(default_input)
         new_type = Parameter._get_base_class(input_class)
         obj = input_class.__new__(new_type)
         input_class.__init__(obj, *class_init_args)
         # it's better to make the Initializer a kind of tensor.
         obj.init_mode = None
-        obj.is_default_input_init = False
-        if isinstance(default_input, Tensor) and default_input.has_init:
-            obj.is_default_input_init = True
+        obj.is_default_input_init = init_data_flag
         if obj.has_init:
             obj.init_mode = default_input
         return obj
@@ -130,13 +130,13 @@ class Parameter(Tensor_):
         if self.init_mode is not None:
             data = self.init_mode
         else:
-            # cast to break deep infinit loop while deepcopy
+            # cast to break deep infinite loop while deepcopy
             data = Tensor(self)
         return (
             Parameter, (data, self.name, self.requires_grad, self.layerwise_parallel))
 
     def __init__(self, default_input, name=None, requires_grad=True, layerwise_parallel=False, parallel_optimizer=True):
-        self._param_info = ParamInfo()
+        self.param_info = ParamInfo()
         self.init_in_server = False
         self.cache_enable = False
         self.name = name
@@ -149,22 +149,26 @@ class Parameter(Tensor_):
         self._is_init = False
         self._inited_param = None
         self._sliced = False
-        self.comm_fusion = 1
         self.is_param_ps = False
         self._cast_type = None
         self._unique = False
         self.is_in_parallel = _is_in_parallel_mode()
-        if isinstance(default_input, Tensor):
+        if isinstance(default_input, (Tensor_, Tensor)):
             Tensor_.__init__(self, default_input.dtype, default_input.shape)
         elif isinstance(default_input, int):
             Tensor_.__init__(self, mstype.int64, ())
         elif isinstance(default_input, float):
             Tensor_.__init__(self, mstype.float32, ())
+        elif isinstance(default_input, (np.ndarray, list)):
+            Tensor_.__init__(self, default_input)
+        else:
+            raise TypeError(f"Parameter input must be [`Tensor`, `int`, `float`, `numpy.ndarray`, `list`]."
+                            f"But with type {type(default_input)}.")
 
     def __deepcopy__(self, memodict):
         new_obj = Parameter(self)
         new_obj.name = self.name
-        new_obj._inited_param = self._inited_param # pylint: disable=W0212
+        new_obj._inited_param = self._inited_param  # pylint: disable=W0212
         return new_obj
 
     @staticmethod
@@ -197,10 +201,11 @@ class Parameter(Tensor_):
         return (Tensor, data)
 
     def __str__(self):
-        return f'Parameter (name={self._param_info.name})'
+        return f'Parameter (name={self.name}, shape={self.shape}, dtype={self.dtype}, ' \
+               f'requires_grad={self.requires_grad})'
 
     def __repr__(self):
-        return f'Parameter (name={self._param_info.name})'
+        return self.__str__()
 
     def __parameter__(self):
         """For parse check."""
@@ -226,7 +231,7 @@ class Parameter(Tensor_):
                                "sparse operator support initialization in server.".format(self.name))
         self.is_param_ps = True
         self.init_in_server = init_in_server
-        self._param_info.init_in_server = init_in_server
+        self.param_info.init_in_server = init_in_server
 
     @property
     def inited_param(self):
@@ -238,11 +243,10 @@ class Parameter(Tensor_):
         """
         return self._inited_param
 
-
     @property
     def name(self):
         """Get the name of the parameter."""
-        return self._param_info.name
+        return self.param_info.name
 
     @name.setter
     def name(self, name_):
@@ -269,9 +273,9 @@ class Parameter(Tensor_):
             if len(self.shape) != 2:
                 raise RuntimeError("The dims of parameter '{}' must be 2, but got {}."
                                    .format(self.name, len(self.shape)))
-            _reinsert_hash_table_size(name_, self._param_info.name, self.shape[0], self.shape[1])
+            _reinsert_hash_table_size(name_, self.param_info.name, self.shape[0], self.shape[1])
 
-        self._param_info.name = name_
+        self.param_info.name = name_
 
     @property
     def sliced(self):
@@ -285,12 +289,23 @@ class Parameter(Tensor_):
     @property
     def comm_fusion(self):
         """Get the fusion type for communication operators corresponding to this parameter."""
-        return self._param_info.comm_fusion
+        return self.param_info.comm_fusion
 
     @comm_fusion.setter
     def comm_fusion(self, comm_fusion_):
-        """Set the fusion type for communication operators corresponding to this parameter."""
-        self._param_info.comm_fusion = comm_fusion_
+        """
+        In `AUTO_PARALLEL` and `SEMI_AUTO_PARALLEL` mode, some communication operators used for parameters or
+        gradients aggregation are inserted automatically.Set the fusion type for communication operators generated
+        for this parameter. Only `Ascend` and `Graph` mode is supported.
+
+        Args:
+            comm_fusion_ (int): The value of fusion must be greater than or equal to 0.
+                                When the value of fusion is 0, operators will not be fused together.
+        """
+        if context.get_context("mode") == context.PYNATIVE_MODE and "auto_parallel" in _get_parallel_mode():
+            raise RuntimeError("`comm_fusion` does not support PYNATIVE_MODE")
+        Validator.check_non_negative_int(comm_fusion_)
+        self.param_info.comm_fusion = comm_fusion_
 
     @property
     def unique(self):
@@ -336,12 +351,14 @@ class Parameter(Tensor_):
         """
         x = copy(self)
         # pylint: disable=protected-access
-        x._param_info = self._param_info.clone()
+        x.param_info = self.param_info.clone()
         x.is_init = False
         x.init = self.init
         x.is_param_ps = self.is_param_ps
         x.init_in_server = self.init_in_server
         x.cache_enable = self.cache_enable
+        if self.cache_shape:
+            x.cache_shape = self.cache_shape
         if init != 'same':
             shape = self.shape
             dtype = self.dtype
@@ -350,35 +367,57 @@ class Parameter(Tensor_):
 
     @property
     def layerwise_parallel(self):
-        return self._param_info.layerwise_parallel
+        return self.param_info.layerwise_parallel
 
     @layerwise_parallel.setter
     def layerwise_parallel(self, value=True):
         if not isinstance(value, bool):
             raise TypeError("`layerwise_parallel` parameter must be bool type")
-        self._param_info.layerwise_parallel = value
+        self.param_info.layerwise_parallel = value
 
     @property
     def parallel_optimizer(self):
         """Return whether the parameter requires weight shard for parallel optimizer."""
-        return self._param_info.parallel_optimizer
+        return self.param_info.parallel_optimizer
 
     @parallel_optimizer.setter
     def parallel_optimizer(self, value=True):
         if not isinstance(value, bool):
             raise TypeError("`parallel_optimizer` parameter must be bool type")
-        self._param_info.parallel_optimizer = value
+        self.param_info.parallel_optimizer = value
+
+    @property
+    def cache_enable(self):
+        """Return whether the parameter is cache enable."""
+        return self.param_info.cache_enable
+
+    @cache_enable.setter
+    def cache_enable(self, value=True):
+        if not isinstance(value, bool):
+            raise TypeError("`cache_enable` parameter must be bool type")
+        self.param_info.cache_enable = value
+
+    @property
+    def cache_shape(self):
+        """Return the cache shape corresponding to the parameter if use cache."""
+        return self.param_info.cache_shape
+
+    @cache_shape.setter
+    def cache_shape(self, value):
+        if not isinstance(value, (tuple, list)):
+            raise TypeError("`cache_shape` parameter must be tuple or list type")
+        self.param_info.cache_shape = value
 
     @property
     def requires_grad(self):
         """Return whether the parameter requires gradient."""
-        return self._param_info.requires_grad
+        return self.param_info.requires_grad
 
     @requires_grad.setter
     def requires_grad(self, value=True):
         if not isinstance(value, bool):
             raise TypeError("`requires_grad` parameter must be bool type")
-        self._param_info.requires_grad = value
+        self.param_info.requires_grad = value
 
     @property
     def data(self):
@@ -392,7 +431,9 @@ class Parameter(Tensor_):
             self.init = None
             return self.assign_value(data)
         # create a new tensor
-        return Parameter(data, self.name, self.requires_grad)
+        new_param = Parameter(data, self.name, self.requires_grad)
+        new_param.param_info = self.param_info
+        return new_param
 
     def set_data(self, data, slice_shape=False):
         """
@@ -436,7 +477,8 @@ class Parameter(Tensor_):
             if mstype.implicit_conversion_seq[self.dtype] < mstype.implicit_conversion_seq[data.dtype]:
                 raise_type_error(data.dtype)
             else:
-                data = Tensor(data, self.dtype)
+                from mindspore.ops import functional as F
+                data = F.cast(data, self.dtype)
         if isinstance(data, Tensor) and data.has_init:
             # The parameter has been initializered, directly update by the data
             if current_tensor_is_init:
@@ -458,11 +500,13 @@ class Parameter(Tensor_):
         Initialize the parameter data.
 
         Args:
-            layout (list[list[int]]): Parameter slice layout [dev_mat, tensor_map, slice_shape].
+            layout (Union[None, list(list(int))]): Parameter slice
+                layout [dev_mat, tensor_map, slice_shape]. Default: None.
 
-                - dev_mat (list[int]): Device matrix.
-                - tensor_map (list[int]): Tensor map.
-                - slice_shape (list[int]): Shape of slice.
+                - dev_mat (list(int)): Device matrix.
+                - tensor_map (list(int)): Tensor map.
+                - slice_shape (list(int)): Shape of slice.
+
             set_sliced (bool): True if the parameter is set sliced after initializing the data.
                 Default: False.
 
@@ -473,10 +517,8 @@ class Parameter(Tensor_):
             Parameter, the `Parameter` after initializing data. If current `Parameter` was already initialized before,
             returns the same initialized `Parameter`.
         """
-        if self.is_default_input_init:
-            is_current_in_parallel = _is_in_parallel_mode()
-            if self.is_in_parallel != is_current_in_parallel:
-                raise RuntimeError("Must set or change parallel mode before any Tensor created.")
+        if self.is_default_input_init and self.is_in_parallel != _is_in_parallel_mode():
+            raise RuntimeError("Must set or change parallel mode before any Tensor created.")
         if self.init_mode is None:
             return self
         if self.inited_param is not None:
@@ -484,29 +526,21 @@ class Parameter(Tensor_):
         if _is_role_worker() and self.cache_enable:
             global_seed, op_seed = _get_global_and_op_seed()
             _insert_weight_init_info(self.name, global_seed, op_seed)
+
+        init_data_args = ()
         if layout is not None:
             if not isinstance(layout, tuple):
-                raise TypeError("The layout should be tuple! layout is {}.".format(layout))
+                raise TypeError("The layout should be tuple, but got layout is {}.".format(layout))
             if len(layout) < 3:
-                raise ValueError("The length of layout must be larger than 3! layout is {}.".format(layout))
+                raise ValueError("The length of layout must be larger than 2, but got layout is {}.".format(layout))
             slice_index = int(_get_slice_index(layout[0], layout[1]))
-            if (self.init_in_server and self.is_param_ps and isinstance(self.init_mode, Tensor)
-                    and self.init_mode.init is not None):
-                if _is_role_worker() or _is_role_sched():
-                    data = self.init_mode.init_data(0, [1])
-                else:
-                    data = self.init_mode.init_data(slice_index, layout[2], layout[5])
-            else:
-                data = self.init_mode.init_data(slice_index, layout[2], layout[5])
+            init_data_args += (slice_index, layout[2], layout[5])
+
+        if self.init_in_server and self.is_param_ps and isinstance(self.init_mode, Tensor) and \
+           self.init_mode.init is not None and (_is_role_worker() or _is_role_sched()):
+            data = self.init_mode.init_data(0, [1])
         else:
-            if (self.init_in_server and self.is_param_ps and isinstance(self.init_mode, Tensor)
-                    and self.init_mode.init is not None):
-                if _is_role_worker() or _is_role_sched():
-                    data = self.init_mode.init_data(0, [1])
-                else:
-                    data = self.init_mode.init_data()
-            else:
-                data = self.init_mode.init_data()
+            data = self.init_mode.init_data(*init_data_args)
 
         obj = self._update_tensor_data(data)
         if id(obj) != id(self):

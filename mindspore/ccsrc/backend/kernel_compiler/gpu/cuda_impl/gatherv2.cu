@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,3 +55,25 @@ template void GatherV2<half, int>(half *input, int *indices, half *output, size_
                                   size_t output_dim2, size_t input_dim1, cudaStream_t stream);
 template void GatherV2<half, int64_t>(half *input, int64_t *indices, half *output, size_t output_dim0,
                                       size_t output_dim1, size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<double, int>(double *input, int *indices, double *output, size_t output_dim0, size_t output_dim1,
+                                    size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<double, int64_t>(double *input, int64_t *indices, double *output, size_t output_dim0,
+                                        size_t output_dim1, size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<int, int>(int *input, int *indices, int *output, size_t output_dim0, size_t output_dim1,
+                                 size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<int, int64_t>(int *input, int64_t *indices, int *output, size_t output_dim0, size_t output_dim1,
+                                     size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<int16_t, int>(int16_t *input, int *indices, int16_t *output, size_t output_dim0,
+                                     size_t output_dim1, size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<int16_t, int64_t>(int16_t *input, int64_t *indices, int16_t *output, size_t output_dim0,
+                                         size_t output_dim1, size_t output_dim2, size_t input_dim1,
+                                         cudaStream_t stream);
+template void GatherV2<int8_t, int>(int8_t *input, int *indices, int8_t *output, size_t output_dim0, size_t output_dim1,
+                                    size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<int8_t, int64_t>(int8_t *input, int64_t *indices, int8_t *output, size_t output_dim0,
+                                        size_t output_dim1, size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<uint8_t, int>(uint8_t *input, int *indices, uint8_t *output, size_t output_dim0,
+                                     size_t output_dim1, size_t output_dim2, size_t input_dim1, cudaStream_t stream);
+template void GatherV2<uint8_t, int64_t>(uint8_t *input, int64_t *indices, uint8_t *output, size_t output_dim0,
+                                         size_t output_dim1, size_t output_dim2, size_t input_dim1,
+                                         cudaStream_t stream);

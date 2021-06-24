@@ -26,9 +26,7 @@
 namespace mindspore::kernel {
 class OneHotOpenCLKernel : public OpenCLKernel {
  public:
-  OneHotOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
   ~OneHotOpenCLKernel() override = default;
 
   int Run() override;
@@ -43,8 +41,8 @@ class OneHotOpenCLKernel : public OpenCLKernel {
   float on_value_{1.0f};
   float off_value_{0.0f};
   int axis_{0};
-  GpuTensorInfo in_shape_ = GpuTensorInfo(nullptr);
-  GpuTensorInfo out_shape_ = GpuTensorInfo(nullptr);
+  GpuTensorInfo in_shape_;
+  GpuTensorInfo out_shape_;
 };
 }  // namespace mindspore::kernel
 

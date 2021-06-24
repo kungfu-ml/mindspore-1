@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,20 +32,20 @@ namespace dataset {
 
 // Constructor for TransferNode
 TransferNode::TransferNode(std::shared_ptr<DatasetNode> child, std::string queue_name, std::string device_type,
-                           bool send_epoch_end, int32_t total_batch, bool create_data_info_queue)
+                           int32_t device_id, bool send_epoch_end, int32_t total_batch, bool create_data_info_queue)
     : prefetch_size_(16),
       queue_name_(std::move(queue_name)),
       device_type_(std::move(device_type)),
       send_epoch_end_(send_epoch_end),
       total_batch_(total_batch),
       create_data_info_queue_(create_data_info_queue),
-      device_id_(0) {
+      device_id_(device_id) {
   this->AddChild(child);
 }
 
 std::shared_ptr<DatasetNode> TransferNode::Copy() {
-  auto node = std::make_shared<TransferNode>(nullptr, queue_name_, device_type_, send_epoch_end_, total_batch_,
-                                             create_data_info_queue_);
+  auto node = std::make_shared<TransferNode>(nullptr, queue_name_, device_type_, device_id_, send_epoch_end_,
+                                             total_batch_, create_data_info_queue_);
   return node;
 }
 
@@ -72,13 +72,13 @@ Status TransferNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_o
     // Get a uuid for queue name
     queue_name_ = Services::GetUniqueID();
   }
+
+  // FIXME - This is an issue from MindSpore C++ user
+  // https://gitee.com/mindspore/mindspore/issues/I39J9A
+  // Link _c_expression.so and _c_dataengine.so simultaneously will cause heap overflow because MindData uses MSContext.
+  // We should find a new way to get device_type here.
   if (device_type_.empty()) {
-    auto context = MsContext::GetInstance();
-    if (context == nullptr) {
-      device_type_ = kCPUDevice;
-    } else {
-      device_type_ = context->get_param<std::string>(MS_CTX_DEVICE_TARGET);
-    }
+    device_type_ = kCPUDevice;
   }
 
   // Get device type from ms context
@@ -96,25 +96,33 @@ Status TransferNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_o
     RETURN_STATUS_UNEXPECTED(err_msg);
   }
 
-  // Get device ID (shard ID) from children
-  device_id_ = 0;
-  RETURN_IF_NOT_OK(this->GetShardId(&device_id_));
-
-  node_ops->push_back(std::make_shared<DeviceQueueOp>(queue_name_, type, device_id_, prefetch_size_, send_epoch_end_,
-                                                      total_batch_, create_data_info_queue_));
+  auto op = std::make_shared<DeviceQueueOp>(queue_name_, type, device_id_, prefetch_size_, send_epoch_end_,
+                                            total_batch_, create_data_info_queue_);
+  op->set_total_repeats(GetTotalRepeats());
+  op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
+  node_ops->push_back(op);
   return Status::OK();
 }
 
 // Visitor accepting method for IRNodePass
-Status TransferNode::Accept(IRNodePass *p, bool *modified) {
+Status TransferNode::Accept(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->Visit(shared_from_base<TransferNode>(), modified);
 }
 
 // Visitor accepting method for IRNodePass
-Status TransferNode::AcceptAfter(IRNodePass *p, bool *modified) {
+Status TransferNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->VisitAfter(shared_from_base<TransferNode>(), modified);
+}
+
+Status TransferNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["send_epoch_end"] = send_epoch_end_;
+  args["total_batch"] = total_batch_;
+  args["create_data_info_queue"] = create_data_info_queue_;
+  *out_json = args;
+  return Status::OK();
 }
 }  // namespace dataset
 }  // namespace mindspore

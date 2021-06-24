@@ -18,7 +18,8 @@
 #include <memory>
 #include "src/common/log_adapter.h"
 #include "common/common_test.h"
-#include "mindspore/lite/nnacl/fp32/space_to_depth_fp32.h"
+#include "mindspore/lite/nnacl/space_to_depth_parameter.h"
+#include "mindspore/lite/nnacl/base/space_to_depth_base.h"
 #include "mindspore/lite/src/kernel_registry.h"
 #include "mindspore/lite/src/lite_kernel.h"
 
@@ -39,7 +40,7 @@ TEST_F(SpaceToDepthTestFp32, SpaceToDepthTest1) {
   int out_shape[4] = {1, 2, 2, 4};
   int h_start = 0;
   int h_end = 2;
-  SpaceToDepthForNHWC((const float *)input, output, in_shape, out_shape, 4, 2, h_start, h_end);
+  SpaceToDepthForNHWC((const float *)input, output, in_shape, out_shape, 4, 2, h_start, h_end, sizeof(float));
   for (int i = 0; i < out_size; ++i) {
     std::cout << output[i] << " ";
   }
@@ -81,7 +82,7 @@ TEST_F(SpaceToDepthTestFp32, SpaceToDepthTest2) {
   auto creator = lite::KernelRegistry::GetInstance()->GetCreator(desc);
   ASSERT_NE(creator, nullptr);
   kernel::LiteKernel *kernel =
-    creator(inputs_tensor, outputs_tensor, reinterpret_cast<OpParameter *>(&op_param), &ctx, desc, nullptr);
+    creator(inputs_tensor, outputs_tensor, reinterpret_cast<OpParameter *>(&op_param), &ctx, desc);
   ASSERT_NE(kernel, nullptr);
   kernel->Run();
 

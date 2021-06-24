@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,14 @@
 
 #ifndef MINDSPORE_LITE_SRC_RUNTIME_AGENT_NPU_OPTIMIZER_NPU_TRANSFORM_PASS_H_
 #define MINDSPORE_LITE_SRC_RUNTIME_AGENT_NPU_OPTIMIZER_NPU_TRANSFORM_PASS_H_
+
+#include <set>
 #include <vector>
 #include "src/lite_kernel.h"
-#include "src/ops/primitive_c.h"
 #include "src/runtime/agent/npu/optimizer/npu_base_pass.h"
 
 namespace mindspore::lite {
+extern std::set<mindspore::schema::PrimitiveType> npu_trans_nodes;
 class NPUTransformPass : public NPUBasePass {
  public:
   int Run() override;
@@ -34,26 +36,16 @@ class NPUTransformPass : public NPUBasePass {
     name_ = "NPUTransformPass";
   }
 
-  ~NPUTransformPass() override {
-    for (auto primitive : insert_primitive_) {
-      delete primitive;
-    }
-    insert_primitive_.clear();
-  }
-
  private:
-  int InsertPreNode(const InnerContext *context, kernel::LiteKernel *kernel,
-                    std::vector<kernel::LiteKernel *> *trans_kernels, std::vector<Tensor *> *all_tensors);
+  int InsertPreNodes(kernel::LiteKernel *kernel, std::vector<kernel::LiteKernel *> *trans_kernels);
 
-  int InsertPostNode(const InnerContext *context, kernel::LiteKernel *kernel,
-                     std::vector<kernel::LiteKernel *> *trans_kernels, std::vector<Tensor *> *all_tensors);
+  int InsertPostNodes(kernel::LiteKernel *kernel, std::vector<kernel::LiteKernel *> *trans_kernels);
 
  private:
   int total = 0;
   const InnerContext *context_;
   std::vector<kernel::LiteKernel *> *all_kernels_;
   std::vector<Tensor *> *all_tensors_;
-  std::vector<const PrimitiveC *> insert_primitive_;
 };
 }  // namespace mindspore::lite
 #endif  // MINDSPORE_LITE_SRC_RUNTIME_AGENT_NPU_OPTIMIZER_NPU_TRANSFORM_PASS_H_

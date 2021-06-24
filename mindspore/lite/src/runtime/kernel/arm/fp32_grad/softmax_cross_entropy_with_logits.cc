@@ -25,11 +25,11 @@
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_SoftmaxCrossEntropy;
+using mindspore::schema::PrimitiveType_SoftmaxCrossEntropyWithLogits;
 
 namespace mindspore::kernel {
 
-int SoftmaxCrossEntropyWithLogitsCPUKernel::ReSize() { return RET_OK; }
+int SoftmaxCrossEntropyWithLogitsCPUKernel::Init() { return ReSize(); }
 
 void SoftmaxCrossEntropyWithLogitsCPUKernel::ForwardPostExecute(const float *labels, const float *logits, float *grads,
                                                                 float *output2) const {
@@ -100,7 +100,7 @@ int SoftmaxCrossEntropyWithLogitsCPUKernel::Run() {
   return RET_OK;
 }
 
-int SoftmaxCrossEntropyWithLogitsCPUKernel::Init() {
+int SoftmaxCrossEntropyWithLogitsCPUKernel::ReSize() {
   auto dims = in_tensors_.at(0)->shape();
   param_->n_dim_ = 2;
   param_->number_of_classes_ = dims.at(1);
@@ -129,12 +129,10 @@ int SoftmaxCrossEntropyWithLogitsCPUKernel::Init() {
 kernel::LiteKernel *CpuSoftmaxCrossEntropyFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                             const std::vector<lite::Tensor *> &outputs,
                                                             OpParameter *opParameter, const lite::InnerContext *ctx,
-                                                            const kernel::KernelKey &desc,
-                                                            const mindspore::lite::PrimitiveC *primitive) {
+                                                            const kernel::KernelKey &desc) {
   MS_ASSERT(opParameter != nullptr);
-  MS_ASSERT(desc.type == schema::PrimitiveType_SoftmaxCrossEntropy);
-  auto *kernel =
-    new (std::nothrow) SoftmaxCrossEntropyWithLogitsCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  MS_ASSERT(desc.type == schema::PrimitiveType_SoftmaxCrossEntropyWithLogits);
+  auto *kernel = new (std::nothrow) SoftmaxCrossEntropyWithLogitsCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new SoftmaxCrossEntropyWithLogitsCPUKernel failed";
     free(opParameter);
@@ -150,5 +148,6 @@ kernel::LiteKernel *CpuSoftmaxCrossEntropyFp32KernelCreator(const std::vector<li
   return kernel;
 }
 
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_SoftmaxCrossEntropy, CpuSoftmaxCrossEntropyFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_SoftmaxCrossEntropyWithLogits,
+           CpuSoftmaxCrossEntropyFp32KernelCreator)
 }  // namespace mindspore::kernel

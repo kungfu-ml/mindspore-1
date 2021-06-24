@@ -49,7 +49,7 @@
 
 #include "proto/comm.pb.h"
 #include "proto/ps.pb.h"
-#include "ps/core/cluster_config.h"
+#include "ps/core/cluster_metadata.h"
 #include "utils/log_adapter.h"
 
 namespace mindspore {
@@ -61,6 +61,12 @@ constexpr int kGroup3RandomLength = 4;
 constexpr int kGroup4RandomLength = 4;
 constexpr int kGroup5RandomLength = 12;
 
+// The size of the buffer for sending and receiving data is 4096 bytes.
+constexpr int kMessageChunkLength = 4096;
+// The timeout period for the http client to connect to the http server is 120 seconds.
+constexpr int kConnectionTimeout = 120;
+constexpr char kLibeventLogPrefix[] = "[libevent log]:";
+
 class CommUtil {
  public:
   static bool CheckIpWithRegex(const std::string &ip);
@@ -70,6 +76,7 @@ class CommUtil {
   static std::string NodeRoleToString(const NodeRole &role);
   static bool ValidateRankId(const enum NodeRole &node_role, const uint32_t &rank_id);
   static bool Retry(const std::function<bool()> &func, size_t max_attempts, size_t interval_milliseconds);
+  static void LogCallback(int severity, const char *msg);
 
  private:
   static std::random_device rd;
@@ -80,5 +87,4 @@ class CommUtil {
 }  // namespace core
 }  // namespace ps
 }  // namespace mindspore
-
 #endif  // MINDSPORE_CCSRC_PS_CORE_COMM_UTIL_H_

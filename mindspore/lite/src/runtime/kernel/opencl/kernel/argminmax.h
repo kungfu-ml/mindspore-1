@@ -25,9 +25,7 @@ namespace mindspore::kernel {
 
 class ArgMinMaxOpenCLKernel : public OpenCLKernel {
  public:
-  ArgMinMaxOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                        const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
 
   ~ArgMinMaxOpenCLKernel() override = default;
 
@@ -43,7 +41,8 @@ class ArgMinMaxOpenCLKernel : public OpenCLKernel {
  private:
   void *buff_{nullptr};
   void *ids_{nullptr};
-  GpuTensorInfo im_in_{GpuTensorInfo(nullptr)};
+  GpuTensorInfo im_in_;
+  GpuTensorInfo im_out_;
   cl_int4 src_size_;
   cl_int4 cus_size_;
   cl_int4 strides_;

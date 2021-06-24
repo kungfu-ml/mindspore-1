@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,11 @@
 #ifdef ENABLE_DEBUGGER
 #include "debug/debug_services.h"
 #endif
+#ifdef ENABLE_DUMP_IR
+#include "debug/rdr/running_data_recorder.h"
+#include "debug/rdr/recorder_manager.h"
+#include "debug/rdr/mem_address_recorder.h"
+#endif
 
 namespace mindspore {
 namespace device {
@@ -48,14 +53,30 @@ using mindspore::device::memswap::MemSwapInfoSet;
 using mindspore::device::memswap::MemSwapManager;
 using mindspore::device::memswap::SwapKind;
 static const size_t PARAMETER_OUTPUT_INDEX = 0;
-bool GPUKernelRuntime::SyncStream() { return GPUDeviceManager::GetInstance().SyncStream(stream_); }
+static thread_local bool cur_thread_device_inited{false};
+
+bool GPUKernelRuntime::SyncStream() {
+  if (!GPUDeviceManager::GetInstance().SyncStream(stream_)) {
+#ifdef ENABLE_DUMP_IR
+    mindspore::RDR::TriggerAll();
+#endif
+    MS_LOG(ERROR) << "Call SyncStream error.";
+    return false;
+  }
+  FreeAndClearBufferPtrs();
+  return true;
+}
 
 bool GPUKernelRuntime::Init() {
   auto context_ptr = MsContext::GetInstance();
   MS_EXCEPTION_IF_NULL(context_ptr);
   enable_relation_cache_ = context_ptr->get_param<bool>(MS_CTX_ENABLE_GRAPH_KERNEL);
 
-  if (device_init_ == true) {
+  if (device_init_) {
+    if (!cur_thread_device_inited) {
+      CHECK_OP_RET_WITH_EXCEPT(CudaDriver::set_current_device(UintToInt(device_id_)), "Failed to set device id");
+      cur_thread_device_inited = true;
+    }
     GPUMemoryAllocator::GetInstance().CheckMaxDeviceMemory();
     return true;
   }
@@ -82,13 +103,12 @@ bool GPUKernelRuntime::Init() {
 }
 
 namespace {
-
 std::vector<int> CheckRealOutput(const std::string &node_name, const size_t &output_size) {
   // define a vector containing real output number
   std::vector<int> real_outputs;
-  // P.FusedBatchNorm is used for training; P.BatchNorm is used for inference
+  // P.BatchNorm is used for training and inference
   // can add the filter list for more operators here....
-  if (node_name == "FusedBatchNorm" || node_name == "BatchNorm") {
+  if (node_name == "BatchNorm") {
     MS_LOG(INFO) << "loading node named " << node_name;
     real_outputs.insert(real_outputs.end(), {0, 3, 4});
   } else {
@@ -183,6 +203,22 @@ void LoadKernelData(Debugger *debugger, const CNodePtr &kernel,
 }
 }  // namespace
 
+bool GPUKernelRuntime::MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind) {
+  std::shared_ptr<char[]> buffer(new char[size]());
+  MS_EXCEPTION_IF_NULL(buffer);
+  std::copy(reinterpret_cast<const char *>(src), reinterpret_cast<const char *>(src) + size, buffer.get());
+  AddBufferPtr(buffer);
+
+  auto &stream = GPUDeviceManager::GetInstance().default_stream();
+  MS_EXCEPTION_IF_NULL(stream);
+  auto ret = GPUDeviceManager::GetInstance().CopyHostMemToDeviceAsync(dst, buffer.get(), size, stream);
+  if (!ret) {
+    MS_LOG(ERROR) << "CopyHostMemToDeviceAsync failed";
+    return false;
+  }
+  return ret;
+}
+
 DeviceAddressPtr GPUKernelRuntime::CreateDeviceAddress(void *device_ptr, size_t device_size, const string &format,
                                                        TypeId type_id) {
   return std::make_shared<GPUDeviceAddress>(device_ptr, device_size, format, type_id);
@@ -203,6 +239,11 @@ bool GPUKernelRuntime::InitDevice() {
   stream_ = GPUDeviceManager::GetInstance().default_stream();
   if (stream_ == nullptr) {
     MS_LOG(ERROR) << "No default CUDA stream found.";
+    return false;
+  }
+  GPUDeviceManager::GetInstance().CreateStream(&communication_stream_);
+  if (communication_stream_ == nullptr) {
+    MS_LOG(ERROR) << "Invalid communication stream";
     return false;
   }
   return true;
@@ -302,15 +343,13 @@ void GPUKernelRuntime::AllocInplaceNodeMemory(const session::KernelGraph *graph)
     auto output_size = kernel_mod->GetOutputSizeList();
     auto ret = mem_manager_->MallocMemFromMemPool(device_address, output_size[output_index]);
     if (!ret) {
-      MS_LOG(EXCEPTION) << "Cannot alloc address, tensor size is: " << output_size[output_index];
+      MS_LOG(EXCEPTION) << "Device memory isn't enough and alloc failed, alloc size:" << output_size[output_index];
     }
 
     for (auto &node : item) {
       auto prim = AnfAlgo::GetCNodePrimitive(node);
       auto index = GetValue<uint32_t>(prim->GetAttr("inplace_output_index"));
       AnfAlgo::SetOutputAddr(device_address, index, node.get());
-      MS_LOG(INFO) << "[inplace optimizer] group id: " << group.first << ", node: " << node->DebugString()
-                   << ", output_index: " << index;
     }
   }
 }
@@ -351,7 +390,8 @@ bool GPUKernelRuntime::Run(session::KernelGraph *graph, bool is_task_sink) {
   MS_EXCEPTION_IF_NULL(context_ptr);
   bool is_enable_dynamic_mem = context_ptr->get_param<bool>(MS_CTX_ENABLE_DYNAMIC_MEM_POOL);
   bool is_enable_pynative_infer = context_ptr->get_param<bool>(MS_CTX_ENABLE_PYNATIVE_INFER);
-  if (is_enable_dynamic_mem && !is_enable_pynative_infer) {
+  bool is_pynative_mode = (context_ptr->get_param<int>(MS_CTX_EXECUTION_MODE) == kPynativeMode);
+  if (is_enable_dynamic_mem && !is_pynative_mode && !is_enable_pynative_infer) {
     auto graph_id = graph->graph_id();
     auto iter = mem_swap_map_.find(graph_id);
     if (iter == mem_swap_map_.end()) {
@@ -614,11 +654,15 @@ bool GPUKernelRuntime::LaunchKernelDynamic(const session::KernelGraph *graph, bo
   }
   auto &kernels = graph->execution_order();
   int exec_order = 1;
-
+#ifdef ENABLE_DUMP_IR
+  std::string name = "mem_address_list";
+  mindspore::RDR::RecordGPUMemAddressInfo(SubModuleId::SM_KERNEL, name, kernels.size());
+  size_t id = 0;
+#endif
   auto profiler_inst = profiler::gpu::GPUProfiler::GetInstance();
   MS_EXCEPTION_IF_NULL(profiler_inst);
 
-  if (profiler_inst->GetEnableFlag() && is_first_step_map_[graph->graph_id()]) {
+  if (profiler_inst->GetEnableFlag() && profiler::gpu::ProfilingUtils::IsFirstStep(graph->graph_id())) {
     profiler::gpu::ProfilingTraceInfo profiling_trace =
       profiler::gpu::ProfilingUtils::GetProfilingTraceFromEnv(NOT_NULL(graph));
     profiler_inst->SetStepTraceOpName(profiling_trace);
@@ -628,7 +672,6 @@ bool GPUKernelRuntime::LaunchKernelDynamic(const session::KernelGraph *graph, bo
     auto kernel_mod = AnfAlgo::GetKernelMod(kernel);
     MS_EXCEPTION_IF_NULL(kernel_mod);
     if (AnfAlgo::IsInplaceNode(kernel, "skip")) {
-      MS_LOG(INFO) << "[inplace optimizer] skip node: " << kernel->DebugString();
       continue;
     }
 
@@ -656,13 +699,19 @@ bool GPUKernelRuntime::LaunchKernelDynamic(const session::KernelGraph *graph, bo
       }
       return false;
     }
+#ifdef ENABLE_DUMP_IR
+    GPUMemInfo mem_info = {&kernel_inputs, &kernel_workspaces, &kernel_outputs};
+    std::string op_name = kernel->fullname_with_scope();
+    mindspore::RDR::UpdateGPUMemAddressInfo(SubModuleId::SM_KERNEL, name, op_name, mem_info, id++);
+#endif
     if (!mock) {
       if (!profiling) {
         if (profiler_inst->GetEnableFlag()) {
           profiler_inst->OpDataProducerBegin(kernel->fullname_with_scope(), stream_);
         }
-        CHECK_OP_RET_WITH_EXCEPT(kernel_mod->Launch(kernel_inputs, kernel_workspaces, kernel_outputs, stream_),
-                                 "Launch kernel failed.");
+        if (!kernel_mod->Launch(kernel_inputs, kernel_workspaces, kernel_outputs, stream_)) {
+          MS_LOG(EXCEPTION) << "Launch kernel failed: " << kernel->fullname_with_scope();
+        }
         if (profiler_inst->GetEnableFlag()) {
           profiler_inst->OpDataProducerEnd();
           if (profiler_inst->GetSyncEnableFlag()) {
@@ -851,7 +900,7 @@ void GPUKernelRuntime::UpdateHostSwapInQueue(const DeviceAddressPtr device_addre
       MS_LOG(WARNING) << "Unexpected device address status: " << status;
       break;
     default:
-      MS_LOG(EXCEPTION) << "Invaild device address status: " << status;
+      MS_LOG(EXCEPTION) << "Invalid device address status: " << status;
   }
 }
 
@@ -919,7 +968,8 @@ bool GPUKernelRuntime::AllocKernelInputDynamicRes(const mindspore::AnfNodePtr &k
   MS_EXCEPTION_IF_NULL(kernel);
   MS_EXCEPTION_IF_NULL(kernel_inputs);
   MS_EXCEPTION_IF_NULL(mem_reuse_util_);
-  for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(kernel); ++i) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(kernel);
+  for (size_t i = 0; i < input_num; ++i) {
     DeviceAddressPtr device_address;
     if (mem_reuse_util_->is_all_nop_node()) {
       // Graph may be all nop nodes and not remove nop node, so this can not skip nop node.
@@ -936,8 +986,6 @@ bool GPUKernelRuntime::AllocKernelInputDynamicRes(const mindspore::AnfNodePtr &k
       if (i == input_index) {
         auto skip_node = AnfAlgo::GetInputNode(utils::cast<CNodePtr>(kernel), input_index);
         device_address = GetPrevNodeMutableOutputAddr(skip_node, 0, false);
-        MS_LOG(INFO) << "[inplace optimizer] aggregate: " << kernel->DebugString()
-                     << ", skip: " << skip_node->DebugString() << ", address: " << device_address->GetMutablePtr();
       }
     }
 
@@ -1092,11 +1140,13 @@ void GPUKernelRuntime::FreeKernelDynamicRes(const mindspore::AnfNodePtr &kernel)
   MS_EXCEPTION_IF_NULL(mem_reuse_util_);
   auto cnode = kernel->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(cnode);
+  // Can not free the input addr of communication op when enable multi stream
   if (AnfAlgo::IsCommunicationOp(kernel)) {
     return;
   }
   // Free the input of kernel by reference count.
-  for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(kernel); ++i) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(kernel);
+  for (size_t i = 0; i < input_num; ++i) {
     if (AnfAlgo::IsInplaceNode(kernel, "aggregate")) {
       auto primitive = AnfAlgo::GetCNodePrimitive(kernel);
       auto index = GetValue<uint32_t>(primitive->GetAttr("aggregate_input_index"));
@@ -1106,7 +1156,9 @@ void GPUKernelRuntime::FreeKernelDynamicRes(const mindspore::AnfNodePtr &kernel)
     }
 
     auto kernel_with_index = GetPrevNodeOutput(kernel, i);
-    if (AnfAlgo::IsCommunicationOp(kernel_with_index.first)) {
+    // Maintain output addr of fused communication op to improve training performance
+    if (AnfAlgo::IsCommunicationOp(kernel_with_index.first) &&
+        AnfAlgo::GetInputTensorNum(kernel_with_index.first) > 1) {
       continue;
     }
 
@@ -1132,7 +1184,8 @@ void GPUKernelRuntime::FreeKernelDynamicRes(const mindspore::AnfNodePtr &kernel)
     }
   }
   // Free the output of kernel, if output has no reference.
-  for (size_t i = 0; i < AnfAlgo::GetOutputTensorNum(kernel); ++i) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(kernel);
+  for (size_t i = 0; i < output_num; ++i) {
     auto kernel_ref_count_ptr = mem_reuse_util_->GetRef(cnode, i);
     if (kernel_ref_count_ptr == nullptr) {
       continue;

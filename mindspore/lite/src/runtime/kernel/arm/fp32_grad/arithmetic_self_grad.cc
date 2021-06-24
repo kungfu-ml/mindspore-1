@@ -20,12 +20,16 @@
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
 #include "nnacl/fp32/arithmetic_fp32.h"
+#include "nnacl/fp32_grad/arithmetic_grad.h"
 
 using mindspore::kernel::KERNEL_ARCH::kCPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
+using mindspore::schema::PrimitiveType_AbsGrad;
 using mindspore::schema::PrimitiveType_LogGrad;
+using mindspore::schema::PrimitiveType_RsqrtGrad;
+using mindspore::schema::PrimitiveType_SqrtGrad;
 
 namespace mindspore::kernel {
 namespace {
@@ -42,34 +46,42 @@ int ArithmeticSelfGradCPUKernel::Init() {
     case PrimitiveType_LogGrad:
       self_grad_operation_ = ElementDiv;
       break;
+    case PrimitiveType_AbsGrad:
+      self_grad_operation_ = ElementAbsGrad;
+      break;
+    case PrimitiveType_SqrtGrad:
+      self_grad_operation_ = ElementSqrtGrad;
+      break;
+    case PrimitiveType_RsqrtGrad:
+      self_grad_operation_ = ElementRsqrtGrad;
+      break;
     default:
-      MS_LOG(ERROR) << "Unsupport type: " << type;
+      MS_LOG(ERROR) << "Unsupported type: " << type;
       return RET_ERROR;
   }
   return RET_OK;
 }
 
-int ArithmeticSelfGradCPUKernel::DoArithmeticSelfGrad(int thread_id) {
-  auto dy = reinterpret_cast<float *>(in_tensors_[0]->MutableData());
-  auto in_x = reinterpret_cast<float *>(in_tensors_[1]->MutableData());
-  auto dx = reinterpret_cast<float *>(out_tensors_[0]->MutableData());
-  int dy_size = in_tensors_.at(0)->ElementsNum();
-  int size = MSMIN(thread_stride_, static_cast<int>(dy_size - thread_id * thread_stride_));
-  if (size <= 0) {
-    return RET_OK;
+int ArithmeticSelfGradCPUKernel::DoArithmeticSelfGrad(int task_id) {
+  auto dy = reinterpret_cast<float *>(in_tensors_.at(0)->MutableData());
+  auto in_x = reinterpret_cast<float *>(in_tensors_.at(1)->MutableData());
+  auto dx = reinterpret_cast<float *>(out_tensors_.at(0)->MutableData());
+  int length = in_tensors_.at(0)->ElementsNum();
+
+  int stride = UP_DIV(length, thread_count_);
+  int count = MSMIN(stride, length - stride * task_id);
+  int start = stride * task_id;
+
+  if (count > 0) {
+    (*self_grad_operation_)(dy + start, in_x + start, dx + start, count);
   }
-  int offset = thread_id * thread_stride_;
-  (*self_grad_operation_)(dy + offset, in_x + offset, dx + offset, size);
   return RET_OK;
 }
 
 int ArithmeticSelfGradCPUKernel::ReSize() { return RET_OK; }
 
 int ArithmeticSelfGradCPUKernel::Run() {
-  int dy_size = in_tensors_.at(0)->ElementsNum();
-  op_parameter_->thread_num_ = MSMIN(op_parameter_->thread_num_, static_cast<int>(dy_size));
-  thread_stride_ = UP_DIV(dy_size, op_parameter_->thread_num_);
-  auto ret = ParallelLaunch(this->context_->thread_pool_, ArithmeticSelfGradRun, this, op_parameter_->thread_num_);
+  auto ret = ParallelLaunch(this->context_->thread_pool_, ArithmeticSelfGradRun, this, thread_count_);
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "parallel launch fail!ret: " << ret;
     return ret;
@@ -81,13 +93,12 @@ int ArithmeticSelfGradCPUKernel::Run() {
 kernel::LiteKernel *CpuArithmeticSelfGradFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                            const std::vector<lite::Tensor *> &outputs,
                                                            OpParameter *param, const lite::InnerContext *ctx,
-                                                           const kernel::KernelKey &desc,
-                                                           const mindspore::lite::PrimitiveC *primitive) {
+                                                           const kernel::KernelKey &desc) {
   if (param == nullptr) {
     MS_LOG(ERROR) << "input parameter is nullptr!";
     return nullptr;
   }
-  auto *kernel = new (std::nothrow) ArithmeticSelfGradCPUKernel(param, inputs, outputs, ctx, primitive);
+  auto *kernel = new (std::nothrow) ArithmeticSelfGradCPUKernel(param, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new ArithmeticSelfGradCPUKernel fail!";
     free(param);
@@ -105,4 +116,7 @@ kernel::LiteKernel *CpuArithmeticSelfGradFp32KernelCreator(const std::vector<lit
 }
 
 REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_LogGrad, CpuArithmeticSelfGradFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_AbsGrad, CpuArithmeticSelfGradFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_SqrtGrad, CpuArithmeticSelfGradFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_RsqrtGrad, CpuArithmeticSelfGradFp32KernelCreator)
 }  // namespace mindspore::kernel

@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ class CropAndResize(PrimitiveWithInfer):
         In case that the output shape depends on crop_size, the crop_size must be constant.
 
     Args:
-        method (str):  	An optional string that specifies the sampling method for resizing.
+        method (str): An optional string that specifies the sampling method for resizing.
             It can be "bilinear", "nearest" or "bilinear_v2". The option "bilinear" stands for standard bilinear
             interpolation algorithm, while "bilinear_v2" may result in better result in some cases. Default: "bilinear"
         extrapolation_value (float): An optional float value used extrapolation, if applicable. Default: 0.
@@ -52,6 +52,11 @@ class CropAndResize(PrimitiveWithInfer):
           The aspect ratio of the image content is not preserved. Both crop_height and crop_width need to be positive.
     Outputs:
         A 4-D tensor of shape [num_boxes, crop_height, crop_width, depth] with type: float32.
+
+    Raises:
+        TypeError: If `method` is not a str.
+        TypeError: If `extrapolation_value` is not a float.
+        ValueError: If `method` is not one of 'bilinear', 'nearest', 'bilinear_v2'.
 
     Supported Platforms:
         ``Ascend``

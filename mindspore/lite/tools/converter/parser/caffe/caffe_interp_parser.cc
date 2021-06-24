@@ -16,41 +16,39 @@
 
 #include "tools/converter/parser/caffe/caffe_interp_parser.h"
 #include <memory>
+#include "ops/resize.h"
 
 namespace mindspore {
 namespace lite {
-PrimitiveC *CaffeInterpParser::ParseLitePrimitive(const caffe::LayerParameter &proto,
-                                                  const caffe::LayerParameter &weight) {
-  std::unique_ptr<schema::ResizeT> attr = std::make_unique<schema::ResizeT>();
-  if (attr == nullptr) {
-    MS_LOG(ERROR) << "new op failed";
-    return nullptr;
-  }
+ops::PrimitiveC *CaffeInterpParser::Parse(const caffe::LayerParameter &proto, const caffe::LayerParameter &weight) {
+  auto prim = std::make_unique<ops::Resize>();
 
-  const caffe::InterpParameter &interpParam = proto.interp_param();
-  if (interpParam.has_height()) {
-    int64_t height = interpParam.height();
+  prim->set_method(mindspore::ResizeMethod::LINEAR);
+  prim->set_coordinate_transform_mode(mindspore::CoordinateTransformMode::ALIGN_CORNERS);
+
+  const caffe::InterpParameter &interp_param = proto.interp_param();
+  if (interp_param.has_height()) {
+    int64_t height = interp_param.height();
     if (height < 0) {
       MS_LOG(ERROR) << "Interp height must be > 0";
       return nullptr;
     }
-    attr->newHeight = height;
+    prim->set_new_height(height);
   }
 
-  if (interpParam.has_width()) {
-    int64_t width = interpParam.width();
+  if (interp_param.has_width()) {
+    int64_t width = interp_param.width();
     if (width < 0) {
       MS_LOG(ERROR) << "Interp width must be > 0";
       return nullptr;
     }
-    attr->newWidth = width;
+    prim->set_new_width(width);
   }
-  attr->alignCorners = true;
-  attr->method = schema::ResizeMethod_LINEAR;
-  auto primitive = std::make_unique<schema::PrimitiveT>();
-  primitive->value.type = schema::PrimitiveType_Resize;
-  primitive->value.value = attr.release();
-  return PrimitiveC::Create(primitive.release());
+
+  if (interp_param.has_zoom_factor()) {
+    prim->AddAttr("zoom_factor", MakeValue(interp_param.zoom_factor()));
+  }
+  return prim.release();
 }
 
 CaffeNodeRegistrar g_caffeInterpParser("Interp", new CaffeInterpParser());

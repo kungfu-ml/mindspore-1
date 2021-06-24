@@ -22,6 +22,7 @@
 
 #include "utils/symbolic.h"
 #include "abstract/utils.h"
+#include "utils/ms_context.h"
 
 namespace mindspore {
 namespace abstract {
@@ -88,7 +89,13 @@ std::string AbstractBase::ToString() const {
   return buffer.str();
 }
 
-AbstractBasePtr AbstractScalar::Broaden(uint8_t config) const { return AbstractBase::Broaden(config); }
+AbstractBasePtr AbstractScalar::Broaden(uint8_t config) const {
+  if (MsContext::GetInstance()->get_param<bool>(MS_CTX_GRAD_FOR_SCALAR)) {
+    return AbstractBase::Broaden(config);
+  } else {
+    return Clone();
+  }
+}
 
 AbstractBasePtr AbstractScalar::Join(const AbstractBasePtr &other) {
   MS_EXCEPTION_IF_NULL(other);
@@ -1210,5 +1217,42 @@ std::string AbstractSparseTensor::ToString() const {
          << ", dense_shape: " << dense_shape_->ToString();
   return buffer.str();
 }
+
+AbstractBasePtr AbstractUMonad::Join(const AbstractBasePtr &other) {
+  MS_EXCEPTION_IF_NULL(other);
+  if (other->isa<AbstractUMonad>()) {
+    return shared_from_base<AbstractBase>();
+  }
+  MS_EXCEPTION(TypeError) << "Type join failed, type1 = " << GetTypeTrack()->ToString()
+                          << ", type2 = " << other->GetTypeTrack()->ToString();
+}
+
+bool AbstractUMonad::operator==(const AbstractUMonad &) const { return true; }
+
+bool AbstractUMonad::operator==(const AbstractBase &other) const {
+  if (&other == this) {
+    return true;
+  }
+  return other.isa<AbstractUMonad>();
+}
+
+AbstractBasePtr AbstractIOMonad::Join(const AbstractBasePtr &other) {
+  MS_EXCEPTION_IF_NULL(other);
+  if (other->isa<AbstractIOMonad>()) {
+    return shared_from_base<AbstractBase>();
+  }
+  MS_EXCEPTION(TypeError) << "Type join failed, type1 = " << GetTypeTrack()->ToString()
+                          << ", type2 = " << other->GetTypeTrack()->ToString();
+}
+
+bool AbstractIOMonad::operator==(const AbstractIOMonad &) const { return true; }
+
+bool AbstractIOMonad::operator==(const AbstractBase &other) const {
+  if (&other == this) {
+    return true;
+  }
+  return other.isa<AbstractIOMonad>();
+}
+
 }  // namespace abstract
 }  // namespace mindspore

@@ -17,6 +17,7 @@ import atexit
 import os
 import re
 import threading
+import time
 from collections import defaultdict
 
 from mindspore import log as logger
@@ -24,7 +25,7 @@ from mindspore.nn import Cell
 
 from ..._c_expression import Tensor
 from ..._checkparam import Validator
-from .._utils import _check_lineage_value, _check_to_numpy, _make_directory
+from .._utils import _check_lineage_value, _check_to_numpy, _make_directory, check_value_type
 from ._summary_adapter import get_event_file_name, package_graph_event
 from ._explain_adapter import check_explain_proto
 from ._writer_pool import WriterPool
@@ -34,6 +35,9 @@ from ._writer_pool import WriterPool
 _summary_lock = threading.Lock()
 # cache the summary data
 _summary_tensor_cache = {}
+_DEFAULT_EXPORT_OPTIONS = {
+    'tensor_format': {'npy', None},
+}
 
 
 def _cache_summary_tensor_data(summary):
@@ -57,6 +61,35 @@ def _get_summary_tensor_data():
         return data
 
 
+def process_export_options(export_options):
+    """Check specified data type and value."""
+    if export_options is None:
+        return None
+
+    check_value_type('export_options', export_options, [dict, type(None)])
+
+    for export_option, export_format in export_options.items():
+        check_value_type('export_option', export_option, [str])
+        check_value_type('export_format', export_format, [str, type(None)])
+
+    unexpected_params = set(export_options) - set(_DEFAULT_EXPORT_OPTIONS)
+    if unexpected_params:
+        raise ValueError(f'For `export_options` the keys {unexpected_params} are unsupported, '
+                         f'expect the follow keys: {list(_DEFAULT_EXPORT_OPTIONS.keys())}')
+
+    for export_option, export_format in export_options.items():
+        unexpected_format = {export_format} - _DEFAULT_EXPORT_OPTIONS.get(export_option)
+        if unexpected_format:
+            raise ValueError(
+                f'For `export_options`, the export_format {unexpected_format} are unsupported for {export_option}, '
+                f'expect the follow values: {list(_DEFAULT_EXPORT_OPTIONS.get(export_option))}')
+
+    for item in set(export_options):
+        check_value_type(item, export_options.get(item), [str, type(None)])
+
+    return export_options
+
+
 class SummaryRecord:
     """
     SummaryRecord is used to record the summary data and lineage data.
@@ -77,29 +110,40 @@ class SummaryRecord:
         file_prefix (str): The prefix of file. Default: "events".
         file_suffix (str): The suffix of file. Default: "_MS".
         network (Cell): Obtain a pipeline through network for saving graph summary. Default: None.
-        max_file_size (int, optional): The maximum size of each file that can be written to disk (in bytes). \
-            Unlimited by default. For example, to write not larger than 4GB, specify `max_file_size=4 * 1024**3`.
-        raise_exception (bool, optional): Sets whether to throw an exception when an RuntimeError exception occurs
-            in recording data. Default: False, this means that error logs are printed and no exception is thrown.
+        max_file_size (int, optional): The maximum size of each file that can be written to disk (in bytes).
+            Unlimited by default. For example, to write not larger than 4GB, specify `max_file_size=4 * 1024 ** 3`.
+        raise_exception (bool, optional): Sets whether to throw an exception when a RuntimeError or OSError exception
+            occurs in recording data. Default: False, this means that error logs are printed and no exception is thrown.
+        export_options (Union[None, dict]): Perform custom operations on the export data.
+            Note that the size of export files is not limited by the max_file_size.
+            You can customize the export data with a dictionary. For example, you can set {'tensor_format': 'npy'}
+            to export tensor as npy file. The data that supports control is shown below. Default: None, it means that
+            the data is not exported.
+
+            - tensor_format (Union[str, None]): Customize the export tensor format. Supports ["npy", None].
+              Default: None, it means that the tensor is not exported.
+
+              - npy: export tensor as npy file.
 
     Raises:
         TypeError: If the parameter type is incorrect.
 
     Examples:
-        >>> # use in with statement to auto close
         >>> from mindspore.train.summary import SummaryRecord
-        >>> with SummaryRecord(log_dir="./summary_dir") as summary_record:
-        ...     pass
-        >>>
-        >>> # use in try .. finally .. to ensure closing
-        >>> try:
-        ...     summary_record = SummaryRecord(log_dir="./summary_dir")
-        ... finally:
-        ...     summary_record.close()
+        >>> if __name__ == '__main__':
+        ...     # use in with statement to auto close
+        ...     with SummaryRecord(log_dir="./summary_dir") as summary_record:
+        ...         pass
+        ...
+        ...     # use in try .. finally .. to ensure closing
+        ...     try:
+        ...         summary_record = SummaryRecord(log_dir="./summary_dir")
+        ...     finally:
+        ...         summary_record.close()
     """
 
     def __init__(self, log_dir, file_prefix="events", file_suffix="_MS",
-                 network=None, max_file_size=None, raise_exception=False):
+                 network=None, max_file_size=None, raise_exception=False, export_options=None):
 
         self._closed, self._event_writer = False, None
         self._mode, self._data_pool = 'train', defaultdict(list)
@@ -126,13 +170,20 @@ class SummaryRecord:
         self.network = network
         self.has_graph = False
 
+        time_second = str(int(time.time()))
         # create the summary writer file
-        self.event_file_name = get_event_file_name(self.prefix, self.suffix)
+        self.event_file_name = get_event_file_name(self.prefix, self.suffix, time_second)
         self.full_file_name = os.path.join(self.log_path, self.event_file_name)
 
-        filename_dict = dict(summary=self.full_file_name,
-                             lineage=get_event_file_name(self.prefix, '_lineage'),
-                             explainer=get_event_file_name(self.prefix, '_explain'))
+        self._export_options = process_export_options(export_options)
+        export_dir = ''
+        if self._export_options is not None:
+            export_dir = "export_{}".format(time_second)
+
+        filename_dict = dict(summary=self.event_file_name,
+                             lineage=get_event_file_name(self.prefix, '_lineage', time_second),
+                             explainer=get_event_file_name(self.prefix, '_explain', time_second),
+                             exporter=export_dir)
         self._event_writer = WriterPool(log_dir,
                                         max_file_size,
                                         raise_exception,
@@ -152,7 +203,7 @@ class SummaryRecord:
 
     def set_mode(self, mode):
         """
-        Sets the training phase. Different training phases affect data recording.
+        Set the training phase. Different training phases affect data recording.
 
         Args:
             mode (str): The mode to be set, which should be 'train' or 'eval'. When the mode is 'eval',
@@ -162,8 +213,10 @@ class SummaryRecord:
             ValueError: When the mode is not recognized.
 
         Examples:
-            >>> with SummaryRecord(log_dir="./summary_dir", file_prefix="xxx_", file_suffix="_yyy") as summary_record:
-            ...     summary_record.set_mode('eval')
+            >>> from mindspore.train.summary import SummaryRecord
+            >>> if __name__ == '__main__':
+            ...     with SummaryRecord(log_dir="./summary_dir", file_prefix="xx_", file_suffix="_yy") as summary_record:
+            ...         summary_record.set_mode('eval')
         """
         mode_spec = 'train', 'eval'
         if mode not in mode_spec:
@@ -199,8 +252,11 @@ class SummaryRecord:
             TypeError: If the parameter type is error.
 
         Examples:
-            >>> with SummaryRecord(log_dir="./summary_dir", file_prefix="xxx_", file_suffix="_yyy") as summary_record:
-            ...     summary_record.add_value('scalar', 'loss', Tensor(0.1))
+            >>> from mindspore import Tensor
+            >>> from mindspore.train.summary import SummaryRecord
+            >>> if __name__ == '__main__':
+            ...     with SummaryRecord(log_dir="./summary_dir", file_prefix="xx_", file_suffix="_yy") as summary_record:
+            ...         summary_record.add_value('scalar', 'loss', Tensor(0.1))
         """
         if plugin in ('tensor', 'scalar', 'image', 'histogram'):
             if not name or not isinstance(name, str):
@@ -211,7 +267,11 @@ class SummaryRecord:
             if name in {item['tag'] for item in self._data_pool[plugin]}:
                 entry = repr(f'{name}/{plugin}')
                 logger.warning(f'{entry} has duplicate values. Only the newest one will be recorded.')
-            self._data_pool[plugin].append(dict(tag=name, value=np_value))
+            data = dict(tag=name, value=np_value)
+            export_plugin = '{}_format'.format(plugin)
+            if self._export_options is not None and export_plugin in self._export_options:
+                data['export_option'] = self._export_options.get(export_plugin)
+            self._data_pool[plugin].append(data)
 
         elif plugin in ('train_lineage', 'eval_lineage', 'dataset_graph', 'custom_lineage_data'):
             _check_lineage_value(plugin, value)
@@ -243,8 +303,10 @@ class SummaryRecord:
             RuntimeError: If the disk space is insufficient.
 
         Examples:
-            >>> with SummaryRecord(log_dir="./summary_dir", file_prefix="xxx_", file_suffix="_yyy") as summary_record:
-            ...     summary_record.record(step=2)
+            >>> from mindspore.train.summary import SummaryRecord
+            >>> if __name__ == '__main__':
+            ...     with SummaryRecord(log_dir="./summary_dir", file_prefix="xx_", file_suffix="_yy") as summary_record:
+            ...         summary_record.record(step=2)
             ...
             True
         """
@@ -310,8 +372,10 @@ class SummaryRecord:
             str, the full path of log file.
 
         Examples:
-            >>> with SummaryRecord(log_dir="./summary_dir", file_prefix="xxx_", file_suffix="_yyy") as summary_record:
-            ...     log_dir = summary_record.log_dir
+            >>> from mindspore.train.summary import SummaryRecord
+            >>> if __name__ == '__main__':
+            ...     with SummaryRecord(log_dir="./summary_dir", file_prefix="xx_", file_suffix="_yy") as summary_record:
+            ...         log_dir = summary_record.log_dir
         """
         return self.full_file_name
 
@@ -322,8 +386,10 @@ class SummaryRecord:
         Call it to make sure that all pending events have been written to disk.
 
         Examples:
-            >>> with SummaryRecord(log_dir="./summary_dir", file_prefix="xxx_", file_suffix="_yyy") as summary_record:
-            ...     summary_record.flush()
+            >>> from mindspore.train.summary import SummaryRecord
+            >>> if __name__ == '__main__':
+            ...     with SummaryRecord(log_dir="./summary_dir", file_prefix="xx_", file_suffix="_yy") as summary_record:
+            ...         summary_record.flush()
         """
         if self._closed:
             logger.error("The record writer is closed and can not flush.")
@@ -335,16 +401,19 @@ class SummaryRecord:
         Flush all events and close summary records. Please use the statement to autoclose.
 
         Examples:
-            >>> try:
-            ...     summary_record = SummaryRecord(log_dir="./summary_dir")
-            ... finally:
-            ...     summary_record.close()
+            >>> from mindspore.train.summary import SummaryRecord
+            >>> if __name__ == '__main__':
+            ...     try:
+            ...         summary_record = SummaryRecord(log_dir="./summary_dir")
+            ...     finally:
+            ...         summary_record.close()
         """
         if not self._closed and self._event_writer:
             # event writer flush and close
             logger.info('Please wait it may take quite some time to finish writing and closing.')
             atexit.unregister(self.close)
             self._event_writer.close()
+            self._event_writer.join()
             self._closed = True
 
     @staticmethod

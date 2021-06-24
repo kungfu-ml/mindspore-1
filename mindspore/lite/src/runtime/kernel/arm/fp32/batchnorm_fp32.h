@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_BATCHNORM_H_
-#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_BATCHNORM_H_
+#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_BATCHNORM_FP32_H_
+#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_BATCHNORM_FP32_H_
 
 #include <vector>
 #include "src/lite_kernel.h"
@@ -30,9 +30,8 @@ namespace mindspore::kernel {
 class BatchnormCPUKernel : public LiteKernel {
  public:
   BatchnormCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx,
-                     const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                     const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   virtual ~BatchnormCPUKernel() { FreeMeanAndVariance(); }
 
   int Init() override;
@@ -40,15 +39,19 @@ class BatchnormCPUKernel : public LiteKernel {
   int Run() override;
   virtual int InitConstTensor();
   virtual int DoExecute(int task_id);
+  virtual int set_momentum(float momentum);
+  virtual float get_momentum();
+  virtual int RestoreDefaultMomentum();
 
  protected:
   void FillParam();
   void FreeMeanAndVariance();
   void *mean_ = nullptr;
   void *variance_ = nullptr;
+  float default_momentum_ = -1.0f;
 };
 
 int BatchNormRun(void *cdata, int task_id);
 }  // namespace mindspore::kernel
 
-#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_BATCHNORM_H_
+#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_BATCHNORM_FP32_H_

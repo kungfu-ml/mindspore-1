@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,9 +23,7 @@
 #include <utility>
 #include <vector>
 #include "minddata/dataset/engine/data_buffer.h"
-#include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/log_adapter.h"
 
 namespace mindspore {
@@ -88,6 +86,9 @@ Status ProjectOp::Project(std::unique_ptr<DataBuffer> *data_buffer) {
     TensorRow new_row;
     (void)std::transform(projected_column_indices_.begin(), projected_column_indices_.end(),
                          std::back_inserter(new_row), [&current_row](uint32_t x) { return current_row[x]; });
+    // Now if columns changed after map, we don't know which column we should keep,
+    // so temporarily we don't support print file_path after ProjectOp.
+    new_row.setPath({});
     new_tensor_table->push_back(new_row);
   }
   (*data_buffer)->set_tensor_table(std::move(new_tensor_table));
@@ -129,12 +130,6 @@ Status ProjectOp::EoeReceived(int32_t worker_id) {
 
 Status ProjectOp::EofReceived(int32_t worker_id) { return Status::OK(); }
 
-// Visitor accept method for NodePass
-Status ProjectOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<ProjectOp>(), modified);
-}
-
 // Compute the column map and save it into our own column name map
 // We cannot use the super class ComputeColMap here because we're making a modification of the
 // map from the child map.
@@ -154,6 +149,18 @@ Status ProjectOp::ComputeColMap() {
   } else {
     MS_LOG(WARNING) << "Column name map is already set!";
   }
+  return Status::OK();
+}
+
+Status ProjectOp::GetNextRow(TensorRow *const row) {
+  ComputeColMap();
+  TensorRow new_row;
+  RETURN_IF_NOT_OK(child_[0]->GetNextRow(&new_row));
+  (void)std::transform(projected_column_indices_.begin(), projected_column_indices_.end(), std::back_inserter(*row),
+                       [&new_row](uint32_t x) { return new_row[x]; });
+  // Now if columns changed after map, we don't know which column we should keep,
+  // so temporarily we don't support print file_path after ProjectOp.
+  new_row.setPath({});
   return Status::OK();
 }
 }  // namespace dataset

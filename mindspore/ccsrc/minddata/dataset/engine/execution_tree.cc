@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,49 +16,44 @@
 #include "minddata/dataset/engine/execution_tree.h"
 #include <iostream>
 #include <string>
-#include <utility>
 #include <limits>
-#if defined(NUMA_ENABLED) && (defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE))
-#include <numa.h>
-#endif
 #include "minddata/dataset/engine/datasetops/dataset_op.h"
-#include "minddata/dataset/engine/datasetops/shuffle_op.h"
 #include "minddata/dataset/engine/datasetops/device_queue_op.h"
-#include "minddata/dataset/util/task_manager.h"
-#include "minddata/dataset/engine/opt/pass.h"
-#include "minddata/dataset/engine/opt/pre/removal_pass.h"
-#ifndef ENABLE_ANDROID
-#include "minddata/dataset/engine/opt/pre/cache_transform_pass.h"
-#include "minddata/dataset/engine/opt/post/repeat_pass.h"
-#include "minddata/dataset/engine/opt/pre/cache_error_pass.h"
-#include "mindspore/ccsrc/minddata/dataset/engine/opt/optional/tensor_op_fusion_pass.h"
-#endif
-#include "minddata/dataset/engine/opt/pre/epoch_injection_pass.h"
 #include "minddata/dataset/engine/perf/profiling.h"
 #include "minddata/dataset/engine/perf/monitor.h"
+#if defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE)
+#include "minddata/dataset/util/numa_interface.h"
+#endif
+#include "minddata/dataset/util/task_manager.h"
 
 namespace mindspore {
 namespace dataset {
 // Constructor
-ExecutionTree::ExecutionTree() : id_count_(0), pre_pass_override_(nullptr) {
+ExecutionTree::ExecutionTree() : id_count_(0), tree_state_(kDeTStateInit) {
   tg_ = std::make_unique<TaskGroup>();
-  tree_state_ = kDeTStateInit;
-  prepare_flags_ = kDePrepNone;
   profiling_manager_ = std::make_unique<ProfilingManager>(this);
-  optimize_ = common::GetEnv("OPTIMIZE") == "true" ? true : false;
-#if defined(NUMA_ENABLED) && (defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE))
+#if defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE)
   std::shared_ptr<ConfigManager> cfg = GlobalContext::config_manager();
   rank_id_ = cfg->rank_id();
+  numa_enable_ = cfg->numa_enable();
+  handle_ = nullptr;
 #endif
 }
 
 // Destructor
 ExecutionTree::~ExecutionTree() {
-#ifdef ENABLE_TDTQUE
+#if defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE)
+  if (numa_enable_) {
+    if (handle_ != nullptr) {
+      ReleaseLibrary(handle_);
+    }
+  }
+#if defined(ENABLE_TDTQUE)
   DeviceQueueOp *op = dynamic_cast<DeviceQueueOp *>(root_.get());
   if (op != nullptr) {
     op->StopWaiting();
   }
+#endif
 #endif
   (void)tg_->ServiceStop();
 }
@@ -71,11 +66,11 @@ Status ExecutionTree::AssociateNode(const std::shared_ptr<DatasetOp> &op) {
   if (op->tree_ == this) {
     return Status::OK();
   }
-  if (tree_state_ != kDeTStateInit && tree_state_ != kDeTStateBuilding && tree_state_ != kDeTStatePrepare) {
+  if (tree_state_ != kDeTStateInit && tree_state_ != kDeTStateBuilding) {
     std::string err_msg =
       "Invalid tree state for adding a node. Current state: " + std::to_string(static_cast<int>(tree_state_)) +
       " Expected states: " + std::to_string(static_cast<int>(kDeTStateInit)) + " or " +
-      std::to_string(static_cast<int>(kDeTStateBuilding)) + " or " + std::to_string(static_cast<int>(kDeTStatePrepare));
+      std::to_string(static_cast<int>(kDeTStateBuilding));
     RETURN_STATUS_UNEXPECTED(err_msg);
   }
 
@@ -143,30 +138,26 @@ void ExecutionTree::PrintNode(std::ostream &out, const std::shared_ptr<DatasetOp
 // Start the execution of the tree
 Status ExecutionTree::Launch() {
   // opencv limit too many threads
-#ifndef ENABLE_ANDROID
-#if !defined(_WIN32) && !defined(_WIN64) && !defined(__APPLE__)
-#if defined(NUMA_ENABLED) && (defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE))
+#if !defined(_WIN32) && !defined(_WIN64) && !defined(__APPLE__) && !defined(ENABLE_ANDROID)
+#if defined(ENABLE_GPUQUE) || defined(ENABLE_TDTQUE)
   // Here we do numa bind for performance optimization, as our test result,
   // if we do numa bind when get_dataset_size launch a tree, we'll get a
   // better performance than only we do numa bind at the time _To_Device
   // launch a tree. Our numa bind work is a process level bind, bind with
   // both cpu and memory and we choose numa_node with a polling logic:
   // numa_bind_id = rank_id_ % (numa_max_node() + 1)
-  // Now we only test pass in GPU scenario, we've not tested D scenario,
-  // without enough test we don't suggest numa feature open in D scenario
-  int numa_node_max_id = numa_max_node();
-  if (numa_node_max_id < 0) {
-    RETURN_STATUS_UNEXPECTED("Get numa max node failed.");
-  }
-  if (rank_id_ >= 0) {
-    uint32_t numa_bind_id = static_cast<uint32_t>(rank_id_ % (numa_node_max_id + 1));
-    auto bm = numa_allocate_nodemask();
-    numa_bitmask_clearall(bm);
-    numa_bitmask_setbit(bm, numa_bind_id);
-    numa_bind(bm);
-    numa_bitmask_free(bm);
-  } else {
-    MS_LOG(INFO) << "Numa bind feature doesn't work now.";
+  // Now we only support GPU scenario and the single process scenario of Ascend,
+  // now we remove the target_link of numa with _c_dataengine, and user can use
+  // a config api to control whether to open numa feature.
+  if (numa_enable_ && rank_id_ >= 0) {
+    if (handle_ == nullptr) {
+      handle_ = GetNumaAdapterHandle();
+      if (handle_ == nullptr) {
+        RETURN_STATUS_UNEXPECTED("Numa package (libnuma.so) not found.");
+      }
+    }
+    RETURN_IF_NOT_OK(NumaBind(handle_, rank_id_));
+    MS_LOG(INFO) << "Numa bind memory and cpu successful.";
   }
 #endif
   int32_t thread_num = get_nprocs();
@@ -179,12 +170,12 @@ Status ExecutionTree::Launch() {
   else
     cv::setNumThreads(thread_num);
 #endif
-#endif
+
   // Tree must be built and prepared before it can be launched!
-  if (tree_state_ != kDeTStateReady) {
+  if (tree_state_ != kDeTStatePrepared) {
     std::string err_msg =
       "Invalid tree state for launching tree. Current state: " + std::to_string(static_cast<int>(tree_state_)) +
-      " Expected state: " + std::to_string(static_cast<int>(kDeTStateReady));
+      " Expected state: " + std::to_string(static_cast<int>(kDeTStatePrepared));
     RETURN_STATUS_UNEXPECTED(err_msg);
   }
 
@@ -206,7 +197,7 @@ Status ExecutionTree::Launch() {
     // the launching tree/user thread.  Do not exec any thread for an inlined op.
     itr->state_ = DatasetOp::OpState::kDeOpRunning;
     if (!itr->inlined()) {
-      RETURN_IF_NOT_OK(tg_->CreateAsyncTask(itr->NameWithID(), std::ref(*itr)));
+      RETURN_IF_NOT_OK(tg_->CreateAsyncTask(itr->NameWithID(), std::ref(*itr), nullptr, itr->id()));
       // Set the state of the Operator as running. This only matters in Leaf ops, CacheOp and TakeOp
     }
   }
@@ -235,7 +226,8 @@ ExecutionTree::Iterator::Iterator(const std::shared_ptr<DatasetOp> &root) : ind_
 
 // Given the number of workers, launches the worker entry function for each. Essentially a
 // wrapper for the TaskGroup handling that is stored inside the execution tree.
-Status ExecutionTree::LaunchWorkers(int32_t num_workers, std::function<Status(uint32_t)> func, std::string name) {
+Status ExecutionTree::LaunchWorkers(int32_t num_workers, std::function<Status(uint32_t)> func, std::string name,
+                                    int32_t operator_id) {
   int32_t num_cpu_threads = GlobalContext::Instance()->config_manager()->num_cpu_threads();
   // this performs check that num_workers is positive and not unreasonably large which could happen
   // for example, un-initialized variable. uint16 max is 65536 which is large enough to cover everything
@@ -247,161 +239,36 @@ Status ExecutionTree::LaunchWorkers(int32_t num_workers, std::function<Status(ui
                     << std::to_string(num_cpu_threads) << ", the maximum number of threads on this CPU.";
   }
   for (int32_t i = 0; i < num_workers; ++i) {
-    RETURN_IF_NOT_OK(tg_->CreateAsyncTask(name, std::bind(func, i)));
+    RETURN_IF_NOT_OK(tg_->CreateAsyncTask(name, std::bind(func, i), nullptr, operator_id));
   }
   return Status::OK();
 }
 
-// The driver of the prepare phase of the execution tree.
-// Prepare phase consists of three sub phases
-//
-// 1. PreAction()
-//    Compulsory transformation/action pre optimization.
-//    For example, CacheOp Insertion
-//
-// 2. Optimize()
-//    Optimization transformation/action, optional
-//    For example, MapOp Fusion
-//
-// 3. PostAction()
-//    Compulsory transformation/action post optimization.
-//    For example, repeatOp inlining
-//
-// @return Status The status code returned
-Status ExecutionTree::Prepare(int32_t num_epochs, bool partial) {
-  num_epochs_ = num_epochs;
-  partially_prepare_ = partial;
-
-  // Pre optimization compulsory transformation
-  RETURN_IF_NOT_OK(this->PreAction());
-
-  // If optional optimizations are enabled
-  if (optimize_) {
-    RETURN_IF_NOT_OK(this->Optimize());
-  }
-  // Post optimization compulsory transformation
-  RETURN_IF_NOT_OK(this->PostAction());
-
-  // The tree is ready to be prepared.
-  tree_state_ = kDeTStatePrepare;
-
-  // Existing transformation implementation, will be removed later
-  RETURN_IF_NOT_OK(this->PrepareDeprecated());
-  return Status::OK();
-}
-
-Status ExecutionTree::PreAction() {
-  bool modified = false;
-  std::vector<std::unique_ptr<Pass>> pre_actions;
-  // Construct pre actions
-  if (!partially_prepare_) {
-#ifndef ENABLE_ANDROID
-    pre_actions.push_back(std::make_unique<CacheErrorPass>());
-#endif
-    pre_actions.push_back(std::make_unique<EpochInjectionPass>());
-    pre_actions.push_back(std::make_unique<RemovalPass>());
-  }
-
-  // this offers a way to override the preset optimization pass with customized ones
-  // this is used when certain nodes are removed for tree getters
-  if (pre_pass_override_) {
-    MS_LOG(INFO) << "Default pre optimization passes is being overridden,"
-                 << " number of passes before the override:" << pre_actions.size() << ".";
-    pre_actions = pre_pass_override_(std::move(pre_actions));
-  }
-
-  MS_LOG(INFO) << "Running " << pre_actions.size() << " pre pass loops.";
-
-  // Apply pre action passes
-  for (auto &pass : pre_actions) {
-    RETURN_IF_NOT_OK(pass->Run(this, &modified));
-  }
-  MS_LOG(INFO) << "Pre passes complete.";
-  return Status::OK();
-}
-
-Status ExecutionTree::PostAction() {
-  bool modified = false;
-  OptPass post_actions;
-  // Construct pre actions
-  MS_LOG(INFO) << "Running post pass loops.";
-#ifndef ENABLE_ANDROID
-  // Calling CacheErrorPass again. This is a temporary fix until the TensorOperation is properly done in Pybind.
-  // The IR version cannot detect an invalid case of a cache on Map with random tensor operation from Python API.
-  // This is because Python API binding to TensorOperation is still in progress.
-  post_actions.push_back(std::make_unique<CacheErrorPass>());
-  post_actions.push_back(std::make_unique<CacheTransformPass>());
-  post_actions.push_back(std::make_unique<RepeatPass>());
-#endif
-
-  // Apply post action passes
-  for (auto &pass : post_actions) {
-    RETURN_IF_NOT_OK(pass->Run(this, &modified));
-  }
-  MS_LOG(INFO) << "Post passes complete.";
-
-  return Status::OK();
-}
-
-Status ExecutionTree::Optimize() {
-  // Vector of optimizations, currently only 1, add more as necessary
-  OptPass optimizations;
-#ifndef ENABLE_ANDROID
-  optimizations.push_back(std::make_unique<TensorOpFusionPass>());
-#endif
-  // vector of flags for each optimization
-  std::vector<bool> modified(optimizations.size(), false);
-  for (auto i = 0; i < optimizations.size(); i++) {
-    auto m = false;
-    optimizations[i]->Run(this, &m);
-    modified[i] = m;
-  }
-  return Status::OK();
-}
-
-// The driver of the prepare phase of the execution tree. The prepare phase will recursively
-// walk the tree to perform modifications to the tree or specific nodes within the tree to get
-// it ready for execution.
-//
-// This driver is deprecated.
-Status ExecutionTree::PrepareDeprecated() {
-  // Tree must be in pending prepare state before we can assign root to it
-  if (tree_state_ != kDeTStatePrepare) {
-    std::string err_msg =
-      "Invalid tree state for preparing the tree. Current state: " + std::to_string(static_cast<int>(tree_state_)) +
-      " Expected state: " + std::to_string(static_cast<int>(kDeTStatePrepare));
-    RETURN_STATUS_UNEXPECTED(err_msg);
-  }
-
+// Walks the tree to perform modifications to the tree in post-order to get it ready for execution.
+Status ExecutionTree::Prepare() {
   if (root_ == nullptr) {
     RETURN_STATUS_UNEXPECTED("Please assign one operator as the root of this tree.");
   }
 
-  // Start the recursive prepare
-  RETURN_IF_NOT_OK(this->PrepareNode(root_));
-  tree_state_ = kDeTStateReady;
-  return Status::OK();
-}
+  std::vector<std::shared_ptr<DatasetOp>> fifo;
+  std::shared_ptr<DatasetOp> op = root_;
+  size_t index = 0;
 
-// Recursive function used during prepare phase to visit a node and drive any pre- and post-
-// node actions during a tree walk.
-Status ExecutionTree::PrepareNode(const std::shared_ptr<DatasetOp> &dataset_op) {
-  // Before going down into children, make any prepare flags updates based on this operator.
-  uint32_t op_prep_flags = dataset_op->PrepareFlags();
-  BitSet(&prepare_flags_, op_prep_flags);
+  // Build a FIFO queue with the root at the beginning and continue adding its descendants to the queue.
+  fifo.push_back(op);
+  do {
+    op = fifo[index];
+    fifo.insert(fifo.end(), op->child_.begin(), op->child_.end());
+    ++index;
+  } while (index < fifo.size());
 
-  // Now, descend to children
-  for (const auto &i : dataset_op->child_) {
-    RETURN_IF_NOT_OK(this->PrepareNode(i));
+  // By iterating from the end of the FIFO queue, we simulate the post-order walk.
+  for (auto rit = fifo.crbegin(); rit != fifo.crend(); ++rit) {
+    RETURN_IF_NOT_OK((*rit)->PrepareOperator());
   }
 
-  // No more children, now we execute any prepare actions before going back up the
-  // the tree on recursive function
-  RETURN_IF_NOT_OK(dataset_op->PrepareNodePostAction());
-
-  // Then clear the flags from this op now that we have prepared it.
-  BitClear(&prepare_flags_, op_prep_flags);
-
+  // The tree is prepared.
+  tree_state_ = kDeTStatePrepared;
   return Status::OK();
 }
 }  // namespace dataset

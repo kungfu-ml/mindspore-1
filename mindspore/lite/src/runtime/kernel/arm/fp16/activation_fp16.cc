@@ -20,12 +20,12 @@
 #include "src/runtime/runtime_api.h"
 #include "include/errorcode.h"
 #include "src/runtime/kernel/arm/fp16/common_fp16.h"
-#include "nnacl/fp16/cast_fp16.h"
 
 using mindspore::kernel::KERNEL_ARCH::kCPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
+using mindspore::schema::ActivationType_GELU;
 using mindspore::schema::ActivationType_HSWISH;
 using mindspore::schema::ActivationType_LEAKY_RELU;
 using mindspore::schema::ActivationType_RELU;
@@ -38,7 +38,7 @@ int ActivationFp16CPUKernel::Init() {
   if (type_ != schema::ActivationType_RELU && type_ != schema::ActivationType_RELU6 &&
       type_ != schema::ActivationType_LEAKY_RELU && type_ != schema::ActivationType_SIGMOID &&
       type_ != schema::ActivationType_TANH && type_ != schema::ActivationType_HSWISH &&
-      type_ != schema::ActivationType_SWISH) {
+      type_ != schema::ActivationType_SWISH && type_ != schema::ActivationType_HARD_TANH) {
     MS_LOG(ERROR) << "Activation fp16 not support type: " << type_;
     return RET_ERROR;
   }
@@ -47,40 +47,14 @@ int ActivationFp16CPUKernel::Init() {
 
 int ActivationFp16CPUKernel::ReSize() { return RET_OK; }
 
-int ActivationFp16CPUKernel::MallocTmpBuffer() {
-  fp16_input_ = ConvertInputFp32toFp16(in_tensors_.at(0), context_);
-  if (fp16_input_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_ERROR;
-  }
-  fp16_output_ = MallocOutputFp16(out_tensors_.at(0), context_);
-  if (fp16_output_ == nullptr) {
-    MS_LOG(ERROR) << "malloc data failed";
-    return RET_ERROR;
-  }
-  return RET_OK;
-}
-
-void ActivationFp16CPUKernel::FreeTmpBuffer() {
-  if (in_tensors_.at(0)->data_type() == kNumberTypeFloat32) {
-    if (fp16_input_ != nullptr) {
-      context_->allocator->Free(fp16_input_);
-      fp16_input_ = nullptr;
-    }
-  }
-  if (out_tensors_.at(0)->data_type() == kNumberTypeFloat32) {
-    if (fp16_output_ != nullptr) {
-      context_->allocator->Free(fp16_output_);
-      fp16_output_ = nullptr;
-    }
-  }
-}
-
 int ActivationFp16CPUKernel::DoActivation(int task_id) {
   auto length = in_tensors_.at(0)->ElementsNum();
 
   int stride = UP_DIV(length, thread_count_);
   int count = MSMIN(stride, length - stride * task_id);
+  if (count <= 0) {
+    return RET_OK;
+  }
 
   int error_code;
   if (type_ == schema::ActivationType_RELU) {
@@ -97,6 +71,11 @@ int ActivationFp16CPUKernel::DoActivation(int task_id) {
     error_code = HSwishFp16(fp16_input_ + stride * task_id, fp16_output_ + stride * task_id, count);
   } else if (type_ == schema::ActivationType_SWISH) {
     error_code = SwishFp16(fp16_input_ + stride * task_id, fp16_output_ + stride * task_id, count);
+  } else if (type_ == schema::ActivationType_HARD_TANH) {
+    error_code =
+      HardTanhFp16(fp16_input_ + stride * task_id, count, fp16_output_ + stride * task_id, min_val_, max_val_);
+  } else if (type_ == schema::ActivationType_GELU) {
+    error_code = GeluFp16(fp16_input_ + stride * task_id, count, fp16_output_ + stride * task_id, true);
   } else {
     MS_LOG(ERROR) << "Activation fp16 not support type: " << type_;
     return RET_ERROR;
@@ -115,24 +94,18 @@ int ActivationFp16Run(void *cdata, int task_id) {
 }
 
 int ActivationFp16CPUKernel::Run() {
-  auto ret = MallocTmpBuffer();
-  if (ret != RET_OK) {
-    FreeTmpBuffer();
-    return ret;
-  }
+  auto input_tensor = in_tensors_.at(0);
+  auto output_tensor = out_tensors_.at(0);
+
+  fp16_input_ = reinterpret_cast<float16_t *>(input_tensor->data_c());
+  fp16_output_ = reinterpret_cast<float16_t *>(output_tensor->data_c());
 
   int error_code = ParallelLaunch(this->context_->thread_pool_, ActivationFp16Run, this, thread_count_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "Activation function error error_code[" << error_code << "]";
-    FreeTmpBuffer();
     return RET_ERROR;
   }
 
-  auto out_tensor = out_tensors_.at(0);
-  if (out_tensor->data_type() == kNumberTypeFloat32) {
-    Float16ToFloat32(fp16_output_, reinterpret_cast<float *>(out_tensor->MutableData()), out_tensor->ElementsNum());
-  }
-  FreeTmpBuffer();
   return RET_OK;
 }
 

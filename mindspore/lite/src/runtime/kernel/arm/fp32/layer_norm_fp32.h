@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_LAYER_NORM_H_
-#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_LAYER_NORM_H_
+#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_LAYER_NORM_FP32_H_
+#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_LAYER_NORM_FP32_H_
 #include <vector>
 #include "src/lite_kernel.h"
 #include "include/context.h"
@@ -26,9 +26,8 @@ namespace mindspore::kernel {
 class LayerNormCPUKernel : public LiteKernel {
  public:
   LayerNormCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                     const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     param_ = reinterpret_cast<LayerNormParameter *>(parameter);
   }
   ~LayerNormCPUKernel() override{};
@@ -40,13 +39,13 @@ class LayerNormCPUKernel : public LiteKernel {
 
  private:
   LayerNormParameter *param_ = nullptr;
-  int outer_size_;
-  int inner_size_;
   float *src_data_ = nullptr;
   float *dst_data_ = nullptr;
   float *gamma_data_ = nullptr;
   float *beta_data_ = nullptr;
+  float *mean_data_ = nullptr;
+  float *var_data_ = nullptr;
 };
 }  // namespace mindspore::kernel
 
-#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_LAYER_NORM_H_
+#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_LAYER_NORM_FP32_H_

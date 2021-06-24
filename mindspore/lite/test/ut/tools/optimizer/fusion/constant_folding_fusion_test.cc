@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "tools/converter/anf_transform.h"
 #include "tools/optimizer/fusion/constant_folding_fusion.h"
 #include "tools/anf_exporter/anf_exporter.h"
+#include "test/common/import_from_meta_graphT.h"
 
 namespace mindspore {
 class ConstantFoldingFusionTest : public mindspore::CommonTest {
@@ -55,7 +56,7 @@ MetaGraphTptr BuildGraph(schema::PrimitiveType op_type, void *op_node) {
 
   // input 0: data1
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {1, 2, 2, 3};
@@ -71,7 +72,7 @@ MetaGraphTptr BuildGraph(schema::PrimitiveType op_type, void *op_node) {
 
   // input 1: data2
   auto input1 = std::make_unique<schema::TensorT>();
-  input1->nodeType = schema::NodeType::NodeType_ValueNode;
+  input1->nodeType = lite::NodeType_ValueNode;
   input1->format = schema::Format_NHWC;
   input1->dataType = TypeId::kNumberTypeFloat32;
   input1->dims = {1, 2, 2, 3};
@@ -87,7 +88,7 @@ MetaGraphTptr BuildGraph(schema::PrimitiveType op_type, void *op_node) {
 
   // final add output
   auto add_output = std::make_unique<schema::TensorT>();
-  add_output->nodeType = schema::NodeType::NodeType_Parameter;
+  add_output->nodeType = lite::NodeType_Parameter;
   add_output->format = schema::Format_NHWC;
   add_output->dataType = TypeId::kNumberTypeFloat32;
   add_output->dims = {1, 2, 2, 3};
@@ -114,7 +115,7 @@ MetaGraphTptr BuildGraphForOneInput(schema::PrimitiveType op_type, void *op_node
 
   // input 0: data1
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {1, 2, 2, 3};
@@ -130,7 +131,7 @@ MetaGraphTptr BuildGraphForOneInput(schema::PrimitiveType op_type, void *op_node
 
   // final add output
   auto add_output = std::make_unique<schema::TensorT>();
-  add_output->nodeType = schema::NodeType::NodeType_Parameter;
+  add_output->nodeType = lite::NodeType_Parameter;
   add_output->format = schema::Format_NHWC;
   add_output->dataType = TypeId::kNumberTypeFloat32;
   add_output->dims = {1, 2, 2, 3};
@@ -148,8 +149,8 @@ MetaGraphTptr BuildMixGraph() {
   add_node->inputIndex = {0, 1};
   add_node->outputIndex = {2};
   add_node->primitive = std::make_unique<schema::PrimitiveT>();
-  add_node->primitive->value.type = schema::PrimitiveType_Add;
-  add_node->primitive->value.value = new schema::AddT;
+  add_node->primitive->value.type = schema::PrimitiveType_AddFusion;
+  add_node->primitive->value.value = new schema::AddFusionT;
   add_node->name = "add";
   meta_graph->nodes.emplace_back(std::move(add_node));
 
@@ -160,14 +161,14 @@ MetaGraphTptr BuildMixGraph() {
   mul_node->inputIndex = {2, 3};
   mul_node->outputIndex = {4};
   mul_node->primitive = std::make_unique<schema::PrimitiveT>();
-  mul_node->primitive->value.type = schema::PrimitiveType_Mul;
-  mul_node->primitive->value.value = new schema::MulT;
+  mul_node->primitive->value.type = schema::PrimitiveType_MulFusion;
+  mul_node->primitive->value.value = new schema::MulFusionT;
   mul_node->name = "mul";
   meta_graph->nodes.emplace_back(std::move(mul_node));
 
   // input 0: data1
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {1, 2, 2, 3};
@@ -183,7 +184,7 @@ MetaGraphTptr BuildMixGraph() {
 
   // input 1: data2
   auto input1 = std::make_unique<schema::TensorT>();
-  input1->nodeType = schema::NodeType::NodeType_ValueNode;
+  input1->nodeType = lite::NodeType_ValueNode;
   input1->format = schema::Format_NHWC;
   input1->dataType = TypeId::kNumberTypeFloat32;
   input1->dims = {1, 2, 2, 3};
@@ -199,7 +200,7 @@ MetaGraphTptr BuildMixGraph() {
 
   // addoutput
   auto add_output = std::make_unique<schema::TensorT>();
-  add_output->nodeType = schema::NodeType::NodeType_Parameter;
+  add_output->nodeType = lite::NodeType_Parameter;
   add_output->format = schema::Format_NHWC;
   add_output->dataType = TypeId::kNumberTypeFloat32;
   add_output->dims = {1, 2, 2, 3};
@@ -212,7 +213,7 @@ MetaGraphTptr BuildMixGraph() {
 
   // input 2: data3
   auto input2 = std::make_unique<schema::TensorT>();
-  input2->nodeType = schema::NodeType::NodeType_ValueNode;
+  input2->nodeType = lite::NodeType_ValueNode;
   input2->format = schema::Format_NHWC;
   input2->dataType = TypeId::kNumberTypeFloat32;
   input2->dims = {1, 2, 2, 3};
@@ -228,7 +229,7 @@ MetaGraphTptr BuildMixGraph() {
 
   // final mul output
   auto mul_output = std::make_unique<schema::TensorT>();
-  mul_output->nodeType = schema::NodeType::NodeType_Parameter;
+  mul_output->nodeType = lite::NodeType_Parameter;
   mul_output->format = schema::Format_NHWC;
   mul_output->dataType = TypeId::kNumberTypeFloat32;
   mul_output->dims = {1, 2, 2, 3};
@@ -246,8 +247,8 @@ MetaGraphTptr BuildSplitGraph() {
   split_node->primitive = std::make_unique<schema::PrimitiveT>();
   split_node->primitive->value.type = schema::PrimitiveType_Split;
   std::unique_ptr<schema::SplitT> attr = std::make_unique<schema::SplitT>();
-  attr->numberSplit = 2;
-  attr->splitDim = 1;
+  attr->output_num = 2;
+  attr->axis = 1;
   split_node->primitive->value.value = attr.release();
   split_node->name = "split";
   meta_graph->nodes.emplace_back(std::move(split_node));
@@ -259,8 +260,8 @@ MetaGraphTptr BuildSplitGraph() {
   mul_node1->inputIndex = {1, 3};
   mul_node1->outputIndex = {5};
   mul_node1->primitive = std::make_unique<schema::PrimitiveT>();
-  mul_node1->primitive->value.type = schema::PrimitiveType_Mul;
-  std::unique_ptr<schema::MulT> mul_attr = std::make_unique<schema::MulT>();
+  mul_node1->primitive->value.type = schema::PrimitiveType_MulFusion;
+  std::unique_ptr<schema::MulFusionT> mul_attr = std::make_unique<schema::MulFusionT>();
   mul_node1->primitive->value.value = mul_attr.release();
   mul_node1->name = "mul1";
   meta_graph->nodes.emplace_back(std::move(mul_node1));
@@ -269,15 +270,15 @@ MetaGraphTptr BuildSplitGraph() {
   mul_node2->inputIndex = {2, 4};
   mul_node2->outputIndex = {6};
   mul_node2->primitive = std::make_unique<schema::PrimitiveT>();
-  mul_node2->primitive->value.type = schema::PrimitiveType_Mul;
-  std::unique_ptr<schema::MulT> mul2_attr = std::make_unique<schema::MulT>();
+  mul_node2->primitive->value.type = schema::PrimitiveType_MulFusion;
+  std::unique_ptr<schema::MulFusionT> mul2_attr = std::make_unique<schema::MulFusionT>();
   mul_node2->primitive->value.value = mul2_attr.release();
   mul_node2->name = "mul2";
   meta_graph->nodes.emplace_back(std::move(mul_node2));
 
   // input 0: data1
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {1, 2, 2, 3};
@@ -293,7 +294,7 @@ MetaGraphTptr BuildSplitGraph() {
 
   // split output1
   auto split_output1 = std::make_unique<schema::TensorT>();
-  split_output1->nodeType = schema::NodeType::NodeType_Parameter;
+  split_output1->nodeType = lite::NodeType_Parameter;
   split_output1->format = schema::Format_NHWC;
   split_output1->dataType = TypeId::kNumberTypeFloat32;
   split_output1->dims = {1, 1, 2, 3};
@@ -306,7 +307,7 @@ MetaGraphTptr BuildSplitGraph() {
 
   // split output2
   auto split_output2 = std::make_unique<schema::TensorT>();
-  split_output2->nodeType = schema::NodeType::NodeType_Parameter;
+  split_output2->nodeType = lite::NodeType_Parameter;
   split_output2->format = schema::Format_NHWC;
   split_output2->dataType = TypeId::kNumberTypeFloat32;
   split_output2->dims = {1, 1, 2, 3};
@@ -319,7 +320,7 @@ MetaGraphTptr BuildSplitGraph() {
 
   // input 1: data2
   auto input1 = std::make_unique<schema::TensorT>();
-  input1->nodeType = schema::NodeType::NodeType_ValueNode;
+  input1->nodeType = lite::NodeType_ValueNode;
   input1->format = schema::Format_NHWC;
   input1->dataType = TypeId::kNumberTypeFloat32;
   input1->dims = {1, 1, 2, 3};
@@ -335,7 +336,7 @@ MetaGraphTptr BuildSplitGraph() {
 
   // input 2: data3
   auto input2 = std::make_unique<schema::TensorT>();
-  input2->nodeType = schema::NodeType::NodeType_ValueNode;
+  input2->nodeType = lite::NodeType_ValueNode;
   input2->format = schema::Format_NHWC;
   input2->dataType = TypeId::kNumberTypeFloat32;
   input2->dims = {1, 1, 2, 3};
@@ -351,7 +352,7 @@ MetaGraphTptr BuildSplitGraph() {
 
   // final mul output1
   auto mul_output = std::make_unique<schema::TensorT>();
-  mul_output->nodeType = schema::NodeType::NodeType_Parameter;
+  mul_output->nodeType = lite::NodeType_Parameter;
   mul_output->format = schema::Format_NHWC;
   mul_output->dataType = TypeId::kNumberTypeFloat32;
   mul_output->dims = {1, 1, 2, 3};
@@ -359,7 +360,7 @@ MetaGraphTptr BuildSplitGraph() {
 
   // final mul output2
   auto mul_output2 = std::make_unique<schema::TensorT>();
-  mul_output2->nodeType = schema::NodeType::NodeType_Parameter;
+  mul_output2->nodeType = lite::NodeType_Parameter;
   mul_output2->format = schema::Format_NHWC;
   mul_output2->dataType = TypeId::kNumberTypeFloat32;
   mul_output2->dims = {1, 1, 2, 3};
@@ -368,8 +369,8 @@ MetaGraphTptr BuildSplitGraph() {
 }
 }  //  namespace
 TEST_F(ConstantFoldingFusionTest, TestADDConstantFold) {
-  auto meta_graph = BuildGraph(schema::PrimitiveType_Add, new schema::AddT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto meta_graph = BuildGraph(schema::PrimitiveType_AddFusion, new schema::AddFusionT);
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -382,7 +383,7 @@ TEST_F(ConstantFoldingFusionTest, TestADDConstantFold) {
 
 TEST_F(ConstantFoldingFusionTest, TestMixedConstantFold) {
   auto meta_graph = BuildMixGraph();
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -394,8 +395,8 @@ TEST_F(ConstantFoldingFusionTest, TestMixedConstantFold) {
 }
 
 TEST_F(ConstantFoldingFusionTest, TestSubConstantFold) {
-  auto meta_graph = BuildGraph(schema::PrimitiveType_Sub, new schema::SubT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto meta_graph = BuildGraph(schema::PrimitiveType_SubFusion, new schema::SubFusionT);
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -407,8 +408,8 @@ TEST_F(ConstantFoldingFusionTest, TestSubConstantFold) {
 }
 
 TEST_F(ConstantFoldingFusionTest, TestMulConstantFold) {
-  auto meta_graph = BuildGraph(schema::PrimitiveType_Mul, new schema::MulT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto meta_graph = BuildGraph(schema::PrimitiveType_MulFusion, new schema::MulFusionT);
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -421,41 +422,8 @@ TEST_F(ConstantFoldingFusionTest, TestMulConstantFold) {
 
 TEST_F(ConstantFoldingFusionTest, TestTransposeConstantFold) {
   auto transposeT = new schema::TransposeT;
-  transposeT->perm = {3, 0, 1, 2};
   auto meta_graph = BuildGraph(schema::PrimitiveType_Transpose, transposeT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
-  auto optimizer = std::make_shared<opt::GraphOptimizer>();
-  auto pm = std::make_shared<opt::PassManager>();
-  pm->AddPass(std::make_shared<opt::ConstFoldPass>());
-  optimizer->AddPassManager(pm);
-  FuncGraphPtr new_graph = optimizer->Optimize(func_graph);
-  ASSERT_NE(nullptr, new_graph);
-  auto new_meta_graph = lite::Export(new_graph);
-  ASSERT_EQ(new_meta_graph->nodes.size(), 0);
-}
-
-TEST_F(ConstantFoldingFusionTest, TestTileConstantFold) {
-  auto tileT = new schema::TileT;
-  tileT->multiples = {1, 2, 2, 2};
-  auto meta_graph = BuildGraph(schema::PrimitiveType_Tile, tileT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
-  auto optimizer = std::make_shared<opt::GraphOptimizer>();
-  auto pm = std::make_shared<opt::PassManager>();
-  pm->AddPass(std::make_shared<opt::ConstFoldPass>());
-  optimizer->AddPassManager(pm);
-  FuncGraphPtr new_graph = optimizer->Optimize(func_graph);
-  ASSERT_NE(nullptr, new_graph);
-  auto new_meta_graph = lite::Export(new_graph);
-  ASSERT_EQ(new_meta_graph->nodes.size(), 0);
-}
-
-TEST_F(ConstantFoldingFusionTest, TestStridedSliceConstantFold) {
-  auto stridedSliceT = new schema::StridedSliceT;
-  stridedSliceT->begin = {1};
-  stridedSliceT->end = {3};
-  stridedSliceT->stride = {1};
-  auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_StridedSlice, stridedSliceT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -470,7 +438,7 @@ TEST_F(ConstantFoldingFusionTest, TestStackConstantFold) {
   auto stackT = new schema::StackT;
   stackT->axis = 1;
   auto meta_graph = BuildGraph(schema::PrimitiveType_Stack, stackT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -482,9 +450,9 @@ TEST_F(ConstantFoldingFusionTest, TestStackConstantFold) {
 }
 
 TEST_F(ConstantFoldingFusionTest, TestSliceConstantFold) {
-  auto sliceT = new schema::SliceT;
-  auto meta_graph = BuildGraph(schema::PrimitiveType_Slice, sliceT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto sliceT = new schema::SliceFusionT;
+  auto meta_graph = BuildGraph(schema::PrimitiveType_SliceFusion, sliceT);
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -498,7 +466,7 @@ TEST_F(ConstantFoldingFusionTest, TestSliceConstantFold) {
 TEST_F(ConstantFoldingFusionTest, TestShapeConstantFold) {
   auto shapeT = new schema::ShapeT;
   auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_Shape, shapeT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -512,7 +480,7 @@ TEST_F(ConstantFoldingFusionTest, TestShapeConstantFold) {
 TEST_F(ConstantFoldingFusionTest, TestRsqrtConstantFold) {
   auto rsqrtT = new schema::RsqrtT;
   auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_Rsqrt, rsqrtT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -525,9 +493,8 @@ TEST_F(ConstantFoldingFusionTest, TestRsqrtConstantFold) {
 
 TEST_F(ConstantFoldingFusionTest, TestReshapeConstantFold) {
   auto reshapeT = new schema::ReshapeT;
-  reshapeT->shape = {2, 6};
   auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_Reshape, reshapeT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -544,7 +511,7 @@ TEST_F(ConstantFoldingFusionTest, TestRangeConstantFold) {
   rangeT->start = 1;
   rangeT->delta = 1;
   auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_Range, rangeT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -557,7 +524,7 @@ TEST_F(ConstantFoldingFusionTest, TestRangeConstantFold) {
 TEST_F(ConstantFoldingFusionTest, TestMatmulConstantFold) {
   auto matmulT = new schema::MatMulT;
   auto meta_graph = BuildGraph(schema::PrimitiveType_MatMul, matmulT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -571,7 +538,7 @@ TEST_F(ConstantFoldingFusionTest, TestMatmulConstantFold) {
 TEST_F(ConstantFoldingFusionTest, TestExpandDimsConstantFold) {
   auto expandDimsT = new schema::ExpandDimsT;
   auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_ExpandDims, expandDimsT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -585,7 +552,7 @@ TEST_F(ConstantFoldingFusionTest, TestExpandDimsConstantFold) {
 TEST_F(ConstantFoldingFusionTest, TestConcatDimsConstantFold) {
   auto concatT = new schema::ConcatT;
   auto meta_graph = BuildGraph(schema::PrimitiveType_Concat, concatT);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -598,12 +565,10 @@ TEST_F(ConstantFoldingFusionTest, TestConcatDimsConstantFold) {
 
 TEST_F(ConstantFoldingFusionTest, TestCastDimsConstantFold) {
   auto castT = new schema::CastT;
-  castT->srcT = kNumberTypeUInt8;
-  castT->dstT = kNumberTypeFloat32;
   auto meta_graph = BuildGraphForOneInput(schema::PrimitiveType_Cast, castT);
   auto input_tensor = meta_graph->allTensors.at(0).get();
   input_tensor->dataType = kNumberTypeUInt8;
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());
@@ -618,7 +583,7 @@ TEST_F(ConstantFoldingFusionTest, TestSplitConstantFold) {
   auto meta_graph = BuildSplitGraph();
   auto input_tensor = meta_graph->allTensors.at(0).get();
   input_tensor->dataType = kNumberTypeFloat32;
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>("test", false);
   pm->AddPass(std::make_shared<opt::ConstFoldPass>());

@@ -22,11 +22,14 @@
 #include <string>
 #include <sstream>
 #include <memory>
+#include <set>
 #include <functional>
 #include "utils/overload.h"
 #include "./securec.h"
 #ifdef USE_GLOG
+#define google mindspore_private
 #include "glog/logging.h"
+#undef google
 #else
 #include "toolchain/slog.h"
 #endif
@@ -34,11 +37,12 @@
 #define LOG_HDR_FILE_REL_PATH "mindspore/core/utils/log_adapter.h"
 
 // Get start index of file relative path in __FILE__
-static constexpr int GetRelPathPos() noexcept {
+static constexpr size_t GetRelPathPos() noexcept {
   return sizeof(__FILE__) > sizeof(LOG_HDR_FILE_REL_PATH) ? sizeof(__FILE__) - sizeof(LOG_HDR_FILE_REL_PATH) : 0;
 }
 
 namespace mindspore {
+extern std::set<void **> acl_handle_set __attribute__((visibility("default")));
 #define FILE_NAME                                                                             \
   (sizeof(__FILE__) > GetRelPathPos() ? static_cast<const char *>(__FILE__) + GetRelPathPos() \
                                       : static_cast<const char *>(__FILE__))
@@ -60,6 +64,7 @@ enum ExceptionType {
   TypeError,
   KeyError,
   AttributeError,
+  NameError
 };
 
 struct LocationInfo {
@@ -126,6 +131,7 @@ enum SubModuleId : int {
   SM_PS,           // Parameter Server
   SM_LITE,         // LITE
   SM_HCCL_ADPT,    // Hccl Adapter
+  SM_MINDQUANTUM,  // MindQuantum
   NUM_SUBMODUES    // number of submodules
 };
 
@@ -134,6 +140,12 @@ enum SubModuleId : int {
 #endif
 
 const char *EnumStrForMsLogLevel(MsLogLevel level);
+
+#if defined(_WIN32) || defined(_WIN64)
+extern std::string GetTimeString() __attribute__((dllexport));
+#else
+extern std::string GetTimeString() __attribute__((visibility("default")));
+#endif
 
 #if defined(_WIN32) || defined(_WIN64)
 extern int g_ms_submodule_log_levels[] __attribute__((dllexport));
@@ -179,7 +191,7 @@ class LogWriter {
                        excp_type) ^                                                                                    \
     mindspore::LogStream()
 
-#define IS_OUTPUT_ON(level) (level) >= mindspore::g_ms_submodule_log_levels[SUBMODULE_ID]
+#define IS_OUTPUT_ON(level) ((level) >= mindspore::g_ms_submodule_log_levels[SUBMODULE_ID])
 
 #define MS_LOG(level) MS_LOG_##level
 

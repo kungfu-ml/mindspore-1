@@ -62,6 +62,10 @@ class ProximalAdagrad(Optimizer):
         weight decay is positive. When not separating parameter groups, the `weight_decay` in the API will be applied
         on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
 
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
+
         To improve parameter groups performance, the customized order of parameters can be supported.
 
         The sparse strategy is applied while the SparseGatherV2 operator being used for forward network.
@@ -85,6 +89,10 @@ class ProximalAdagrad(Optimizer):
               the order will be followed in optimizer. There are no other keys in the `dict` and the parameters which
               in the value of 'order_params' must be in one of group parameters.
 
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
+
         accum (float): The starting value for accumulators, must be zero or positive values. Default: 0.1.
         learning_rate (Union[float, Tensor, Iterable, LearningRateSchedule]): A value or a graph for the learning rate.
             When the learning_rate is an Iterable or a Tensor in a 1D dimension, use dynamic learning rate, then
@@ -97,8 +105,13 @@ class ProximalAdagrad(Optimizer):
         l1 (float): l1 regularization strength, must be greater than or equal to zero. Default: 0.0.
         l2 (float): l2 regularization strength, must be greater than or equal to zero. Default: 0.0.
         use_locking (bool): If true, use locks for updating operation. Default: False.
-        loss_scale (float): Value for the loss scale. It must be greater than 0.0. Default: 1.0.
-        weight_decay (float): Weight decay value to multiply weight, must be zero or positive value. Default: 0.0.
+        loss_scale (float): Value for the loss scale. It must be greater than 0.0. In general, use the default value.
+            Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
+        weight_decay (Union[float, int]): Weight decay value to multiply weight, must be zero or positive value.
+            Default: 0.0.
 
     Inputs:
         - **grads** (tuple[Tensor]) - The gradients of `params` in the optimizer, the shape is the same as the `params`
@@ -106,6 +119,14 @@ class ProximalAdagrad(Optimizer):
 
     Outputs:
         Tensor[bool], the value is True.
+
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `accum`, `l1`, `l2` or `loss_scale` is not a float.
+        TypeError: If `weight_decay` is neither float nor int.
+        ValueError: If `loss_scale` is less than or equal to 0.
+        ValueError: If `accum`, `l1`, `l2` or `weight_decay` is less than 0.
 
     Supported Platforms:
         ``Ascend``
@@ -118,12 +139,14 @@ class ProximalAdagrad(Optimizer):
         >>> #2) Use parameter groups and set different values
         >>> conv_params = list(filter(lambda x: 'conv' in x.name, net.trainable_params()))
         >>> no_conv_params = list(filter(lambda x: 'conv' not in x.name, net.trainable_params()))
-        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01},
+        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01, 'grad_centralization':True},
         ...                 {'params': no_conv_params, 'lr': 0.01},
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.ProximalAdagrad(group_params, learning_rate=0.1, weight_decay=0.0)
-        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0.
+         >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01 and grad
+        >>> # centralization of True.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0 and grad
+        >>> # centralization of False.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -148,6 +171,7 @@ class ProximalAdagrad(Optimizer):
         grads = self.decay_weight(grads)
         grads = self.scale_grad(grads)
         grads = self._grad_sparse_indices_deduplicate(grads)
+        grads = self.gradients_centralization(grads)
         lr = self.get_lr()
         if self.is_group_lr:
             success = self.map_(F.partial(_proximal_ada_grad_opt, self.opt, self.sparse_opt, self.l1, self.l2), lr,

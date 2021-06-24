@@ -15,22 +15,22 @@
 */
 #include <unistd.h>
 #include <iostream>
-#ifdef USE_GLOG
-#include <glog/logging.h>
-#endif
 #include "minddata/dataset/engine/cache/cache_admin_arg.h"
 #include "minddata/dataset/engine/cache/cache_common.h"
 #include "minddata/dataset/util/path.h"
+#include "mindspore/core/utils/log_adapter.h"
 
+namespace ms = mindspore;
 namespace ds = mindspore::dataset;
 
 int main(int argc, char **argv) {
-  ds::Status rc;
+  ms::Status rc;
   ds::CacheAdminArgHandler args;
   std::stringstream arg_stream;
 
 #ifdef USE_GLOG
-  FLAGS_minloglevel = google::WARNING;
+#define google mindspore_private
+  FLAGS_logtostderr = false;
   FLAGS_log_dir = ds::DefaultLogDir();
   // Create default log dir
   ds::Path log_dir = ds::Path(FLAGS_log_dir);
@@ -40,15 +40,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   google::InitGoogleLogging(argv[0]);
+#undef google
 #endif
-
-  // Create default spilling dir
-  ds::Path spill_dir = ds::Path(ds::DefaultSpillDir());
-  rc = spill_dir.CreateDirectories();
-  if (!rc.IsOk()) {
-    std::cerr << rc.ToString() << std::endl;
-    return 1;
-  }
 
   if (argc == 1) {
     args.Help();

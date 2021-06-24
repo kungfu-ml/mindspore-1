@@ -116,12 +116,12 @@ Status SamplerRT::GetAllIdsThenReset(py::array *data) {
   {
     py::gil_scoped_acquire gil_acquire;
     if (Py_IsInitialized() == 0) {
-      return Status(StatusCode::kPythonInterpreterFailure, "Python Interpreter is finalized");
+      return Status(StatusCode::kMDPythonInterpreterFailure, "Python Interpreter is finalized");
     }
     try {
       RETURN_IF_NOT_OK(sample_ids->GetDataAsNumpy(data));
     } catch (const std::runtime_error &e) {
-      return Status(StatusCode::kPyFuncException, e.what());
+      return Status(StatusCode::kMDPyFuncException, e.what());
     }
   }
   return Status::OK();
@@ -140,6 +140,8 @@ int64_t SamplerRT::CalculateNumSamples(int64_t num_rows) {
   int64_t child_num_rows = num_rows;
   if (!child_.empty()) {
     child_num_rows = child_[0]->CalculateNumSamples(num_rows);
+    // return -1 if child_num_rows is undetermined
+    if (child_num_rows == -1) return child_num_rows;
   }
 
   return (num_samples_ > 0) ? std::min(child_num_rows, num_samples_) : child_num_rows;

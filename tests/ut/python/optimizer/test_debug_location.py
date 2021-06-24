@@ -77,7 +77,7 @@ class Net(nn.Cell):
         self.weight = Parameter(Tensor(np.ones([out_features, in_features]).astype(np.float32)), name="weight")
         self.bias = Parameter(Tensor(np.ones([out_features]).astype(np.float32)), name="bias")
         self.matmul = P.MatMul()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, input_):
         output = self.add(self.matmul(input_, self.weight), self.bias)
@@ -90,7 +90,7 @@ class NetFP16(nn.Cell):
         self.weight = Parameter(Tensor(np.ones([out_features, in_features]).astype(np.float32)), name="weight")
         self.bias = Parameter(Tensor(np.ones([out_features]).astype(np.float32)), name="bias")
         self.matmul = P.MatMul()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.cast = P.Cast()
 
     def construct(self, input_):
@@ -162,7 +162,7 @@ def test_sequential_resolve_error():
     input_np = np.random.randn(2, 3, 4, 5).astype(np.float32)
     input_me = Tensor(input_np)
     net = SequenceNet()
-    with pytest.raises(TypeError):
+    with pytest.raises(NameError):
         net(input_me)
 
 

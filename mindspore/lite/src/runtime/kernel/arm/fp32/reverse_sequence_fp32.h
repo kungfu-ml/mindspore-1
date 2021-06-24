@@ -18,15 +18,14 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-#include "nnacl/reverse_sequence.h"
+#include "nnacl/fp32/reverse_sequence_fp32.h"
 
 namespace mindspore::kernel {
 class ReverseSequenceCPUKernel : public LiteKernel {
  public:
   ReverseSequenceCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                           const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~ReverseSequenceCPUKernel() = default;
 
   int Init() override;

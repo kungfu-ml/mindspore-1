@@ -15,6 +15,8 @@
 
 """Inner operators."""
 
+import numpy as np
+from mindspore.common import Tensor
 from ..._checkparam import Rel
 from ..._checkparam import Validator as validator
 from ... import context
@@ -22,6 +24,7 @@ from ...common import dtype as mstype
 from ..primitive import PrimitiveWithCheck, PrimitiveWithInfer, prim_attr_register
 from ..operations.math_ops import _infer_shape_reduce
 from ...communication.management import GlobalComm
+from .. import signature as sig
 
 
 class ExtractImagePatches(PrimitiveWithInfer):
@@ -71,7 +74,6 @@ class ExtractImagePatches(PrimitiveWithInfer):
         _check_tuple_or_list("rate", rates, self.name)
         self.padding = validator.check_string(padding.upper(), ['VALID', 'SAME'], 'padding', self.name)
         self.add_prim_attr("padding", self.padding)
-        self.add_prim_attr("io_format", "NCHW")
         self.is_ge = context.get_context("enable_ge")
 
     def infer_shape(self, input_x):
@@ -163,6 +165,9 @@ class Range(PrimitiveWithInfer):
         validator.check_tensor_dtype_valid('x', x_dtype, [mstype.float32, mstype.int32], self.name)
         return x_dtype
 
+    def infer_value(self, x_value):
+        return Tensor(np.arange(self.start, self.limit, self.delta), dtype=x_value.dtype)
+
 
 class Quant(PrimitiveWithInfer):
     r"""
@@ -207,7 +212,6 @@ class Quant(PrimitiveWithInfer):
         self.sqrt_mode = validator.check_value_type("sqrt_mode", sqrt_mode, [bool], self.name)
         self.round_mode = validator.check_string(round_mode, ["Round", "Floor", "Ceil", "Trunc"],
                                                  "round_mode", self.name)
-        self.add_prim_attr("io_format", "ND")
 
     def infer_shape(self, x_shape):
         return x_shape
@@ -259,7 +263,6 @@ class Dequant(PrimitiveWithInfer):
         self.sqrt_mode = validator.check_value_type("sqrt_mode", sqrt_mode, [bool], self.name)
         self.relu_flag = validator.check_value_type("relu_flag", relu_flag, [bool], self.name)
         self.add_prim_attr("dtype", mstype.float16)
-        self.add_prim_attr("io_format", "ND")
 
     def infer_shape(self, x_shape, deq_scale_shape):
         return x_shape
@@ -407,6 +410,7 @@ class Send(PrimitiveWithInfer):
         >>> net = Net()
         >>> output = net(input_)
     """
+
     @prim_attr_register
     def __init__(self, sr_tag, dest_rank, group=GlobalComm.WORLD_COMM_GROUP):
         self.rank = dest_rank
@@ -435,7 +439,7 @@ class Receive(PrimitiveWithInfer):
                       will be send by the Send op with the same "sr_tag".
         src_rank (int): A required integer identifying the source rank.
         shape (list[int]): A required list identifying the shape of the tensor to be received.
-        dtype (Type): A required Type indentifying the type of the tensor to be received. The supported types:
+        dtype (Type): A required Type identifying the type of the tensor to be received. The supported types:
                        int8, int16, int32, float16, float32.
         group (str): The communication group to work on. Default: "hccl_world_group/nccl_world_group".
 
@@ -463,6 +467,7 @@ class Receive(PrimitiveWithInfer):
         >>> net = Net()
         >>> output = net()
     """
+
     @prim_attr_register
     def __init__(self, sr_tag, src_rank, shape, dtype, group=GlobalComm.WORLD_COMM_GROUP):
         self.rank = src_rank
@@ -470,6 +475,9 @@ class Receive(PrimitiveWithInfer):
         self.shape = shape
         self.dtype = dtype
         self.group = group
+        valid_type = [mstype.float16, mstype.float32, mstype.int32, mstype.int8, mstype.uint8]
+        args = {"dtype": dtype}
+        validator.check_scalar_or_tensor_types_same(args, valid_type, self.name)
 
     def infer_shape(self, x_shape=None):
         return self.shape
@@ -630,6 +638,7 @@ class GpuConvertToDynamicShape(PrimitiveWithCheck):
     def check_dtype(self, input_dtype):
         validator.check_subclass("input_dtype", input_dtype, mstype.tensor, self.name)
 
+
 class ErrorOnDynamicShapeInput(PrimitiveWithInfer):
     """
     This op is used for dynamic shape testing. The only purpose of this operator is
@@ -724,3 +733,286 @@ class SequenceMask(PrimitiveWithCheck):
     def check_dtype(self, lengths_dtype, maxlen_dtype):
         validator.check_subclass("lengths_dtype", lengths_dtype, mstype.tensor, self.name)
         validator.check_subclass("maxlen", maxlen_dtype, mstype.number, self.name)
+
+
+class SyncBatchNorm(PrimitiveWithInfer):
+    r"""
+    Sync Batch Normalization for input data and updated parameters.
+
+    Sync Batch Normalization is cross device synchronized batch normalization. Batch Normalization is
+    widely used in convolutional neural networks. This operation applies Batch Normalization over input
+    to avoid internal covariate shift as described in the paper `Batch Normalization: Accelerating
+    Deep Network Training by Reducing Internal Covariate Shift <https://arxiv.org/abs/1502.03167>`_.
+    It rescales and recenters the features using a mini-batch of data and the learned parameters which
+    can be described in the following formula,
+
+    .. math::
+        y = \frac{x - mean}{\sqrt{variance + \epsilon}} * \gamma + \beta
+
+    where :math:`\gamma` is scale, :math:`\beta` is bias, :math:`\epsilon` is epsilon.
+
+    Args:
+        epsilon (float): A small value added for numerical stability. Default: 1e-5.
+        momentum (float): The hyper parameter to compute moving average for running_mean and running_var
+            (e.g. :math:`new\_running\_mean = (1 - momentum) * running\_mean + momentum * current\_mean`).
+            Momentum value must be [0, 1]. Default: 0.1.
+        group (str): The communication group to work on. Default: "sync_bn_group0".
+        device_num (int): The number of devices in each group. Default: 2.
+
+    Inputs:
+        - **input_x** (Tensor) - Tensor of shape :math:`(N, C)`, with float16 or float32 data type.
+        - **scale** (Tensor) - Tensor of shape :math:`(C,)`, with float16 or float32 data type.
+        - **bias** (Tensor) - Tensor of shape :math:`(C,)`, has the same data type with `scale`.
+        - **mean** (Tensor) - Tensor of shape :math:`(C,)`, with float16 or float32 data type.
+        - **variance** (Tensor) - Tensor of shape :math:`(C,)`, has the same data type with `mean`.
+
+    Outputs:
+        Tuple of 5 Tensor, the normalized inputs and the updated parameters.
+
+        - **output_x** (Tensor) - The same type and shape as the input_x. The shape is :math:`(N, C)`.
+        - **updated_scale** (Tensor) - Tensor of shape :math:`(C,)`.
+        - **updated_bias** (Tensor) - Tensor of shape :math:`(C,)`.
+        - **updated_moving_mean** (Tensor) - Tensor of shape :math:`(C,)`.
+        - **updated_moving_variance** (Tensor) - Tensor of shape :math:`(C,)`.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        >>> # This example should be run with multiple processes.
+        >>> # Please refer to nn.SyncBatchNorm for direct use.
+        >>> input_x = Tensor(np.ones([2, 2]), mindspore.float32)
+        >>> scale = Tensor(np.ones([2]), mindspore.float32)
+        >>> bias = Tensor(np.ones([2]), mindspore.float32)
+        >>> mean = Tensor(np.ones([2]), mindspore.float32)
+        >>> variance = Tensor(np.ones([2]), mindspore.float32)
+        >>> sync_batch_norm = ops._inner_ops.SyncBatchNorm()
+        >>> output = sync_batch_norm(input_x, scale, bias, mean, variance)
+        >>> print(output)
+        (Tensor(shape=[2, 2], dtype=Float32, value=
+        [[ 1.00000000e+00, 1.00000000e+00],
+         [ 1.00000000e+00, 1.00000000e+00]]), Tensor(shape=[2], dtype=Float32, value=
+         [ 1.00000000e+00, 1.00000000e+00]), Tensor(shape=[2], dtype=Float32, value=
+         [ 1.00000000e+00, 1.00000000e+00]), Tensor(shape=[2], dtype=Float32, value=
+         [ 1.00000000e+00, 1.00000000e+00]), Tensor(shape=[2], dtype=Float32, value=
+         [ 1.00000000e+00, 1.00000000e+00]))
+    """
+
+    @prim_attr_register
+    def __init__(self, epsilon=1e-5, momentum=0.1, group="sync_bn_group0", device_num=2):
+        validator.check_float_range(epsilon, 0, 1, Rel.INC_RIGHT, 'epsilon', self.name)
+        validator.check_float_range(momentum, 0, 1, Rel.INC_BOTH, 'momentum', self.name)
+        validator.check_isinstance("group", group, str)
+        validator.check_int(device_num, 2, Rel.GE, "device_num", self.name)
+        self.init_prim_io_names(inputs=['x', 'scale', 'offset', 'mean', 'variance'],
+                                outputs=['y', 'batch_mean', 'batch_variance', 'reserve_space_1', 'reserve_space_2'])
+
+    def infer_shape(self, input_x, scale, bias, mean, variance):
+        validator.check_equal_int(len(scale), 1, "scale rank", self.name)
+        validator.check("scale shape", scale, "bias shape", bias, Rel.EQ, self.name)
+        validator.check("scale shape[0]", scale[0], "input_x channel", input_x[1], Rel.EQ, self.name)
+        validator.check_equal_int(len(mean), 1, "mean rank", self.name)
+        validator.check("mean shape", mean, "variance shape", variance, Rel.EQ, self.name)
+        validator.check("mean shape", mean, "scale shape", scale, Rel.EQ, self.name)
+        return (input_x, scale, scale, scale, scale)
+
+    def infer_dtype(self, input_x, scale, bias, mean, variance):
+        validator.check_tensor_dtype_valid("input_x", input_x, [mstype.float16, mstype.float32], self.name)
+        args = {"scale": scale, "bias": bias}
+        validator.check_tensors_dtypes_same_and_valid(args, [mstype.float16, mstype.float32], self.name)
+        args_moving = {"mean": mean, "variance": variance}
+        validator.check_tensors_dtypes_same_and_valid(args_moving, [mstype.float16, mstype.float32], self.name)
+        return (input_x, scale, bias, input_x, input_x)
+
+
+class Centralization(PrimitiveWithInfer):
+    """
+    Computes centralization. y = x - mean(x, axis).
+
+    Note:
+        The dimension index starts at 0 and must be in the range `[-input.ndim, input.ndim)`.
+
+    Inputs:
+        - **input_x** (Tensor) - The input tensor. The data type mast be float16 or float32.
+        - **axis** (Union[Int, Tuple(Int), List(Int)]) - The dimensions to reduce. Default: (), reduce all dimensions.
+          Only constant value is allowed. Must be in the range [-rank(input_x), rank(input_x)).
+
+    Outputs:
+        Tensor, has the same shape and dtype as the `input_x`.
+
+    Raises:
+        TypeError: If `axis` is not one of the following types: int, list, tuple, NoneType.
+        TypeError: If `axis` has non-Int elements.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        >>> mindspore.set_seed(1)
+        >>> input_x = Tensor(np.random.randn(2, 2).astype(np.float32))
+        >>> centralization = ops.Centralization()
+        >>> output = centralization(input_x, -1)
+        >>> print(output)
+        [[ 1.1180509 -1.1180508]
+         [ 0.2723984 -0.2723984]]
+    """
+
+    __mindspore_signature__ = (
+        sig.make_sig('input_x'),
+        sig.make_sig('axis', default=())
+    )
+
+    @prim_attr_register
+    def __init__(self):
+        """Initialize Centralization"""
+        self.init_prim_io_names(inputs=['input_x', 'axis'], outputs=['output'])
+
+    def __infer__(self, input_x, axis):
+        x_shape = list(input_x['shape'])
+        x_dtype = input_x['dtype']
+        axis_v = axis['value']
+        rank = len(x_shape)
+
+        args = {'input_x': input_x['dtype']}
+        validator.check_tensors_dtypes_same_and_valid(args, [mstype.float16, mstype.float32], self.name)
+
+        if axis_v is None:
+            raise ValueError(f"For {self.name}, axis must be const.")
+        validator.check_value_type('axis', axis_v, [int, list, tuple], self.name)
+
+        if isinstance(axis_v, int):
+            validator.check_int_range(axis_v, -rank, rank, Rel.INC_LEFT, 'axis', self.name)
+        elif axis:
+            for index, one_axis in enumerate(axis_v):
+                validator.check_value_type('axis[%d]' % index, one_axis, [int], self.name)
+
+        out = {'shape': x_shape,
+               'dtype': x_dtype,
+               'value': None}
+        return out
+
+
+class StackInit(PrimitiveWithInfer):
+    """
+    Create a stack that produces tensors in first-in last-out order.
+
+    After `StackInit`, a tensor can be pushed onto the stack using `StackPush`, and popped
+    at the top of the stack using `StackPop`. Finally, the stack should be destroyed with `StackDestroy`.
+
+    Args:
+        index (int): The index of the stack.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        >>> x = Tensor(np.array([[1, 3], [2, 0]]))
+        >>> index = 0
+        >>> stack = ops.StackInit(index)
+        >>> push = ops.StackPush(index)
+        >>> pop = ops.StackPop(index, x.shape, x.dtype)
+        >>> destroy = ops.StackDestroy(index)
+        >>> stack()
+        >>> push(x)
+        >>> y = pop()
+        >>> destroy()
+        >>> print(y)
+        [[1 3]
+         [2 0]]
+    """
+    @prim_attr_register
+    def __init__(self, index=1):
+        """StackInit"""
+        validator.check_value_type("index", index, [int], self.name)
+
+
+class StackPush(PrimitiveWithInfer):
+    """
+    Push a tensor onto the stack.
+
+    Before `StackPush`, the stack should be created using `StackInit`.
+    Please refer to the usage in source code of `StackInit`.
+
+    Args:
+        index (int): The index of the stack.
+
+    Inputs:
+        - **input** (Tensor) - A tensor to be pushed onto the stack.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        Please refer to the usage of `StackInit`.
+    """
+    @prim_attr_register
+    def __init__(self, index=1):
+        """StackPush"""
+        validator.check_value_type("index", index, [int], self.name)
+        self.init_prim_io_names(inputs=['input'], outputs=[])
+
+
+class StackPop(PrimitiveWithInfer):
+    """
+    Pop the tensor at the top of the stack.
+
+     Before `StackPop`, the stack should be created using `StackInit`.
+     Please refer to the usage in source code of `StackInit`.
+
+    Args:
+        index (int): The index of the stack.
+        shape (tuple): The shape of the tensor at the top of the stack.
+        dtype (mindspore.dtype): The type of the tensor at the top of the stack.
+
+    Outputs:
+        - **output** (Tensor) - The tensor at the top of the stack.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        Please refer to the usage of `StackInit`.
+    """
+    @prim_attr_register
+    def __init__(self, index=1, shape=(1,), dtype=mstype.float32):
+        """StackPop"""
+        validator.check_value_type("index", index, [int], self.name)
+
+        validator.check_value_type('shape type', shape, [list, tuple], self.name)
+        validator.check_int(len(np.array(shape).shape), 1, Rel.EQ, "dim of shape", self.name)
+        for elem in shape:
+            validator.check_int(elem, 1, Rel.GE, 'shape element', self.name)
+            validator.check_value_type('type of shape element', elem, [int], self.name)
+
+        validator.check_type_name("dtype", dtype, (mstype.bool_,) + mstype.number_type, self.name)
+        self.shape = shape
+        self.dtype = dtype
+
+        self.init_prim_io_names(inputs=[], outputs=['output'])
+
+    def __infer__(self):
+        return {'shape': (list(self.shape)),
+                'dtype': (self.dtype),
+                'value': None}
+
+
+class StackDestroy(PrimitiveWithInfer):
+    """
+    Destroy the stack.
+
+     Before `StackDestroy`, the stack should be created using `StackInit`.
+     Please refer to the usage in source code of `StackInit`.
+
+    Args:
+        index (int): The index of the stack.
+
+    Supported Platforms:
+        ``Ascend``
+
+    Examples:
+        Please refer to the usage of `StackInit`.
+    """
+    @prim_attr_register
+    def __init__(self, index=1):
+        """StackDestroy"""
+        validator.check_value_type("index", index, [int], self.name)

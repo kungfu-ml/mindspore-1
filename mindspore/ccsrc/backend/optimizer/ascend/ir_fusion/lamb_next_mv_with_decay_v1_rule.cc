@@ -30,33 +30,21 @@ std::tuple<AnfNodePtr, AnfNodePtr, AnfNodePtr, AnfNodePtr> GetSharedNodes(const 
   MS_EXCEPTION_IF_NULL(node);
   auto add3 = node->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(add3);
-  if (add3->inputs().size() < kAddInputNum) {
-    MS_LOG(EXCEPTION) << "The input size of Add3 is less than " << kAddInputNum
-                      << " trace: " << trace::DumpSourceLines(node);
-  }
+  CheckCNodeInputSize(add3, kAddInputTensorNum);
   auto real_div2_anf = add3->input(1);
   MS_EXCEPTION_IF_NULL(real_div2_anf);
   auto real_div2 = real_div2_anf->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(real_div2);
-  if (real_div2->inputs().size() < kRealDivInputNum) {
-    MS_LOG(EXCEPTION) << "The input size of RealDiv2 is less than " << kRealDivInputNum
-                      << " trace: " << trace::DumpSourceLines(node);
-  }
+  CheckCNodeInputSize(real_div2, kRealDivInputTensorNum);
   auto sqrt0_anf = real_div2->input(2);
   MS_EXCEPTION_IF_NULL(sqrt0_anf);
   auto sqrt0 = sqrt0_anf->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(sqrt0);
-  if (sqrt0->inputs().size() < kRsqrtInputNum) {
-    MS_LOG(EXCEPTION) << "The input size of Sqrt0 is less than " << kSqrtInputNum
-                      << " trace: " << trace::DumpSourceLines(node);
-  }
+  CheckCNodeInputSize(sqrt0, kSqrtInputTensorNum);
   auto add2_anf = sqrt0->input(1);
   MS_EXCEPTION_IF_NULL(add2_anf);
   auto add2 = add2_anf->cast<CNodePtr>();
-  if (add2->inputs().size() < kAddInputNum) {
-    MS_LOG(EXCEPTION) << "The input size of Add2 is less than " << kAddInputNum
-                      << " trace: " << trace::DumpSourceLines(node);
-  }
+  CheckCNodeInputSize(add2, kAddInputTensorNum);
   return std::make_tuple(add3->input(2), real_div2->input(1), add2->input(1), add2->input(2));
 }
 
@@ -66,7 +54,7 @@ bool MatchAdd5Pattern(const AnfNodePtr &node, const AnfNodePtr &mul4, const AnfN
     return false;
   }
   auto add5 = node->cast<CNodePtr>();
-  if (AnfAlgo::GetCNodeName(add5) != prim::kPrimTensorAdd->name() || add5->inputs().size() != kAddInputNum) {
+  if (AnfAlgo::GetCNodeName(add5) != prim::kPrimAdd->name() || AnfAlgo::GetInputTensorNum(add5) != kAddInputTensorNum) {
     return false;
   }
   auto real_div4_anf = add5->input(1);
@@ -74,7 +62,8 @@ bool MatchAdd5Pattern(const AnfNodePtr &node, const AnfNodePtr &mul4, const AnfN
     return false;
   }
   auto real_div4 = real_div4_anf->cast<CNodePtr>();
-  if (AnfAlgo::GetCNodeName(real_div4) != kRealDivOpName || real_div4->inputs().size() != kRealDivInputNum) {
+  if (AnfAlgo::GetCNodeName(real_div4) != kRealDivOpName ||
+      AnfAlgo::GetInputTensorNum(real_div4) != kRealDivInputTensorNum) {
     return false;
   }
   auto add4_anf = real_div4->input(2);
@@ -82,7 +71,7 @@ bool MatchAdd5Pattern(const AnfNodePtr &node, const AnfNodePtr &mul4, const AnfN
     return false;
   }
   auto add4 = add4_anf->cast<CNodePtr>();
-  if (AnfAlgo::GetCNodeName(add4) != prim::kPrimTensorAdd->name() || add4->inputs().size() != kAddInputNum) {
+  if (AnfAlgo::GetCNodeName(add4) != prim::kPrimAdd->name() || AnfAlgo::GetInputTensorNum(add4) != kAddInputTensorNum) {
     return false;
   }
   auto sqrt1_anf = add4->input(1);
@@ -90,7 +79,7 @@ bool MatchAdd5Pattern(const AnfNodePtr &node, const AnfNodePtr &mul4, const AnfN
     return false;
   }
   auto sqrt1 = sqrt1_anf->cast<CNodePtr>();
-  if (AnfAlgo::GetCNodeName(sqrt1) != kSqrtOpName || sqrt1->inputs().size() != kSqrtInputNum) {
+  if (AnfAlgo::GetCNodeName(sqrt1) != kSqrtOpName || AnfAlgo::GetInputTensorNum(sqrt1) != kSqrtInputTensorNum) {
     return false;
   }
   return add5->input(2) == mul4 && real_div4->input(1) == real_div0 && sqrt1->input(1) == real_div1 &&
@@ -104,14 +93,8 @@ std::tuple<AnfNodePtr, AnfNodePtr> GetAdd0Add1Nodes(const AnfNodePtr &real_div0_
   auto real_div1 = real_div1_anf->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(real_div0);
   MS_EXCEPTION_IF_NULL(real_div1);
-  if (real_div0->inputs().size() != kRealDivInputNum) {
-    MS_LOG(EXCEPTION) << "RealDiv0 has wrong input size"
-                      << " trace: " << trace::DumpSourceLines(real_div0_anf);
-  }
-  if (real_div1->inputs().size() != kRealDivInputNum) {
-    MS_LOG(EXCEPTION) << "RealDiv1 has wrong input size"
-                      << " trace: " << trace::DumpSourceLines(real_div1_anf);
-  }
+  CheckCNodeInputSize(real_div0, kRealDivInputTensorNum);
+  CheckCNodeInputSize(real_div1, kRealDivInputTensorNum);
   return std::make_tuple(real_div0->input(1), real_div1->input(1));
 }
 }  // namespace
@@ -140,17 +123,17 @@ const BaseRef LambNextMVWithDecayV1Rule::DefinePattern() const {
   const auto prim_real_div = std::make_shared<Primitive>(kRealDivOpName);
   VectorRef mul3({prim::kPrimMul, mul3_sub1_, input0_});
   VectorRef mul2({prim::kPrimMul, mul2_x_, input1_});
-  VectorRef add1({prim::kPrimTensorAdd, mul2, mul3});
+  VectorRef add1({prim::kPrimAdd, mul2, mul3});
   VectorRef real_div1({prim_real_div, add1, input2_});
-  VectorRef add2({prim::kPrimTensorAdd, real_div1, add2_y_});
+  VectorRef add2({prim::kPrimAdd, real_div1, add2_y_});
   VectorRef mul0({prim::kPrimMul, mul0_x_, input4_});
   VectorRef mul1({prim::kPrimMul, mul1_sub_, input3_});
   VectorRef sqrt0({prim_rsqrt, add2});
-  VectorRef add0({prim::kPrimTensorAdd, mul0, mul1});
+  VectorRef add0({prim::kPrimAdd, mul0, mul1});
   VectorRef real_div0({prim_real_div, add0, input5_});
   VectorRef real_div2({prim::kPrimMul, real_div0, sqrt0});
   VectorRef mul4({prim::kPrimMul, mul4_x_, input6_});
-  VectorRef add3({prim::kPrimTensorAdd, real_div2, mul4});
+  VectorRef add3({prim::kPrimAdd, real_div2, mul4});
   return add3;
 }
 

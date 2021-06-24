@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 #include "minddata/dataset/core/client.h"
 #include "minddata/dataset/engine/data_schema.h"
 #include "common/common.h"
-#include "utils/ms_utils.h"
 #include "gtest/gtest.h"
 #include "utils/log_adapter.h"
 
@@ -45,9 +44,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderBasic1) {
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path})
-      .SetRowsPerBuffer(16)
-      .SetNumWorkers(16);
+  builder.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(16);
   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
   builder.SetDataSchema(std::move(schema));
@@ -99,10 +96,8 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderLargeRowsPerBuffer) {
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path})
-      .SetRowsPerBuffer(500)
-      .SetNumWorkers(16);
-   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
+  builder.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(500);
+  std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
   builder.SetDataSchema(std::move(schema));
   Status rc = builder.Build(&my_tfreader_op);
@@ -153,10 +148,8 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderSmallRowsPerBuffer) {
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path})
-      .SetRowsPerBuffer(1)
-      .SetNumWorkers(16);
-   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
+  builder.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(1);
+  std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
   builder.SetDataSchema(std::move(schema));
   Status rc = builder.Build(&my_tfreader_op);
@@ -207,11 +200,8 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderLargeQueueSize) {
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path})
-      .SetWorkerConnectorSize(1)
-      .SetRowsPerBuffer(16)
-      .SetNumWorkers(16);
-   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
+  builder.SetDatasetFilesList({dataset_path}).SetWorkerConnectorSize(1).SetRowsPerBuffer(16);
+  std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
   builder.SetDataSchema(std::move(schema));
   Status rc = builder.Build(&my_tfreader_op);
@@ -317,10 +307,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderRepeat) {
   // TFReaderOp
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path})
-    .SetRowsPerBuffer(16)
-    .SetWorkerConnectorSize(16)
-    .SetNumWorkers(16);
+  builder.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(16).SetWorkerConnectorSize(16);
   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
   builder.SetDataSchema(std::move(schema));
@@ -330,11 +317,14 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderRepeat) {
   ASSERT_TRUE(rc.IsOk());
 
   // RepeatOp
-  std::shared_ptr<RepeatOp> my_repeat_op = std::make_shared<RepeatOp>(3);
+  uint32_t num_repeats = 3;
+  std::shared_ptr<RepeatOp> my_repeat_op = std::make_shared<RepeatOp>(num_repeats);
   rc = my_tree->AssociateNode(my_repeat_op);
   ASSERT_TRUE(rc.IsOk());
 
   // Set children/root layout.
+  my_tfreader_op->set_total_repeats(num_repeats);
+  my_tfreader_op->set_num_repeats_per_epoch(num_repeats);
   rc = my_repeat_op->AddChild(my_tfreader_op);
   ASSERT_TRUE(rc.IsOk());
   rc = my_tree->AssignRoot(my_repeat_op);
@@ -387,7 +377,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderSchemaConstructor) {
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path+"/test.data"})
+  builder.SetDatasetFilesList({dataset_path + "/test.data"})
     .SetRowsPerBuffer(16)
     .SetNumWorkers(16)
     .SetDataSchema(std::move(data_schema));
@@ -444,7 +434,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderTake1Row) {
   // TFReaderOp
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path + "/test.data"}).SetRowsPerBuffer(5).SetNumWorkers(16);
+  builder.SetDatasetFilesList({dataset_path + "/test.data"}).SetRowsPerBuffer(5);
   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema1Row.json", {});
   builder.SetDataSchema(std::move(schema));
@@ -502,7 +492,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderTake1Buffer) {
   // TFReaderOp
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path + "/test.data"}).SetRowsPerBuffer(5).SetNumWorkers(16);
+  builder.SetDatasetFilesList({dataset_path + "/test.data"}).SetRowsPerBuffer(5);
   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema5Rows.json", {});
   builder.SetDataSchema(std::move(schema));
@@ -560,7 +550,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderTake7Rows) {
   // TFReaderOp
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path + "/test.data"}).SetRowsPerBuffer(5).SetNumWorkers(16);
+  builder.SetDatasetFilesList({dataset_path + "/test.data"}).SetRowsPerBuffer(5);
   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema7Rows.json", {});
   builder.SetDataSchema(std::move(schema));
@@ -615,9 +605,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderBasicNoSchema) {
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({dataset_path})
-      .SetRowsPerBuffer(16)
-      .SetNumWorkers(16);
+  builder.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(16);
   Status rc = builder.Build(&my_tfreader_op);
   ASSERT_TRUE(rc.IsOk());
 
@@ -705,13 +693,11 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderInvalidFiles) {
   std::string valid_file = datasets_root_path_ + "/testTFTestAllTypes/test.data";
   std::string schema_file = datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json";
   std::string invalid_file = datasets_root_path_ + "/testTFTestAllTypes/invalidFile.txt";
-  std::string nonexistent_file = "this/file/doesnt/exist";
+  std::string nonexistent_file = "this/file/does_not/exist";
 
   std::shared_ptr<TFReaderOp> my_tfreader_op;
   TFReaderOp::Builder builder;
-  builder.SetDatasetFilesList({invalid_file, valid_file, schema_file})
-      .SetRowsPerBuffer(16)
-      .SetNumWorkers(16);
+  builder.SetDatasetFilesList({invalid_file, valid_file, schema_file}).SetRowsPerBuffer(16);
 
   std::unique_ptr<DataSchema> schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(schema_file, {});
@@ -720,9 +706,7 @@ TEST_F(MindDataTestTFReaderOp, TestTFReaderInvalidFiles) {
   Status rc = builder.Build(&my_tfreader_op);
   ASSERT_TRUE(!rc.IsOk());
 
-  builder.SetDatasetFilesList({invalid_file, valid_file, schema_file, nonexistent_file})
-      .SetRowsPerBuffer(16)
-      .SetNumWorkers(16);
+  builder.SetDatasetFilesList({invalid_file, valid_file, schema_file, nonexistent_file}).SetRowsPerBuffer(16);
 
   schema = std::make_unique<DataSchema>();
   schema->LoadSchemaFile(schema_file, {});

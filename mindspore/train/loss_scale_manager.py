@@ -33,18 +33,30 @@ class LossScaleManager:
     def get_update_cell(self):
         """Get the loss scaling update logic cell."""
 
+
 class FixedLossScaleManager(LossScaleManager):
     """
     Fixed loss-scale manager.
 
     Args:
-        loss_scale (float): Loss scale. Default: 128.0.
-        drop_overflow_update (bool): whether to execute optimizer if there is an overflow. Default: True.
+        loss_scale (float): Loss scale. Note that if `drop_overflow_update` is set to False, the value of `loss_scale`
+            in optimizer that you used need to be set to the same value as here. Default: 128.0.
+        drop_overflow_update (bool): Whether to execute optimizer if there is an overflow. If True, the optimizer will
+            not executed when overflow occurs. Default: True.
 
     Examples:
+        >>> from mindspore import Model, nn, FixedLossScaleManager
+        >>>
         >>> net = Net()
+        >>> #1) Drop the parameter update if there is an overflow
         >>> loss_scale_manager = FixedLossScaleManager()
-        >>> optim = Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
+        >>> optim = nn.Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
+        >>> model = Model(net, loss_scale_manager=loss_scale_manager, optimizer=optim)
+        >>>
+        >>> #2) Execute parameter update even if overflow occurs
+        >>> loss_scale = 1024
+        >>> loss_scale_manager = FixedLossScaleManager(loss_scale, False)
+        >>> optim = nn.Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9, loss_scale=loss_scale)
         >>> model = Model(net, loss_scale_manager=loss_scale_manager, optimizer=optim)
     """
     def __init__(self, loss_scale=128.0, drop_overflow_update=True):
@@ -87,9 +99,12 @@ class DynamicLossScaleManager(LossScaleManager):
         scale_window (int): Maximum continuous normal steps when there is no overflow. Default: 2000.
 
     Examples:
+        >>> from mindspore import Model, nn
+        >>> from mindspore.train.loss_scale_manager import DynamicLossScaleManager
+        >>>
         >>> net = Net()
         >>> loss_scale_manager = DynamicLossScaleManager()
-        >>> optim = Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
+        >>> optim = nn.Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
         >>> model = Model(net, loss_scale_manager=loss_scale_manager, optimizer=optim)
     """
     def __init__(self,

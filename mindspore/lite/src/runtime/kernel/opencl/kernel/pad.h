@@ -29,8 +29,8 @@ namespace mindspore::kernel {
 class PadOpenCLKernel : public OpenCLKernel {
  public:
   PadOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                  const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs), param_(reinterpret_cast<PadParameter *>(op_parameter_)) {}
+                  const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : OpenCLKernel(parameter, inputs, outputs, ctx), param_(reinterpret_cast<PadParameter *>(op_parameter_)) {}
   ~PadOpenCLKernel() override = default;
 
   int CheckSpecs() override;

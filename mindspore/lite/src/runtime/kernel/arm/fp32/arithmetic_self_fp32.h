@@ -22,6 +22,7 @@
 using mindspore::schema::PrimitiveType_Abs;
 using mindspore::schema::PrimitiveType_Ceil;
 using mindspore::schema::PrimitiveType_Cos;
+using mindspore::schema::PrimitiveType_Erf;
 using mindspore::schema::PrimitiveType_Floor;
 using mindspore::schema::PrimitiveType_Log;
 using mindspore::schema::PrimitiveType_LogicalNot;
@@ -39,9 +40,8 @@ typedef int (*ArithmeticSelfBoolFunc)(const bool *input, bool *output, const int
 class ArithmeticSelfCPUKernel : public LiteKernel {
  public:
   explicit ArithmeticSelfCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                                   const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     func_ = GetArithmeticSelfFun(parameter->type_);
     func_bool_ = GetArithmeticSelfBoolFun(parameter->type_);
   }

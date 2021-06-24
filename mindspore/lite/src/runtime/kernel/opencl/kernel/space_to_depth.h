@@ -21,14 +21,12 @@
 #include <string>
 #include "src/lite_kernel.h"
 #include "src/runtime/kernel/opencl/opencl_kernel.h"
-#include "nnacl/fp32/space_to_depth_fp32.h"
+#include "nnacl/space_to_depth_parameter.h"
 
 namespace mindspore::kernel {
 class SpaceToDepthOpenCLKernel : public OpenCLKernel {
  public:
-  SpaceToDepthOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                           const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
   ~SpaceToDepthOpenCLKernel() override = default;
 
   int Run() override;
@@ -38,8 +36,8 @@ class SpaceToDepthOpenCLKernel : public OpenCLKernel {
   void SetGlobalLocal() override;
 
  private:
-  GpuTensorInfo in_shape_ = GpuTensorInfo(nullptr);
-  GpuTensorInfo out_shape_ = GpuTensorInfo(nullptr);
+  GpuTensorInfo in_shape_;
+  GpuTensorInfo out_shape_;
 };
 }  // namespace mindspore::kernel
 

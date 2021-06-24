@@ -20,6 +20,8 @@
 #include <set>
 #include "src/tensor.h"
 #include "src/common/utils.h"
+#include "src/runtime/infer_manager.h"
+#include "src/common/version_manager.h"
 
 namespace mindspore::kernel {
 using mindspore::lite::RET_ERROR;
@@ -87,10 +89,10 @@ int LiteKernel::FreeInWorkTensor() const {
 
 int LiteKernel::PreProcess() {
   if (!InferShapeDone()) {
-    (const_cast<mindspore::lite::PrimitiveC *>(primitive_))->set_infer_flag(true);
-    auto ret = (const_cast<mindspore::lite::PrimitiveC *>(primitive_))->InferShape(in_tensors_, out_tensors_);
+    op_parameter_->infer_flag_ = true;
+    auto ret = lite::KernelInferShape(in_tensors_, &out_tensors_, op_parameter_);
     if (ret != 0) {
-      (const_cast<mindspore::lite::PrimitiveC *>(primitive_))->set_infer_flag(false);
+      op_parameter_->infer_flag_ = false;
       MS_LOG(ERROR) << "InferShape fail!";
       return ret;
     }
@@ -103,7 +105,10 @@ int LiteKernel::PreProcess() {
 
   for (auto *output : this->out_tensors()) {
     MS_ASSERT(output != nullptr);
-    if (output->ElementsNum() >= lite::MAX_MALLOC_SIZE / static_cast<int>(sizeof(int64_t))) {
+    if (desc_.data_type == kNumberTypeFloat16 && output->data_type() == kNumberTypeFloat32) {
+      output->set_data_type(kNumberTypeFloat16);
+    }
+    if (output->ElementsNum() >= MAX_MALLOC_SIZE / static_cast<int>(sizeof(int64_t))) {
       MS_LOG(ERROR) << "The size of output tensor is too big";
       return RET_ERROR;
     }
@@ -145,15 +150,27 @@ int LiteKernel::Run(const KernelCallBack &before, const KernelCallBack &after) {
       MS_LOG(WARNING) << "run kernel before_callback failed, name: " << this->name_;
     }
   }
-  auto ret = Run();
-  if (RET_OK != ret) {
-    MS_LOG(ERROR) << "run kernel failed, name: " << this->name_;
-    return ret;
+  // Support ZeroShape
+  size_t zero_shape_num = 0;
+  for (auto tensor : this->out_tensors_) {
+    for (size_t i = 0; i < tensor->shape().size(); i++) {
+      if (tensor->shape()[i] == 0) {
+        zero_shape_num++;
+        break;
+      }
+    }
+  }
+  if (zero_shape_num != this->out_tensors_.size()) {
+    auto ret = Run();
+    if (RET_OK != ret) {
+      MS_LOG(ERROR) << "run kernel failed, name: " << this->name_;
+      return ret;
+    }
   }
   if (after != nullptr) {
     if (!after(TensorVectorCast(this->in_tensors_), TensorVectorCast(this->out_tensors_),
                {this->name_, this->type_str()})) {
-      MS_LOG(ERROR) << "run kernel after_callback failed, name: " << this->name_;
+      MS_LOG(WARNING) << "run kernel after_callback failed, name: " << this->name_;
     }
   }
   return RET_OK;
@@ -303,23 +320,24 @@ std::vector<lite::Tensor *> LiteKernelUtil::SubgraphOutputTensors(const std::vec
   for (const auto &output_kernel : output_nodes) {
     auto &outer_out_kernels = output_kernel->out_kernels();
     auto &out_kernel_out_tensors = output_kernel->out_tensors();
-    if (outer_out_kernels.empty()) {
-      for (auto out_kernel_out_tensor : out_kernel_out_tensors) {
+    for (auto out_kernel_out_tensor : out_kernel_out_tensors) {
+      if (out_kernel_out_tensor->IsGraphOutput()) {
         output_tensors.insert(out_kernel_out_tensor);
       }
-      continue;
     }
-    for (auto outer_out_kernel : outer_out_kernels) {
-      auto iter = std::find(kernels.begin(), kernels.end(), outer_out_kernel);
-      if (iter != kernels.end()) {
-        continue;
-      }
-      auto &outer_out_kernel_in_tensors = outer_out_kernel->in_tensors();
-      for (auto out_kernel_out_tensor : out_kernel_out_tensors) {
-        auto outer_out_kernel_in_tensors_iter =
-          std::find(outer_out_kernel_in_tensors.begin(), outer_out_kernel_in_tensors.end(), out_kernel_out_tensor);
-        if (outer_out_kernel_in_tensors_iter != outer_out_kernel_in_tensors.end()) {
-          output_tensors.insert(out_kernel_out_tensor);
+    if (!outer_out_kernels.empty()) {
+      for (auto outer_out_kernel : outer_out_kernels) {
+        auto iter = std::find(kernels.begin(), kernels.end(), outer_out_kernel);
+        if (iter != kernels.end()) {
+          continue;
+        }
+        auto &outer_out_kernel_in_tensors = outer_out_kernel->in_tensors();
+        for (auto out_kernel_out_tensor : out_kernel_out_tensors) {
+          auto outer_out_kernel_in_tensors_iter =
+            std::find(outer_out_kernel_in_tensors.begin(), outer_out_kernel_in_tensors.end(), out_kernel_out_tensor);
+          if (outer_out_kernel_in_tensors_iter != outer_out_kernel_in_tensors.end()) {
+            output_tensors.insert(out_kernel_out_tensor);
+          }
         }
       }
     }
@@ -365,7 +383,7 @@ int LiteKernelUtil::TopologicalSortKernels(std::vector<kernel::LiteKernel *> *ke
   return RET_OK;
 }
 
-void LiteKernelUtil::InitTensorInitRefCount(std::vector<kernel::LiteKernel *> &kernels) {
+void LiteKernelUtil::InitTensorInitRefCount(const std::vector<kernel::LiteKernel *> &kernels) {
   for (auto *kernel : kernels) {
     kernel->InitOutTensorInitRefCount();
   }

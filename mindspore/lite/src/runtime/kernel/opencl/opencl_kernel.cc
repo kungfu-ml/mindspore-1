@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
+#include <mindspore/lite/src/runtime/infer_manager.h>
 #include "src/runtime/kernel/opencl/opencl_kernel.h"
-#include "src/runtime/kernel/arm/base/dequant.h"
+#include "mindspore/lite/src/dequant.h"
 
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
+using mindspore::lite::opencl::ImageSize;
 
 namespace mindspore::kernel {
 
@@ -60,19 +62,42 @@ int OpenCLKernel::AlignGlobalLocal(const std::vector<size_t> &global, const std:
   return RET_OK;
 }
 
-int OpenCLKernel::GetImageSize(size_t idx, std::vector<size_t> *img_size) {
+int OpenCLKernel::GetImageSize(size_t idx, lite::opencl::ImageSize *img_size) {
   MS_ASSERT(img_size);
   if (idx >= out_tensors_.size()) {
     return RET_ERROR;
   }
   auto img_info = GpuTensorInfo(out_tensors_[idx]);
-  size_t img_dtype = ocl_runtime_->GetFp16Enable() ? CL_HALF_FLOAT : CL_FLOAT;
+  size_t img_dtype = CL_FLOAT;
+  switch (out_tensors_[idx]->data_type()) {
+    case kNumberTypeFloat32:
+    case kNumberTypeInt32:
+    case kNumberTypeUInt32: {
+      img_dtype = CL_FLOAT;
+      break;
+    }
+    case kNumberTypeFloat16:
+    case kNumberTypeInt16:
+    case kNumberTypeUInt16: {
+      img_dtype = CL_HALF_FLOAT;
+      break;
+    }
+    case kNumberTypeInt8:
+    case kNumberTypeUInt8: {
+      img_dtype = CL_UNSIGNED_INT8;
+      break;
+    }
+    default: {
+      MS_LOG(WARNING) << "Unsupported data_type " << out_tensors_[idx]->data_type();
+      return RET_ERROR;
+    }
+  }
   *img_size = {img_info.width, img_info.height, img_dtype};
   return RET_OK;
 }
 
 void OpenCLKernel::PrintOutput(int print_num, const std::string &out_file) {
-  printf("%-30s", name().c_str());
+  printf("%-30s ", name().c_str());
   if (out_tensors().empty()) {
     return;
   }
@@ -109,7 +134,9 @@ void OpenCLKernel::PrintOutput(int print_num, const std::string &out_file) {
 
   auto total_num = mem_type == lite::opencl::MemType::BUF ? img_info.ElementsNum : img_info.ElementsC4Num;
   for (int i = 0; i < print_num && i < total_num; ++i) {
-    if (tensor->data_type() == kNumberTypeFloat16) {
+    if (tensor->data_type() == kNumberTypeInt32) {
+      printf("%d %7d | ", i, reinterpret_cast<int32_t *>(data.data())[i]);
+    } else if (tensor->data_type() == kNumberTypeFloat16) {
       printf("%d %7.3f | ", i, reinterpret_cast<float16_t *>(data.data())[i]);
     } else {
       printf("%d %7.3f | ", i, reinterpret_cast<float *>(data.data())[i]);
@@ -122,12 +149,83 @@ void OpenCLKernel::PrintOutput(int print_num, const std::string &out_file) {
   }
 }
 
+int OpenCLKernel::PreProcess() {
+  auto ret = RET_OK;
+  ret = ReSize();
+  if (ret != RET_OK) {
+    return ret;
+  }
+  auto allocator = ocl_runtime_->GetAllocator();
+  for (auto i = 0; i < out_tensors_.size(); ++i) {
+    auto *output = out_tensors_.at(i);
+    MS_ASSERT(output);
+    if (GetMemType() == lite::opencl::MemType::IMG) {
+      ImageSize img_size;
+      ret = GetImageSize(i, &img_size);
+      if (ret != RET_OK) {
+        MS_LOG(ERROR) << "GetImageSize failed";
+        return ret;
+      }
+      auto data_ptr = allocator->Malloc(img_size);
+      if (data_ptr == nullptr) {
+        MS_LOG(ERROR) << "Malloc data failed";
+        return RET_ERROR;
+      }
+      output->set_data(data_ptr);
+    } else {
+      ret = output->MallocData(allocator);
+      if (ret != RET_OK) {
+        MS_LOG(ERROR) << "MallocData failed";
+        return ret;
+      }
+    }
+    output->set_allocator(allocator);
+  }
+  return RET_OK;
+}
+
 int OpenCLKernel::PostProcess() {
   for (auto *output : this->out_tensors()) {
     MS_ASSERT(output != nullptr);
     output->ResetRefCount();
   }
   return FreeInWorkTensor();
+}
+
+int OpenCLKernel::InferShape() {
+  if (op_parameter_->infer_flag_) {
+    return RET_OK;
+  }
+  op_parameter_->infer_flag_ = true;
+  auto ret = lite::KernelInferShape(in_tensors_, &out_tensors_, op_parameter_);
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "InferShape failed, type: "
+                  << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(Type()));
+    op_parameter_->infer_flag_ = false;
+    return ret;
+  }
+  return RET_OK;
+}
+
+int OpenCLKernel::ReSize() {
+  if (op_parameter_->infer_flag_) {
+    return RET_OK;
+  }
+  auto ret = InferShape();
+  if (ret != RET_OK) {
+    return ret;
+  }
+  ret = CheckSpecs();
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "ReSize failed for check kernel specs!";
+    return ret;
+  }
+  ret = Prepare();
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "ReSize failed for kernel prepare!";
+    return ret;
+  }
+  return RET_OK;
 }
 
 std::vector<BaseTuningParameter> OpenCLKernel::GenerateTuningParam() {
@@ -189,8 +287,8 @@ int OpenCLKernel::Tune() {
   if (mode == lite::opencl::TuningMode::DEFAULT) {
     return RET_OK;
   }
-  static const std::set<int> FAST_MODE_OPS = {schema::PrimitiveType_Conv2D, schema::PrimitiveType_DepthwiseConv2D,
-                                              schema::PrimitiveType_DeConv2D};
+  static const std::set<int> FAST_MODE_OPS = {schema::PrimitiveType_Conv2DFusion,
+                                              schema::PrimitiveType_Conv2dTransposeFusion};
   if (mode == lite::opencl::TuningMode::FAST && FAST_MODE_OPS.find(op_parameter_->type_) == FAST_MODE_OPS.end()) {
     return RET_OK;
   }
@@ -251,6 +349,7 @@ std::set<size_t> OpenCLKernel::GenerateLocalByGlobal(size_t global_i) {
   }
   return local_;
 }
+
 int OpenCLKernel::DequantWeight() {
   bool is_fp16 = ocl_runtime_->GetFp16Enable();
   auto *weight_tensor = in_tensors_.at(kWeightIndex);
@@ -263,10 +362,10 @@ int OpenCLKernel::DequantWeight() {
     if (is_fp16) {
 #ifdef ENABLE_ARM64
       if (in_tensors_.at(kWeightIndex)->data_type() == kNumberTypeInt8) {
-        dequant_weight = kernel::DequantUtil::DequantData<int8_t, float16_t>(weight_tensor);
+        dequant_weight = lite::DequantUtil::DequantData<int8_t, float16_t>(weight_tensor);
         weight_tensor->set_data_type(kNumberTypeFloat16);
       } else if (in_tensors_.at(kWeightIndex)->data_type() == kNumberTypeInt16) {
-        dequant_weight = kernel::DequantUtil::DequantData<int16_t, float16_t>(weight_tensor);
+        dequant_weight = lite::DequantUtil::DequantData<int16_t, float16_t>(weight_tensor);
         weight_tensor->set_data_type(kNumberTypeFloat16);
       } else {
         set_flag = false;
@@ -276,10 +375,10 @@ int OpenCLKernel::DequantWeight() {
 #endif
     } else {
       if (in_tensors_.at(kWeightIndex)->data_type() == kNumberTypeInt8) {
-        dequant_weight = kernel::DequantUtil::DequantData<int8_t, float>(weight_tensor);
+        dequant_weight = lite::DequantUtil::DequantData<int8_t, float>(weight_tensor);
         weight_tensor->set_data_type(kNumberTypeFloat32);
       } else if (in_tensors_.at(kWeightIndex)->data_type() == kNumberTypeInt16) {
-        dequant_weight = kernel::DequantUtil::DequantData<int16_t, float>(weight_tensor);
+        dequant_weight = lite::DequantUtil::DequantData<int16_t, float>(weight_tensor);
         weight_tensor->set_data_type(kNumberTypeFloat32);
       } else {
         set_flag = false;
@@ -293,11 +392,28 @@ int OpenCLKernel::DequantWeight() {
   }
   return RET_OK;
 }
+
 void OpenCLKernel::FreeDequantedWeight() {
   auto *weight_tensor = in_tensors_.at(kWeightIndex);
   if (dequant_flag_) {
     free(weight_tensor->data_c());
     weight_tensor->set_data(restore_quant_data_);
   }
+}
+
+int OpenCLKernel::CheckSpecs() {
+  if (out_mem_type_ == lite::opencl::MemType::IMG) {
+    if (!GpuTensorInfo(out_tensors_[0]).IsImageSizeValid()) {
+      return RET_ERROR;
+    }
+  }
+  if (in_tensors_.size() > 0) {
+    if (in_tensors_[0]->data_type() != kNumberTypeFloat32 && in_tensors_[0]->data_type() != kNumberTypeFloat16 &&
+        in_tensors_[0]->data_type() != kNumberTypeInt32) {
+      MS_LOG(WARNING) << "Unsupported data type: " << in_tensors_[0]->data_type();
+      return RET_ERROR;
+    }
+  }
+  return RET_OK;
 }
 }  // namespace mindspore::kernel

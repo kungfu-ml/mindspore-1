@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,15 +35,6 @@ class Robustness(LabelSensitiveMetric):
             single label classification tasks, `nn.Softmax` is usually applied. As for multi-label classification tasks,
             `nn.Sigmoid` is usually be applied. Users can also pass their own customized `activation_fn` as long as
             when combining this function with network, the final output is the probability of the input.
-
-
-    Examples:
-        >>> from mindspore import nn
-        >>> from mindspore.explainer.benchmark import Robustness
-        >>> # Initialize a Robustness benchmarker passing num_labels of the dataset.
-        >>> num_labels = 10
-        >>> activation_fn = nn.Softmax()
-        >>> robustness = Robustness(num_labels, activation_fn)
     """
 
     def __init__(self, num_labels, activation_fn):
@@ -79,19 +70,25 @@ class Robustness(LabelSensitiveMetric):
         Examples:
             >>> import numpy as np
             >>> import mindspore as ms
+            >>> from mindspore import nn
             >>> from mindspore.explainer.explanation import Gradient
             >>> from mindspore.explainer.benchmark import Robustness
-            >>> from mindspore.train.serialization import load_checkpoint, load_param_into_net
-            >>> # prepare your network and load the trained checkpoint file, e.g., resnet50.
-            >>> network = resnet50(10)
-            >>> param_dict = load_checkpoint("resnet50.ckpt")
-            >>> load_param_into_net(network, param_dict)
+            >>>
+            >>> # Initialize a Robustness benchmarker passing num_labels of the dataset.
+            >>> num_labels = 10
+            >>> activation_fn = nn.Softmax()
+            >>> robustness = Robustness(num_labels, activation_fn)
+            >>>
+            >>> # The detail of LeNet5 is shown in model_zoo.official.cv.lenet.src.lenet.py
+            >>> net = LeNet5(10, num_channel=3)
             >>> # prepare your explainer to be evaluated, e.g., Gradient.
-            >>> gradient = Gradient(network)
-            >>> input_x = ms.Tensor(np.random.rand(1, 3, 224, 224), ms.float32)
+            >>> gradient = Gradient(net)
+            >>> input_x = ms.Tensor(np.random.rand(1, 3, 32, 32), ms.float32)
             >>> target_label = ms.Tensor([0], ms.int32)
             >>> # robustness is a Robustness instance
             >>> res = robustness.evaluate(gradient, input_x, target_label)
+            >>> print(res.shape)
+            (1,)
         """
 
         self._check_evaluate_param(explainer, inputs, targets, saliency)

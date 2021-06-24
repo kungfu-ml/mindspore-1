@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,6 +52,9 @@ class KernelBuildClient {
  public:
   // Send Finish request to server
   constexpr inline static auto kFinish = "FINISH";
+  constexpr inline static auto kAkgStart = "AKG/START";
+  constexpr inline static auto kAkgData = "AKG/DATA";
+  constexpr inline static auto kAkgWait = "AKG/WAIT";
   // Receive the response from server
   constexpr inline static auto kAck = "ACK";
   constexpr inline static auto kErr = "ERR";
@@ -124,6 +127,11 @@ class KernelBuildClient {
     return res;
   }
 
+  // Run AKG building.
+  bool AkgStart(int process_num, int wait_time);
+  bool AkgSendData(const std::vector<std::string> &jsons);
+  bool AkgWait();
+
  protected:
   KernelBuildClient() : init_(false), dp_(std::make_shared<DuplexPipe>()) {}
   virtual ~KernelBuildClient() = default;
@@ -193,12 +201,11 @@ class AscendKernelBuildClient : public KernelBuildClient {
 
   // Send building request to server
   constexpr inline static auto kContinue = "CONTINUE";  // More transactions to be continued
+  constexpr inline static auto kTbePre = "TBE/PRE";
   constexpr inline static auto kTbeStart = "TBE/START";
   constexpr inline static auto kTbeWait = "TBE/WAIT";
   constexpr inline static auto kTbeReset = "TBE/RESET";
-  constexpr inline static auto kAkgStart = "AKG/START";
-  constexpr inline static auto kAkgData = "AKG/DATA";
-  constexpr inline static auto kAkgWait = "AKG/WAIT";
+  constexpr inline static auto kTbeTune = "TBE/TUNE";
 
   // Send server info. query to server
   constexpr inline static auto kFormat = "FORMAT";
@@ -221,15 +228,9 @@ class AscendKernelBuildClient : public KernelBuildClient {
   bool CheckSupported(const std::string &json);
 
   // Run TBE building.
-  int TbeStart(const std::string &json);
+  int TbeStart(const std::string &json, const std::string &mode);
   bool TbeWait(int *task_id, std::string *task_result, std::string *pre_build_result);
   void TbeReset();
-
-  // Run AKG building.
-  bool AkgStart(int process_num, int wait_time);
-  bool AkgSendData(const std::vector<std::string> &jsons);
-  bool AkgWait();
-  bool AkgCompileSingle(const std::string json);
 
   AscendKernelBuildClient(const AscendKernelBuildClient &) = delete;
   AscendKernelBuildClient &operator=(const AscendKernelBuildClient &) = delete;
@@ -238,6 +239,7 @@ class AscendKernelBuildClient : public KernelBuildClient {
   AscendKernelBuildClient &operator=(AscendKernelBuildClient &&) = delete;
 
  private:
+  bool TbePre(const std::string &mode);
   AscendKernelBuildClient() { Open(); }
   ~AscendKernelBuildClient() override { Close(); }
 };

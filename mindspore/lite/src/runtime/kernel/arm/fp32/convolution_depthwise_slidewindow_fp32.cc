@@ -15,13 +15,9 @@
  */
 
 #include "src/runtime/kernel/arm/fp32/convolution_depthwise_slidewindow_fp32.h"
-#include "schema/model_generated.h"
-#include "src/kernel_registry.h"
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
 
-using mindspore::kernel::KERNEL_ARCH::kCPU;
-using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_INFER_INVALID;
 using mindspore::lite::RET_OK;
@@ -145,6 +141,11 @@ int ConvolutionDepthwiseSWCPUKernel::Run() {
     FreePackedInputOutput();
     return RET_ERROR;
   }
+
+  if (IsTrain() && is_trainable()) {
+    PackWeight();
+  }
+
   auto input_tensor = in_tensors_.at(kInputIndex);
   auto input_ptr = reinterpret_cast<float *>(input_tensor->MutableData());
 
@@ -183,4 +184,20 @@ void ConvolutionDepthwiseSWCPUKernel::FreePackedInputOutput() {
     packed_output_ = nullptr;
   }
 }
+
+void ConvolutionDepthwiseSWCPUKernel::PackWeight() {
+  auto weight_tensor = in_tensors_.at(kWeightIndex);
+  auto origin_weight = reinterpret_cast<float *>(weight_tensor->MutableData());
+  PackNCHWToNC4HW4Fp32(origin_weight, packed_weight_, 1, weight_tensor->Height() * weight_tensor->Width(),
+                       weight_tensor->Batch());
+}
+
+int ConvolutionDepthwiseSWCPUKernel::Eval() {
+  LiteKernel::Eval();
+  if (is_trainable()) {
+    PackWeight();
+  }
+  return RET_OK;
+}
+
 }  // namespace mindspore::kernel

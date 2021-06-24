@@ -17,6 +17,7 @@ import os
 import time
 import argparse
 import datetime
+import ast
 
 from mindspore.context import ParallelMode
 from mindspore.nn.optim.momentum import Momentum
@@ -52,13 +53,17 @@ parser.add_argument('--device_target', type=str, default='Ascend',
 
 # dataset related
 parser.add_argument('--data_dir', type=str, help='Train dataset directory.')
-parser.add_argument('--per_batch_size', default=8, type=int, help='Batch size for Training. Default: 32.')
+parser.add_argument('--per_batch_size', default=8, type=int, help='Batch size for Training. Default: 8.')
 
 # network related
 parser.add_argument('--pretrained_backbone', default='', type=str,
                     help='The ckpt file of CspDarkNet53. Default: "".')
 parser.add_argument('--resume_yolov4', default='', type=str,
                     help='The ckpt file of YOLOv4, which used to fine tune. Default: ""')
+parser.add_argument('--pretrained_checkpoint', default='', type=str,
+                    help='The ckpt file of YoloV4CspDarkNet53. Default: "".')
+parser.add_argument("--filter_weight", type=ast.literal_eval, default=False,
+                    help="Filter the last weight parameters, default is False.")
 
 # optimizer and lr related
 parser.add_argument('--lr_scheduler', default='cosine_annealing', type=str,
@@ -125,7 +130,7 @@ if args.is_distributed:
     args.rank = get_rank()
     args.group_size = get_group_size()
 
-# select for master rank save ckpt or all rank save, compatiable for model parallel
+# select for master rank save ckpt or all rank save, compatible for model parallel
 args.rank_save_ckpt_flag = 0
 if args.is_save_on_master:
     if args.rank == 0:
@@ -173,13 +178,13 @@ if __name__ == "__main__":
 
     network = YOLOV4CspDarkNet53(is_training=True)
     # default is kaiming-normal
+    config = ConfigYOLOV4CspDarkNet53()
+    args.checkpoint_filter_list = config.checkpoint_filter_list
     default_recurisive_init(network)
     load_yolov4_params(args, network)
 
     network = YoloWithLossCell(network)
     args.logger.info('finish get network')
-
-    config = ConfigYOLOV4CspDarkNet53()
 
     config.label_smooth = args.label_smooth
     config.label_smooth_factor = args.label_smooth_factor

@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,7 +58,7 @@ void AnalysisCache::set_value(const AnfNodeConfigPtr &conf, const EvalResultPtr 
   MS_LOG(DEBUG) << "AnalysisCache set for NodeConfig: " << conf->node()->DebugString()
                 << ", Context: " << conf->context()->ToString() << ", Value: " << result->abstract()->ToString()
                 << ", Pointer: " << result->abstract().get();
-  cache_[conf] = result;
+  analysis_cache_map_[conf] = result;
 
   // Set intermediate abstract value.
   if (IsIntermediateAbstract(result->abstract())) {
@@ -77,8 +77,8 @@ void AnalysisCache::set_value(const AnfNodeConfigPtr &conf, const EvalResultPtr 
 }
 
 EvalResultPtr AnalysisCache::GetValue(const AnfNodeConfigPtr &conf) {
-  auto value = cache_.find(conf);
-  if (value == cache_.end()) {
+  auto value = analysis_cache_map_.find(conf);
+  if (value == analysis_cache_map_.end()) {
     return nullptr;
   }
   return value->second;
@@ -90,12 +90,6 @@ std::size_t AnfNodeConfigHasher::operator()(const AnfNodeConfigPtr conf) const {
   std::size_t hash_value = conf->node()->hash();
   if (!conf->context()->IsDummyContext()) {
     hash_value = hash_combine(hash_value, std::hash<AnalysisContext *>{}(conf->context().get()));
-  }
-  if (conf->context() != nullptr && conf->context()->func_graph() != nullptr) {
-    MS_LOG(DEBUG) << "NodeConfigHasher Node: " << conf->node()->DebugString()
-                  << ", Graph: " << conf->context()->func_graph()->ToString() << " ### , hash value: " << hash_value;
-  } else {
-    MS_LOG(DEBUG) << "NodeConfigHasher Node: " << conf->node()->DebugString() << " ### , hash value: " << hash_value;
   }
   return hash_value;
 }
@@ -130,7 +124,7 @@ AnalysisResult AnalysisEngine::Run(const FuncGraphPtr &func_graph, const Abstrac
 
   AnalysisResult result;
   MS_EXCEPTION_IF_NULL(output_conf);
-  result.inferred = output_conf->GetEvaluatedValue();
+  result.inferred = output_conf->ObtainEvalResult();
   result.context = root_context;
   return result;
 }
@@ -142,22 +136,24 @@ AnalysisContextPtr AnalysisEngine::Run(const FuncGraphPtr &func_graph, const Ana
   return eval->graph_context();
 }
 
-EvalResultPtr AnalysisEngine::GetEvaluatedValue(const AnfNodeConfigPtr &conf) {
+EvalResultPtr AnalysisEngine::ObtainEvalResultWithCache(const AnfNodeConfigPtr &conf) {
   MS_EXCEPTION_IF_NULL(conf);
-  auto value = cache_.GetValue(conf);
-  if (value != nullptr) {
-    MS_LOG(DEBUG) << "Evaluate cache hit for NodeConfig: " << conf->ToString() << ", Value: " << value->abstract().get()
-                  << ", " << value->abstract()->ToString();
-    return value;
+  EvalResultPtr result = analysis_cache_.GetValue(conf);
+  if (result != nullptr) {
+    MS_LOG(DEBUG) << "Evaluate cache hit for NodeConfig: " << conf->ToString()
+                  << ", Value: " << result->abstract().get() << ", " << result->abstract()->ToString();
+    return result;
   }
 
   MS_LOG(DEBUG) << "Evaluate cache miss for NodeConfig: " << conf->ToString();
-  value = Eval(conf);
-  if (value == nullptr) {
+  result = Eval(conf);
+  if (result == nullptr) {
     MS_LOG(EXCEPTION) << "Evaluate for NodeConfig " << conf->ToString() << " get nullptr";
   }
-  cache_.set_value(conf, value);
-  return value;
+  MS_LOG(DEBUG) << "Evaluate node on demond for NodeConfig: " << conf->ToString()
+                << ", result: " << result->abstract().get() << ", " << result->abstract()->ToString();
+  analysis_cache_.set_value(conf, result);
+  return result;
 }
 
 EvalResultPtr AnalysisEngine::Eval(const AnfNodeConfigPtr &conf) {
@@ -180,7 +176,8 @@ EvalResultPtr AnalysisEngine::Eval(const AnfNodeConfigPtr &conf) {
     eval_result = std::make_shared<EvalResult>(node->abstract(), std::make_shared<AttrValueMap>());
   } else if (node->isa<ValueNode>()) {
     auto value_node = node->cast<ValueNodePtr>();
-    eval_result = std::make_shared<EvalResult>(EvalValueNode(value_node, conf), nullptr);
+    auto abstract = EvalValueNode(value_node, conf);
+    eval_result = std::make_shared<EvalResult>(abstract, std::make_shared<AttrValueMap>());
   } else if (node->isa<CNode>()) {
     CheckNoStackInSameFuncGraph(conf);
     auto cnode = node->cast<CNodePtr>();
@@ -188,8 +185,8 @@ EvalResultPtr AnalysisEngine::Eval(const AnfNodeConfigPtr &conf) {
     eval_result = EvalCNode(cnode, conf);
     trace::TraceEvalCNodeLeave();
   } else {
-    MS_LOG(EXCEPTION) << "Illegal AnfNode for evaluating, " << node->DebugString()
-                      << (node->func_graph() != nullptr ? node->func_graph()->ToString() : "nullgraph")
+    MS_LOG(EXCEPTION) << "Illegal AnfNode for evaluating, node: " << node->DebugString()
+                      << ", fg: " << (node->func_graph() != nullptr ? node->func_graph()->ToString() : "nullgraph")
                       << ". NodeInfo: " << trace::GetDebugInfo(node->debug_info());
   }
 
@@ -267,9 +264,10 @@ EvalResultPtr AnalysisEngine::EvalCNode(const CNodePtr &cnode, const AnfNodeConf
   AnfNodeConfigPtr func_conf = MakeConfig(func_node, context);
   MS_EXCEPTION_IF_NULL(func_conf);
   // Keep it in a local variable, otherwise smart pointer will free it.
-  AbstractBasePtr maybe_func = func_conf->GetEvaluatedValue()->abstract();
+  auto maybe_func_eval_result = func_conf->ObtainEvalResult();
+  AbstractBasePtr maybe_func = maybe_func_eval_result->abstract();
   if (maybe_func == nullptr) {
-    MS_LOG(EXCEPTION) << "func_conf.GetEvaluatedValue() return null, func_conf: " << func_conf->ToString()
+    MS_LOG(EXCEPTION) << "No abstract, func_conf: " << func_conf->ToString()
                       << " NodeInfo: " << trace::GetDebugInfo(cnode->debug_info());
   }
   if (maybe_func->BuildType()->type_id() == kObjectTypeUndeterminedType) {
@@ -278,8 +276,7 @@ EvalResultPtr AnalysisEngine::EvalCNode(const CNodePtr &cnode, const AnfNodeConf
   }
   AbstractFunctionPtr func = dyn_cast<AbstractFunction>(maybe_func);
   if (func == nullptr) {
-    MS_LOG(EXCEPTION) << "func_conf.GetEvaluatedValue() return not AbstractFunction: " << maybe_func->ToString()
-                      << ", func_conf: " << func_conf->ToString()
+    MS_LOG(EXCEPTION) << "Not AbstractFunction: " << maybe_func->ToString() << ", func_conf: " << func_conf->ToString()
                       << " NodeInfo: " << trace::GetDebugInfo(cnode->debug_info());
   }
 
@@ -298,7 +295,8 @@ EvalResultPtr AnalysisEngine::EvalCNode(const CNodePtr &cnode, const AnfNodeConf
   };
   func->Visit(build_evaluator);
 
-  return ExecuteEvaluators(infs, conf, args_conf_list);
+  auto eval_result = ExecuteEvaluators(infs, conf, args_conf_list);
+  return eval_result;
 }
 
 EvalResultPtr AnalysisEngine::Execute(const AbstractFunctionPtr &func, const AbstractBasePtrList &args_spec_list) {
@@ -319,25 +317,25 @@ void AnalysisEngine::ClearEvaluatorCache() {
   for (std::pair<AbstractFunctionPtr, EvaluatorPtr> element : constructors_) {
     EvaluatorPtr evaluator = element.second;
     MS_EXCEPTION_IF_NULL(evaluator);
-    MS_EXCEPTION_IF_NULL(evaluator->cache());
-    evaluator->cache()->clear();
+    MS_EXCEPTION_IF_NULL(evaluator->evaluator_cache_map());
+    evaluator->evaluator_cache_map()->clear();
   }
   for (auto &element : prim_constructors_) {
     EvaluatorPtr evaluator = element.second;
     MS_EXCEPTION_IF_NULL(evaluator);
-    MS_EXCEPTION_IF_NULL(evaluator->cache());
-    evaluator->cache()->clear();
+    MS_EXCEPTION_IF_NULL(evaluator->evaluator_cache_map());
+    evaluator->evaluator_cache_map()->clear();
   }
   for (auto &element : prim_py_evaluators_) {
     EvaluatorPtr evaluator = element.second;
     MS_EXCEPTION_IF_NULL(evaluator);
-    MS_EXCEPTION_IF_NULL(evaluator->cache());
-    evaluator->cache()->clear();
+    MS_EXCEPTION_IF_NULL(evaluator->evaluator_cache_map());
+    evaluator->evaluator_cache_map()->clear();
   }
 }
 
 void AnalysisEngine::Clear() {
-  cache_.Clear();
+  analysis_cache_.Clear();
   anfnode_config_map_.clear();
   eval_trace_.clear();
   constructors_.clear();
@@ -359,6 +357,13 @@ EvaluatorPtr GetPrimEvaluator(const PrimitivePtr &prim, const AnalysisEnginePtr 
     return std::make_shared<MixedPrecisionCastEvaluator>(prim);
   }
 
+  // find prim infer function in the prim function map return a standard evaluator
+  StandardPrimitiveEvalImpl eval_impl = GetPrimitiveInferImpl(prim);
+  if (eval_impl != nullptr) {
+    return std::make_shared<StandardPrimEvaluator>(prim, eval_impl);
+  }
+
+  // use python infer function if the infer function not founded in the map return a python evaluator
   EvaluatorPtr evaluator = nullptr;
   if (prim->HasPyEvaluator()) {
     auto prim_py = dyn_cast<PrimitivePy>(prim);
@@ -378,17 +383,7 @@ EvaluatorPtr GetPrimEvaluator(const PrimitivePtr &prim, const AnalysisEnginePtr 
     MS_LOG(EXCEPTION) << "The primitive with python evaluator should be a python primitive.";
   }
 
-  if (prim->isa<PrimitivePy>() || prim->HasAttr()) {
-    if (engine == nullptr) {
-      (void)GetPrimEvaluatorConstructors();
-    }
-    // If a primitive may have attr, try to create a new evaluator.
-    StandardPrimitiveEvalImpl eval_impl = GetPrimitiveInferImpl(prim);
-    if (eval_impl != nullptr) {
-      return std::make_shared<StandardPrimEvaluator>(prim, eval_impl);
-    }
-  }
-
+  // return a default evaluator
   if (engine == nullptr) {
     // If engine is nullptr, get constructor from default.
     const PrimEvaluatorMap &prim_evaluator_map = GetPrimEvaluatorConstructors();
@@ -534,6 +529,33 @@ EvaluatorPtr AnalysisEngine::GetEvaluatorFor(const AbstractFunctionPtr &func) {
   return tracked_eval;
 }
 
+EvalResultPtr AnalysisEngine::ForwardConfig(const AnfNodeConfigPtr &orig_conf, const AnfNodeConfigPtr new_conf) {
+  // Use anfnode_config_map_[orig_conf] = new_conf will require AnfNodeConfig provide copy constructor.
+  (void)anfnode_config_map_.emplace(orig_conf, new_conf);
+  MS_LOG(DEBUG) << "Forward orig_conf: " << orig_conf->node()->DebugString()
+                << ", to new_conf: " << new_conf->node()->DebugString();
+  if (orig_conf->node()->isa<CNode>()) {
+    auto old_cnode = orig_conf->node()->cast<CNodePtr>();
+    MS_EXCEPTION_IF_NULL(old_cnode);
+    if (new_conf->node()->isa<CNode>()) {
+      auto new_cnode = new_conf->node()->cast<CNodePtr>();
+      MS_EXCEPTION_IF_NULL(new_cnode);
+      if (old_cnode->func_graph() == new_cnode->func_graph()) {
+        MS_LOG(DEBUG) << "Try to remove forward node from order list, forward node: " << new_cnode->ToString()
+                      << ", as origin node should be in order list, origin_node: " << old_cnode->ToString();
+        old_cnode->func_graph()->EraseUnusedNodeInOrder(new_cnode);
+      } else {
+        MS_LOG(EXCEPTION) << "Forward orig_node to different func_graph, old_node: " << old_cnode->DebugString()
+                          << ", new_node: " << new_cnode->DebugString();
+      }
+    }
+  }
+  forward_count_++;
+  auto res = ObtainEvalResultWithCache(new_conf);
+  forward_count_--;
+  return res;
+}
+
 EvalResultPtr AnalysisEngine::ExecuteEvaluators(const std::vector<EvaluatorPtr> &evaluators,
                                                 const AnfNodeConfigPtr &out_conf, const ConfigPtrList &args_conf_list) {
   if (evaluators.size() == 1) {
@@ -569,7 +591,7 @@ EvaluatorPtr AnalysisEngine::HandleNestedRecursion(const std::vector<EvaluatorPt
   EvaluatorPtr latest_entry = eval;
   auto latest_entry_iter = eval_trace_.rbegin();
   for (auto r_it = eval_trace_.rbegin(); *r_it != *it;) {
-    auto it_temp = std::find(evaluators.begin(), evaluators.end(), r_it->first);
+    auto it_temp = std::find(evaluators.begin(), evaluators.end(), r_it->evaluator_);
     if (it_temp != evaluators.end()) {
       latest_entry = *it_temp;
       latest_entry_iter = r_it;
@@ -585,20 +607,21 @@ EvaluatorPtr AnalysisEngine::HandleNestedRecursion(const std::vector<EvaluatorPt
 
   bool has_undetermined = false;
   // Check whether sub loop has untraced undetermined evaluator.
-  std::set<std::pair<EvaluatorPtr, AbstractBasePtrList>> undetermined_evals;
+  std::unordered_set<EvaluatorArgs, EvaluatorArgsHasher, EvaluatorArgsEqual> undetermined_evals;
   for (auto r_it = eval_trace_.rbegin(); r_it != latest_entry_iter; r_it++) {
     undetermined_evals.insert(*r_it);
   }
   MS_LOG(DEBUG) << "undetermined_evals size(): " << undetermined_evals.size();
 
   for (auto u_eval : undetermined_evals) {
-    MS_LOG(DEBUG) << u_eval.first->ToString() << "check undetermined.";
-    auto &alternate_evaluator = multi_poss_[u_eval.first];
-    auto &eval_cache = alternate_evaluator->cache();
-    if ((!undetermined_evals.count(std::make_pair(alternate_evaluator, args_spec_list))) &&
+    MS_LOG(DEBUG) << u_eval.evaluator_->ToString() << "check undetermined.";
+    auto &alternate_evaluator = multi_poss_[u_eval.evaluator_];
+    auto &eval_cache = alternate_evaluator->evaluator_cache_map();
+    const auto &alt_eval_args = EvaluatorArgs(alternate_evaluator, args_spec_list);
+    if ((!undetermined_evals.count(alt_eval_args)) &&
         (((!continued_evals_.count(u_eval)) && (eval_cache->find(args_spec_list) != eval_cache->end())) ||
          (eval_cache->find(args_spec_list) == eval_cache->end()))) {
-      MS_LOG(DEBUG) << u_eval.first->ToString() << "has undetermined.";
+      MS_LOG(DEBUG) << u_eval.evaluator_->ToString() << "has undetermined.";
       has_undetermined = true;
       break;
     }
@@ -632,20 +655,18 @@ EvalResultPtr AnalysisEngine::ExecuteMultipleEvaluators(const std::vector<Evalua
                                                         const AnfNodeConfigPtr &out_conf,
                                                         const ConfigPtrList &args_conf_list) {
   AbstractBasePtrList out_specs;
-  if (!multi_poss_.count(evaluators[0])) {
-    multi_poss_[evaluators[0]] = evaluators[1];
-    multi_poss_[evaluators[1]] = evaluators[0];
-  }
+  multi_poss_[evaluators[0]] = evaluators[1];
+  multi_poss_[evaluators[1]] = evaluators[0];
   AbstractBasePtrList args_spec_list;
   (void)std::transform(args_conf_list.begin(), args_conf_list.end(), std::back_inserter(args_spec_list),
                        [](const ConfigPtr &conf) -> AbstractBasePtr {
                          MS_EXCEPTION_IF_NULL(conf);
-                         return conf->GetEvaluatedValue()->abstract();
+                         return conf->ObtainEvalResult()->abstract();
                        });
   for (auto eval : evaluators) {
     SetUndeterminedFlag(eval);
 
-    auto current_inf = std::make_pair(eval, args_spec_list);
+    const auto current_inf = EvaluatorArgs(eval, args_spec_list);
     MS_LOG(DEBUG) << "Check Evaluator " << eval->ToString();
     // If current evaluator is under tracing, then skip current evaluator to avoid recursively evaluating.
     auto it = std::find(eval_trace_.rbegin(), eval_trace_.rend(), current_inf);
@@ -663,13 +684,13 @@ EvalResultPtr AnalysisEngine::ExecuteMultipleEvaluators(const std::vector<Evalua
       bool continue_flag = false;
       auto latest_entry = HandleNestedRecursion(evaluators, eval, args_spec_list, it, &continue_flag);
       if (continue_flag) {
-        MS_LOG(DEBUG) << "continued_evals_ add " << current_inf.first.get() << current_inf.first->ToString();
+        MS_LOG(DEBUG) << "continued_evals_ add " << current_inf.evaluator_.get() << current_inf.evaluator_->ToString();
         continued_evals_.insert(current_inf);
         continue;
       }
 
       // Try to travel the latest undetermined.
-      if (latest_entry != eval_trace_.rbegin()->first) {
+      if (latest_entry != eval_trace_.rbegin()->evaluator_) {
         MS_LOG(DEBUG) << "Direct Run Evaluator " << eval.get() << "----" << eval->ToString();
         auto eval_result = latest_entry->Run(shared_from_this(), args_conf_list, out_conf);
         MS_EXCEPTION_IF_NULL(eval_result->abstract());
@@ -683,9 +704,9 @@ EvalResultPtr AnalysisEngine::ExecuteMultipleEvaluators(const std::vector<Evalua
   return ProcessEvalResults(out_specs);
 }
 
-EvalResultPtr AnfNodeConfig::GetEvaluatedValue() {
+EvalResultPtr AnfNodeConfig::ObtainEvalResult() {
   AnfNodeConfigPtr self = shared_from_base<AnfNodeConfig>();
-  return engine_.lock()->GetEvaluatedValue(self);
+  return engine_.lock()->ObtainEvalResultWithCache(self);
 }
 
 abstract::AbstractBasePtr MakeAbstractClosure(const FuncGraphPtr &func_graph,
@@ -751,17 +772,6 @@ EvalResultPtr EvalOnePrim(const PrimitivePtr &primitive, const AbstractBasePtrLi
   auto trivial_evaluator = dyn_cast<TrivialPrimEvaluator>(evaluator);
   auto eval_result = trivial_evaluator->EvalPrim(nullptr, arg_specs);
   return eval_result;
-}
-
-AbstractBasePtr CppInferShape(const PrimitivePtr &prim, const AbstractBasePtrList &args_spec_list) {
-  MS_EXCEPTION_IF_NULL(prim);
-  auto &prim_eval_implement_map = GetPrimitiveToEvalImplMap();
-  auto ret = prim_eval_implement_map.find(prim);
-  if (ret == prim_eval_implement_map.end()) {
-    MS_LOG(EXCEPTION) << "Get infer shape function failed, primitive name:" << prim->name()
-                      << " primitive type:" << prim->type_name();
-  }
-  return ret->second.impl_(nullptr, prim, args_spec_list);
 }
 }  // namespace abstract
 }  // namespace mindspore

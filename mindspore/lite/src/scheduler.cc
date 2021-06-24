@@ -21,15 +21,19 @@
 #include <vector>
 #include <algorithm>
 #include "src/tensorlist.h"
-#include "src/ops/partial.h"
 #include "include/errorcode.h"
 #include "src/common/graph_util.h"
 #include "src/common/utils.h"
 #include "src/kernel_registry.h"
 #include "src/sub_graph_kernel.h"
-#if SUPPORT_GPU
+#include "src/ops/populate/populate_register.h"
+#include "src/common/version_manager.h"
+#include "src/common/prim_util.h"
+#include "src/runtime/infer_manager.h"
+#include "src/dequant.h"
+#if GPU_OPENCL
 #include "src/runtime/kernel/opencl/opencl_subgraph.h"
-#include "src/runtime/opencl/opencl_runtime.h"
+#include "src/runtime/gpu/opencl/opencl_runtime.h"
 #endif
 #if SUPPORT_NPU
 #include "src/runtime/agent/npu/subgraph_npu_kernel.h"
@@ -43,7 +47,9 @@ namespace mindspore::lite {
 using kernel::KERNEL_ARCH::kCPU;
 using kernel::KERNEL_ARCH::kGPU;
 using kernel::KERNEL_ARCH::kNPU;
+namespace {
 constexpr int kMainSubGraphIndex = 0;
+}  // namespace
 
 int Scheduler::Schedule(std::vector<kernel::LiteKernel *> *dst_kernels) {
   if (src_model_ == nullptr) {
@@ -63,6 +69,7 @@ int Scheduler::Schedule(std::vector<kernel::LiteKernel *> *dst_kernels) {
     return ret;
   }
   ret = ScheduleSubGraphToKernels(kMainSubGraphIndex, dst_kernels, nullptr, nullptr);
+  op_parameters_.clear();
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "Schedule main subgraph to kernels failed.";
     return ret;
@@ -103,7 +110,7 @@ int Scheduler::InferNodeShape(const lite::Model::Node *node, bool *infer_shape_i
   MS_ASSERT(infer_shape_interrupt != nullptr);
   auto primitive = node->primitive_;
   MS_ASSERT(primitive != nullptr);
-  if (primitive->Type() == schema::PrimitiveType_Partial) {
+  if (IsPartialNode(primitive)) {
     return InferPartialShape(node, infer_shape_interrupt);
   }
   std::vector<Tensor *> inputs;
@@ -116,10 +123,25 @@ int Scheduler::InferNodeShape(const lite::Model::Node *node, bool *infer_shape_i
   if (!infer_valid) {
     *infer_shape_interrupt = true;
   }
-  primitive->set_infer_flag(!(*infer_shape_interrupt));
-  auto ret = primitive->InferShape(inputs, outputs);
+  int schema_version = VersionManager::GetInstance()->GetSchemaVersion();
+  auto parame_gen =
+    PopulateRegistry::GetInstance()->GetParameterCreator(GetPrimitiveType(node->primitive_), schema_version);
+  if (parame_gen == nullptr) {
+    MS_LOG(ERROR) << "parameter generator is nullptr.";
+    return RET_NULL_PTR;
+  }
+  auto parameter = parame_gen(primitive);
+  if (parameter == nullptr) {
+    MS_LOG(ERROR) << "PopulateParameter return nullptr, type: " << PrimitiveTypeName(GetPrimitiveType(primitive));
+    return RET_ERROR;
+  }
+  parameter->quant_type_ = node->quant_type_;
+
+  op_parameters_[node->output_indices_.at(0)] = parameter;
+  parameter->infer_flag_ = !(*infer_shape_interrupt);
+  auto ret = KernelInferShape(inputs, &outputs, parameter);
   if (ret == RET_INFER_INVALID) {
-    primitive->set_infer_flag(false);
+    parameter->infer_flag_ = false;
     *infer_shape_interrupt = true;
   }
   if (ret == RET_OK) {
@@ -137,14 +159,11 @@ int Scheduler::InferPartialShape(const lite::Model::Node *node, bool *infer_shap
   MS_ASSERT(src_model_ != nullptr);
   MS_ASSERT(node != nullptr);
   MS_ASSERT(infer_shape_interrupt != nullptr);
-  auto primitive = node->primitive_;
-  MS_ASSERT(primitive != nullptr);
-  if (primitive->Type() != schema::PrimitiveType_Partial) {
+  if (!IsPartialNode(node->primitive_)) {
     MS_LOG(ERROR) << "Node is not a partial";
     return RET_PARAM_INVALID;
   }
-  auto partial_primitive = reinterpret_cast<lite::Partial *>(node->primitive_);
-  return InferSubGraphShape(partial_primitive->GetSubGraphIndex(), infer_shape_interrupt);
+  return InferSubGraphShape(GetPartialGraphIndex(node->primitive_), infer_shape_interrupt);
 }
 
 int Scheduler::InferSubGraphShape(size_t subgraph_index, bool *infer_shape_interrupt) {
@@ -161,16 +180,14 @@ int Scheduler::InferSubGraphShape(size_t subgraph_index, bool *infer_shape_inter
       MS_LOG(ERROR) << "Op " << node->name_ << " should exist in model!";
       return RET_ERROR;
     }
+    auto type = GetPrimitiveType(primitive);
     auto ret = InferNodeShape(node, infer_shape_interrupt);
     if (ret == RET_INFER_INVALID) {
-      MS_LOG(INFO) << "InferShape interrupted, name: " << node->name_
-                   << ", type: " << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(primitive->Type()))
+      MS_LOG(INFO) << "InferShape interrupted, name: " << node->name_ << ", type: " << PrimitiveTypeName(type)
                    << ", set infer flag to false.";
-      primitive->set_infer_flag(false);
       *infer_shape_interrupt = true;
     } else if (ret != RET_OK) {
-      MS_LOG(ERROR) << "InferShape failed, name: " << node->name_ << ", type: "
-                    << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(primitive->Type()));
+      MS_LOG(ERROR) << "InferShape failed, name: " << node->name_ << ", type: " << PrimitiveTypeName(type);
       return RET_INFER_ERR;
     }
   }
@@ -178,56 +195,122 @@ int Scheduler::InferSubGraphShape(size_t subgraph_index, bool *infer_shape_inter
 }
 
 kernel::LiteKernel *Scheduler::FindBackendKernel(const std::vector<Tensor *> &in_tensors,
-                                                 const std::vector<Tensor *> &out_tensors,
-                                                 const mindspore::lite::PrimitiveC *primitive,
-                                                 const Model::Node *node) {
-  MS_ASSERT(primitive != nullptr);
+                                                 const std::vector<Tensor *> &out_tensors, const Model::Node *node,
+                                                 TypeId prefer_data_type) {
+  kernel::LiteKernel *kernel = nullptr;
   TypeId data_type = GetFirstFp32Fp16OrInt8Type(in_tensors);
-  kernel::KernelKey desc{kCPU, data_type, static_cast<schema::PrimitiveType>(primitive->Type())};
+  OpParameter *op_parameter = op_parameters_[node->output_indices_.at(0)];
+  if (op_parameter == nullptr) {
+    MS_LOG(ERROR) << "Can not find OpParameter!type: " << PrimitiveTypeName(GetPrimitiveType(node->primitive_));
+    return nullptr;
+  }
+  bool infer_shape_interrupt = !op_parameter->infer_flag_;
+  bool need_restore = true;
+  if (node->quant_type_ == schema::QuantType_WeightQuant) {
+    data_type = kNumberTypeFloat32;
+  }
+  if (!IsPackedOp(op_parameter->type_)) {
+    need_restore = false;
+  }
+  kernel::KernelKey desc{kCPU, data_type, static_cast<schema::PrimitiveType>(op_parameter->type_)};
 #if SUPPORT_GPU
   if (context_->IsGpuEnabled()) {
-    kernel::KernelKey gpu_desc{kGPU, desc.data_type, desc.type};
-    auto *kernel = KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, primitive, context_, gpu_desc);
-    if (kernel != nullptr) {
-      MS_LOG(DEBUG) << "Get gpu op success: " << schema::EnumNamePrimitiveType(gpu_desc.type) << " " << node->name_;
+    // support more data type like int32
+    kernel::KernelKey gpu_desc{kGPU, kNumberTypeFloat32, desc.type};
+    if (context_->IsGpuFloat16Enabled()) gpu_desc.data_type = kNumberTypeFloat16;
+    auto ret =
+      KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, context_, gpu_desc, op_parameter, &kernel);
+    if (ret == RET_OK) {
+      MS_LOG(DEBUG) << "Get gpu op success: " << PrimitiveCurVersionTypeName(gpu_desc.type) << " " << node->name_;
       return kernel;
     } else {
-      MS_LOG(DEBUG) << "Get gpu op failed, scheduler to cpu: " << schema::EnumNamePrimitiveType(gpu_desc.type) << " "
+      MS_LOG(DEBUG) << "Get gpu op failed, scheduler to cpu: " << PrimitiveCurVersionTypeName(gpu_desc.type) << " "
                     << node->name_;
+      if (ret == RET_ERROR) {
+        ret = InferNodeShape(node, &infer_shape_interrupt);
+        if (ret == RET_INFER_INVALID || ret == RET_OK) {
+          op_parameter = op_parameters_[node->output_indices_.at(0)];
+        } else {
+          MS_LOG(ERROR) << "Try repeat infer fail: " << node->name_;
+          return nullptr;
+        }
+      }
     }
   }
 #endif
 #if SUPPORT_NPU
   if (context_->IsNpuEnabled()) {
+    if (desc.data_type == kNumberTypeFloat16) {
+      desc.data_type = kNumberTypeFloat32;
+    }
+    for (auto tensor : in_tensors) {
+      if (tensor->data_type() == kNumberTypeFloat16) {
+        tensor->set_data_type(kNumberTypeFloat32);
+      }
+    }
     kernel::KernelKey npu_desc{kNPU, desc.data_type, desc.type};
-    auto *kernel = KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, primitive, context_, npu_desc);
-    if (kernel != nullptr) {
-      MS_LOG(DEBUG) << "Get npu op success: " << schema::EnumNamePrimitiveType(npu_desc.type) << " " << node->name_;
+    auto ret =
+      KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, context_, npu_desc, op_parameter, &kernel);
+    if (ret == RET_OK) {
+      MS_LOG(DEBUG) << "Get npu op success: " << PrimitiveCurVersionTypeName(npu_desc.type) << " " << node->name_;
       return kernel;
     } else {
-      MS_LOG(DEBUG) << "Get npu op failed, scheduler to cpu: " << schema::EnumNamePrimitiveType(npu_desc.type) << " "
+      MS_LOG(DEBUG) << "Get npu op failed, scheduler to cpu: " << PrimitiveCurVersionTypeName(npu_desc.type) << " "
                     << node->name_;
+      if (ret == RET_ERROR) {
+        ret = InferNodeShape(node, &infer_shape_interrupt);
+        if (ret == RET_INFER_INVALID || ret == RET_OK) {
+          op_parameter = op_parameters_[node->output_indices_.at(0)];
+        } else {
+          MS_LOG(ERROR) << "Try repeat infer fail: " << node->name_;
+          return nullptr;
+        }
+      }
     }
   }
 #endif
-  if (mindspore::lite::IsSupportFloat16() &&
+  if ((prefer_data_type == kNumberTypeFloat16 || prefer_data_type == kTypeUnknown) &&
+      mindspore::lite::IsSupportFloat16() &&
       ((context_->IsCpuFloat16Enabled() && data_type == kNumberTypeFloat32) || data_type == kNumberTypeFloat16)) {
     kernel::KernelKey fp16_cpu_desc{desc.arch, kNumberTypeFloat16, desc.type};
-    auto *kernel =
-      KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, primitive, context_, fp16_cpu_desc);
-    if (kernel != nullptr) {
-      MS_LOG(DEBUG) << "Get fp16 op success: " << schema::EnumNamePrimitiveType(fp16_cpu_desc.type) << " "
-                    << node->name_;
+    auto tensor_origin_data_map =
+      DequantUtil::DequantTensor(op_parameter, in_tensors, fp16_cpu_desc.data_type, need_restore);
+    auto ret =
+      KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, context_, fp16_cpu_desc, op_parameter, &kernel);
+    DequantUtil::RestoreTensorData(tensor_origin_data_map);
+    if (ret == RET_OK) {
+      MS_LOG(DEBUG) << "Get fp16 op success: " << PrimitiveCurVersionTypeName(fp16_cpu_desc.type) << " " << node->name_;
       return kernel;
+    } else {
+      MS_LOG(DEBUG) << "Get fp16 op failed, scheduler to cpu: " << PrimitiveCurVersionTypeName(fp16_cpu_desc.type)
+                    << " " << node->name_;
+      if (ret == RET_ERROR) {
+        ret = InferNodeShape(node, &infer_shape_interrupt);
+        if (ret == RET_INFER_INVALID || ret == RET_OK) {
+          op_parameter = op_parameters_[node->output_indices_.at(0)];
+        } else {
+          MS_LOG(ERROR) << "Try repeat infer fail: " << node->name_;
+          return nullptr;
+        }
+      }
     }
   }
   if (data_type == kNumberTypeFloat16) {
     MS_LOG(DEBUG) << "Get fp16 op failed, back to fp32 op.";
     desc.data_type = kNumberTypeFloat32;
   }
-  auto *kernel = KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, primitive, context_, desc);
-  if (kernel != nullptr) {
-    return kernel;
+  if (prefer_data_type == kNumberTypeFloat32 || prefer_data_type == kTypeUnknown) {
+    auto tensor_origin_data_map = DequantUtil::DequantTensor(op_parameter, in_tensors, desc.data_type, need_restore);
+    auto ret = KernelRegistry::GetInstance()->GetKernel(in_tensors, out_tensors, context_, desc, op_parameter, &kernel);
+    DequantUtil::RestoreTensorData(tensor_origin_data_map);
+    if (ret == RET_OK) {
+      return kernel;
+    } else if (ret == RET_ERROR) {
+      ret = InferNodeShape(node, &infer_shape_interrupt);
+      if (!(ret == RET_INFER_INVALID || ret == RET_OK)) {
+        MS_LOG(ERROR) << "Try repeat infer fail: " << node->name_;
+      }
+    }
   }
   return nullptr;
 }
@@ -237,15 +320,14 @@ kernel::LiteKernel *Scheduler::SchedulePartialToKernel(const lite::Model::Node *
   MS_ASSERT(src_node != nullptr);
   auto *primitive = src_node->primitive_;
   MS_ASSERT(primitive != nullptr);
-  if (primitive->Type() != schema::PrimitiveType_Partial) {
+  if (!IsPartialNode(primitive)) {
     return nullptr;
   }
-  auto partial_primitive = reinterpret_cast<lite::Partial *>(primitive);
-  auto sub_graph_index = partial_primitive->GetSubGraphIndex();
+  auto sub_graph_index = GetPartialGraphIndex(src_node->primitive_);
   std::vector<kernel::LiteKernel *> sub_kernels;
   std::vector<lite::Tensor *> in_tensors;
   std::vector<lite::Tensor *> out_tensors;
-  auto ret = ScheduleSubGraphToKernels(sub_graph_index, &sub_kernels, &in_tensors, &out_tensors);
+  auto ret = ScheduleSubGraphToKernels(sub_graph_index, &sub_kernels, &in_tensors, &out_tensors, kNumberTypeFloat32);
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "Schedule partial failed, name: " << src_node->name_;
     return nullptr;
@@ -256,16 +338,14 @@ kernel::LiteKernel *Scheduler::SchedulePartialToKernel(const lite::Model::Node *
   return subgraph;
 }
 
-kernel::LiteKernel *Scheduler::ScheduleNodeToKernel(const lite::Model::Node *src_node) {
-  auto *primitive = src_node->primitive_;
-  MS_ASSERT(primitive != nullptr);
+kernel::LiteKernel *Scheduler::ScheduleNodeToKernel(const lite::Model::Node *src_node, TypeId prefer_data_type) {
   std::vector<Tensor *> inputs;
   std::vector<Tensor *> outputs;
   FindNodeInoutTensors(*src_node, &inputs, &outputs);
-  auto *kernel = this->FindBackendKernel(inputs, outputs, primitive, src_node);
+  auto *kernel = this->FindBackendKernel(inputs, outputs, src_node, prefer_data_type);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "FindBackendKernel return nullptr, name: " << src_node->name_
-                  << ", type: " << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(primitive->Type()));
+                  << ", type: " << PrimitiveTypeName(GetPrimitiveType(src_node->primitive_));
     return nullptr;
   }
   SetKernelTensorDataType(kernel);
@@ -275,7 +355,7 @@ kernel::LiteKernel *Scheduler::ScheduleNodeToKernel(const lite::Model::Node *src
 
 int Scheduler::ScheduleSubGraphToKernels(size_t subgraph_index, std::vector<kernel::LiteKernel *> *dst_kernels,
                                          std::vector<lite::Tensor *> *in_tensors,
-                                         std::vector<lite::Tensor *> *out_tensors) {
+                                         std::vector<lite::Tensor *> *out_tensors, TypeId prefer_data_type) {
   MS_ASSERT(src_model_ != nullptr);
   MS_ASSERT(!src_model_->sub_graphs_.empty());
   MS_ASSERT(src_model_->sub_graphs_.size() > subgraph_index);
@@ -288,14 +368,15 @@ int Scheduler::ScheduleSubGraphToKernels(size_t subgraph_index, std::vector<kern
     auto *primitive = node->primitive_;
     MS_ASSERT(primitive != nullptr);
     kernel::LiteKernel *kernel = nullptr;
-    if (primitive->Type() == schema::PrimitiveType_Partial) {  // sub_graph
+    auto prim_type = GetPrimitiveType(primitive);
+    if (IsPartialNode(primitive)) {  // sub_graph
       kernel = SchedulePartialToKernel(node);
     } else {  // kernel
-      kernel = ScheduleNodeToKernel(node);
+      kernel = ScheduleNodeToKernel(node, prefer_data_type);
     }
     if (kernel == nullptr) {
-      MS_LOG(ERROR) << "FindBackendKernel return nullptr, name: " << node->name_ << ", type: "
-                    << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(primitive->Type()));
+      MS_LOG(ERROR) << "FindBackendKernel return nullptr, name: " << node->name_
+                    << ", type: " << PrimitiveTypeName(prim_type);
       return RET_ERROR;
     }
     kernel->set_is_model_output(IsContain(graph_output_node_indexes_, size_t(node_index)));
@@ -310,6 +391,38 @@ int Scheduler::ScheduleSubGraphToKernels(size_t subgraph_index, std::vector<kern
                    [&](const uint32_t index) { return this->src_tensors_->at(index); });
   }
   return RET_OK;
+}
+
+bool Scheduler::KernelFitCurrentSubGraph(const kernel::SubGraphType subgraph_type, const kernel::LiteKernel &kernel) {
+  switch (subgraph_type) {
+    case kernel::SubGraphType::kNotSubGraph:
+    case kernel::SubGraphType::kApuSubGraph:
+      return false;
+    case kernel::SubGraphType::kGpuSubGraph:
+      return kernel.desc().arch == kGPU;
+    case kernel::SubGraphType::kNpuSubGraph:
+      return kernel.desc().arch == kNPU;
+    case kernel::SubGraphType::kCpuFP16SubGraph: {
+      auto desc = kernel.desc();
+      if (desc.arch != kCPU) {
+        return false;
+      }
+      return (desc.data_type == kNumberTypeFloat16 || desc.data_type == kNumberTypeInt32 ||
+              desc.data_type == kNumberTypeInt || desc.data_type == kNumberTypeBool);
+    }
+    case kernel::SubGraphType::kCpuFP32SubGraph: {
+      auto desc = kernel.desc();
+      if (desc.arch != kCPU) {
+        return false;
+      }
+      return (desc.data_type == kNumberTypeFloat32 || desc.data_type == kNumberTypeFloat ||
+              desc.data_type == kNumberTypeInt8 || desc.data_type == kNumberTypeInt ||
+              desc.data_type == kNumberTypeInt32 || desc.data_type == kNumberTypeInt64 ||
+              desc.data_type == kNumberTypeUInt8 || desc.data_type == kNumberTypeBool);
+    }
+    default:
+      return false;
+  }
 }
 
 std::vector<kernel::LiteKernel *> Scheduler::FindAllSubGraphKernels(
@@ -448,7 +561,7 @@ kernel::SubGraphKernel *Scheduler::CreateSubGraphKernel(const std::vector<kernel
   std::vector<kernel::LiteKernel *> input_kernels = kernel::LiteKernelUtil::SubgraphInputNodes(kernels);
   std::vector<kernel::LiteKernel *> output_kernels = kernel::LiteKernelUtil::SubgraphOutputNodes(kernels);
   if (type == kernel::kGpuSubGraph) {
-#if SUPPORT_GPU
+#if GPU_OPENCL
     auto sub_kernel = new (std::nothrow)
       kernel::OpenCLSubGraph(input_tensors, output_tensors, input_kernels, output_kernels, kernels, context_);
     if (sub_kernel == nullptr) {
@@ -456,14 +569,16 @@ kernel::SubGraphKernel *Scheduler::CreateSubGraphKernel(const std::vector<kernel
       return nullptr;
     }
     return sub_kernel;
+#elif GPU_VULKAN
+    return nullptr;
 #else
     return nullptr;
 #endif
   }
   if (type == kernel::kNpuSubGraph) {
 #if SUPPORT_NPU
-    auto sub_kernel = new (std::nothrow)
-      kernel::SubGraphNpuKernel(input_tensors, output_tensors, input_kernels, output_kernels, kernels, context_);
+    auto sub_kernel = new (std::nothrow) kernel::SubGraphNpuKernel(input_tensors, output_tensors, input_kernels,
+                                                                   output_kernels, kernels, context_, npu_manager_);
     if (sub_kernel == nullptr) {
       MS_LOG(ERROR) << "NPU subgraph new failed.";
       return nullptr;
@@ -474,9 +589,14 @@ kernel::SubGraphKernel *Scheduler::CreateSubGraphKernel(const std::vector<kernel
 #endif
   }
   if (type == kernel::kCpuFP16SubGraph) {
+#ifdef ENABLE_FP16
     auto sub_kernel = new (std::nothrow)
       kernel::CpuFp16SubGraph(input_tensors, output_tensors, input_kernels, output_kernels, kernels, context_);
     return sub_kernel;
+#else
+    MS_LOG(ERROR) << "FP16 subgraph is not supported!";
+    return nullptr;
+#endif
   }
   if (type == kernel::kCpuFP32SubGraph) {
     auto sub_kernel = new (std::nothrow)
@@ -571,13 +691,14 @@ int Scheduler::RunPass(std::vector<kernel::LiteKernel *> *dst_kernels) {
     return RET_OK;
   }
   auto transform_pass = new NPUTransformPass(context_, dst_kernels, src_tensors_);
-  mindspore::lite::NPUPassManager::GetInstance()->AddPass(transform_pass);
+  MS_ASSERT(npu_pass_manager_ != nullptr);
+  npu_pass_manager_->AddPass(transform_pass);
   auto concat_format_pass = new NPUInsertTransformPass(context_, dst_kernels, src_tensors_);
-  mindspore::lite::NPUPassManager::GetInstance()->AddPass(concat_format_pass);
+  npu_pass_manager_->AddPass(concat_format_pass);
   auto fusion_pass = new NPUFusionPass(dst_kernels);
-  mindspore::lite::NPUPassManager::GetInstance()->AddPass(fusion_pass);
+  npu_pass_manager_->AddPass(fusion_pass);
 
-  ret = mindspore::lite::NPUPassManager::GetInstance()->Run();
+  ret = npu_pass_manager_->Run();
 #endif
   return ret;
 }

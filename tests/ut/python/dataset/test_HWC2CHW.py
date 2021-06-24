@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 Testing HWC2CHW op in DE
 """
 import numpy as np
+import pytest
 import mindspore.dataset as ds
 import mindspore.dataset.transforms.py_transforms
 import mindspore.dataset.vision.c_transforms as c_vision
@@ -27,6 +28,29 @@ GENERATE_GOLDEN = False
 
 DATA_DIR = ["../data/dataset/test_tf_file_3_images/train-0000-of-0001.data"]
 SCHEMA_DIR = "../data/dataset/test_tf_file_3_images/datasetSchema.json"
+
+
+def test_HWC2CHW_callable():
+    """
+    Test HWC2CHW is callable
+    """
+    logger.info("Test HWC2CHW callable")
+    img = np.zeros([50, 50, 3])
+    assert img.shape == (50, 50, 3)
+
+    # test one tensor
+    img1 = c_vision.HWC2CHW()(img)
+    assert img1.shape == (3, 50, 50)
+
+    # test input multiple tensors
+    with pytest.raises(RuntimeError) as info:
+        imgs = [img, img]
+        _ = c_vision.HWC2CHW()(*imgs)
+    assert "The op is OneToOne, can only accept one tensor as input." in str(info.value)
+
+    with pytest.raises(RuntimeError) as info:
+        _ = c_vision.HWC2CHW()(img, img)
+    assert "The op is OneToOne, can only accept one tensor as input." in str(info.value)
 
 
 def test_HWC2CHW(plot=False):
@@ -122,6 +146,7 @@ def test_HWC2CHW_comp(plot=False):
 
 
 if __name__ == '__main__':
+    test_HWC2CHW_callable()
     test_HWC2CHW(True)
     test_HWC2CHW_md5()
     test_HWC2CHW_comp(True)

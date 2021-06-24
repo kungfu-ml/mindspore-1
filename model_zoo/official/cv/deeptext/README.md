@@ -20,7 +20,7 @@
 
 # [DeepText Description](#contents)
 
-DeepText is a convolutional neural network architecture for text detection in non-specific scenarios. The DeepText system is based on the elegant framwork of Faster R-CNN. This idea was proposed in the paper "DeepText: A new approach for text proposal generation and text detection in natural images.", published in 2017.
+DeepText is a convolutional neural network architecture for text detection in non-specific scenarios. The DeepText system is based on the elegant framework of Faster R-CNN. This idea was proposed in the paper "DeepText: A new approach for text proposal generation and text detection in natural images.", published in 2017.
 
 [Paper](https://arxiv.org/pdf/1605.07314v1.pdf) Zhuoyao Zhong, Lianwen Jin, Shuangping Huang, South China University of Technology (SCUT), Published in ICASSP 2017.
 
@@ -41,7 +41,7 @@ Here we used 4 datasets for training, and 1 datasets for Evaluation.
     - Train: 27.7MB, 410 images
 - Dataset3: SCUT-FORU: Flickr OCR Universal Database
     - Train: 388MB, 1715 images
-- Dataset4: CocoText v2(Subset of MSCOCO2014):
+- Dataset4: CocoText v2(Subset of MSCOCO2017):
     - Train: 13GB, 63686 images
 
 # [Features](#contents)
@@ -49,7 +49,7 @@ Here we used 4 datasets for training, and 1 datasets for Evaluation.
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-    - Prepare hardware environment with Ascend processor. If you want to try Ascend  , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend processor.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
@@ -64,9 +64,11 @@ Here we used 4 datasets for training, and 1 datasets for Evaluation.
 .
 └─deeptext
   ├─README.md
+  ├─ascend310_infer                     #application for 310 inference
   ├─scripts
     ├─run_standalone_train_ascend.sh    # launch standalone training with ascend platform(1p)
     ├─run_distribute_train_ascend.sh    # launch distributed training with ascend platform(8p)
+    ├─run_infer_310.sh                  # shell script for 310 inference
     └─run_eval_ascend.sh                # launch evaluating with ascend platform
   ├─src
     ├─DeepText
@@ -74,19 +76,21 @@ Here we used 4 datasets for training, and 1 datasets for Evaluation.
       ├─anchor_genrator.py              # anchor generator
       ├─bbox_assign_sample.py           # proposal layer for stage 1
       ├─bbox_assign_sample_stage2.py    # proposal layer for stage 2
-      ├─deeptext_vgg16.py               # main network defination
+      ├─deeptext_vgg16.py               # main network definition
       ├─proposal_generator.py           # proposal generator
       ├─rcnn.py                         # rcnn
       ├─roi_align.py                    # roi_align cell wrapper
       ├─rpn.py                          # region-proposal network
       └─vgg16.py                        # backbone
     ├─config.py                       # training configuration
+    ├─aipp.cfg                        # aipp config file
     ├─dataset.py                      # data proprocessing
     ├─lr_schedule.py                  # learning rate scheduler
-    ├─network_define.py               # network defination
+    ├─network_define.py               # network definition
     └─utils.py                        # some functions which is commonly used
   ├─eval.py                           # eval net
   ├─export.py                         # export checkpoint, surpport .onnx, .air, .mindir convert
+  ├─postprogress.py                   # post process for 310 inference
   └─train.py                          # train net
 ```
 
@@ -100,9 +104,9 @@ Here we used 4 datasets for training, and 1 datasets for Evaluation.
 # distribute training example(8p)
 sh run_distribute_train_ascend.sh [IMGS_PATH] [ANNOS_PATH] [RANK_TABLE_FILE] [PRETRAINED_PATH] [COCO_TEXT_PARSER_PATH]
 # standalone training
-sh run_standalone_train_ascend.sh [IMGS_PATH] [ANNOS_PATH] [PRETRAINED_PATH] [COCO_TEXT_PARSER_PATH]
+sh run_standalone_train_ascend.sh [IMGS_PATH] [ANNOS_PATH] [PRETRAINED_PATH] [COCO_TEXT_PARSER_PATH] [DEVICE_ID]
 # evaluation:
-sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARSER_PATH]
+sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARSER_PATH] [DEVICE_ID]
 ```
 
 > Notes:
@@ -122,7 +126,7 @@ sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARS
       # distribute training example(8p)
       sh run_distribute_train_ascend.sh [IMGS_PATH] [ANNOS_PATH] [RANK_TABLE_FILE] [PRETRAINED_PATH] [COCO_TEXT_PARSER_PATH]
       # standalone training
-      sh run_standalone_train_ascend.sh [IMGS_PATH] [ANNOS_PATH] [PRETRAINED_PATH] [COCO_TEXT_PARSER_PATH]
+      sh run_standalone_train_ascend.sh [IMGS_PATH] [ANNOS_PATH] [PRETRAINED_PATH] [COCO_TEXT_PARSER_PATH] [DEVICE_ID]
 ```
 
 ### Result
@@ -144,7 +148,7 @@ You can start training using python or shell scripts. The usage of shell scripts
 - Ascend:
 
 ```bash
-  sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARSER_PATH]
+  sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARSER_PATH] [DEVICE_ID]
 ```
 
 ### Launch
@@ -153,7 +157,7 @@ You can start training using python or shell scripts. The usage of shell scripts
 # eval example
   shell:
       Ascend:
-            sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARSER_PATH]
+            sh run_eval_ascend.sh [IMGS_PATH] [ANNOS_PATH] [CHECKPOINT_PATH] [COCO_TEXT_PARSER_PATH] [DEVICE_ID]
 ```
 
 > checkpoint can be produced in training process.
@@ -168,6 +172,35 @@ Evaluation result will be stored in the example path, you can find result like t
 class 1 precision is 88.01%, recall is 82.77%
 ```
 
+## Model Export
+
+```shell
+python export.py --ckpt_file [CKPT_PATH] --device_target [DEVICE_TARGET] --file_format[EXPORT_FORMAT]
+```
+
+`EXPORT_FORMAT` should be in ["AIR", "MINDIR"]
+
+## Inference Process
+
+### Usage
+
+Before performing inference, the air file must bu exported by export script on the Ascend910 environment.
+
+```shell
+# Ascend310 inference
+bash run_infer_310.sh [MINDIR_PATH] [DATA_PATH] [LABEL_PATH] [DEVICE_ID]
+```
+
+### result
+
+Inference result is saved in current path, you can find result like this in acc.log file.
+
+```python
+========================================
+
+class 1 precision is 84.24%, recall is 87.40%, F1 is 85.79%
+```
+
 # [Model description](#contents)
 
 ## [Performance](#contents)
@@ -177,7 +210,7 @@ class 1 precision is 88.01%, recall is 82.77%
 | Parameters                 | Ascend                                                       |
 | -------------------------- | ------------------------------------------------------------ |
 | Model Version              | Deeptext                                                     |
-| Resource                   | Ascend 910, cpu:2.60GHz 192cores, memory:755G                |
+| Resource                   | Ascend 910, cpu:2.60GHz 192cores, memory:755G, OS:Euler2.8   |
 | uploaded Date              | 12/26/2020                                                   |
 | MindSpore Version          | 1.1.0                                                        |
 | Dataset                    | 66040 images                                                 |
@@ -186,9 +219,8 @@ class 1 precision is 88.01%, recall is 82.77%
 | Optimizer                  | Momentum                                                     |
 | Loss Function              | SoftmaxCrossEntropyWithLogits for classification, SmoothL2Loss for bbox regression|
 | Loss                       | ~0.008                                                       |
-| Accuracy (8p)              | precision=0.8854, recall=0.8024                              |
 | Total time (8p)            | 4h                                                           |
-| Scripts                    | [deeptext script](https://gitee.com/mindspore/mindspore/tree/r1.1/mindspore/official/cv/deeptext) |
+| Scripts                    | [deeptext script](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/deeptext) |
 
 #### Inference Performance
 
@@ -200,7 +232,7 @@ class 1 precision is 88.01%, recall is 82.77%
 | MindSpore Version   | 1.1.0              |
 | Dataset             | 229 images                  |
 | Batch_size          | 2                         |
-| Accuracy            | precision=0.8854, recall=0.8024 |
+| Accuracy            | precision=0.8801, recall=0.8277 |
 | Total time          | 1 min                      |
 | Model for inference | 3492M (.ckpt file)   |
 
@@ -208,11 +240,11 @@ class 1 precision is 88.01%, recall is 82.77%
 
 | **Ascend** | train performance |
 | :--------: | :---------------: |
-|     1p     |     42 img/s      |
+|     1p     |     14 img/s      |
 
 | **Ascend** | train performance |
 | :--------: | :---------------: |
-|     8p     |     330 img/s     |
+|     8p     |     50 img/s     |
 
 # [Description of Random Situation](#contents)
 

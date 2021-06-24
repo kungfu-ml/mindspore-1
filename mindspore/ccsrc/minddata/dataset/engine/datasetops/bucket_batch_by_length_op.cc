@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,22 +15,15 @@
  */
 #include "minddata/dataset/engine/datasetops/bucket_batch_by_length_op.h"
 
-#include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "pybind11/numpy.h"
-#include "pybind11/pybind11.h"
-#include "pybind11/stl.h"
-#include "minddata/dataset/core/pybind_support.h"
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/core/tensor.h"
 #include "minddata/dataset/core/tensor_shape.h"
 #include "minddata/dataset/engine/dataset_iterator.h"
 #include "minddata/dataset/engine/datasetops/parallel_op.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/status.h"
 
 namespace py = pybind11;
@@ -191,7 +184,7 @@ Status BucketBatchByLengthOp::PadAndBatchBucket(int32_t bucket_index, int32_t ba
           if (bucket_index + 1 >= bucket_boundaries_.size()) {
             std::string error_message =
               "Invalid data, requested to pad to bucket boundary, element falls in last bucket.";
-            return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, error_message);
+            return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, error_message);
           }
 
           pad_shape[i] = bucket_boundaries_[bucket_index + 1] - 1;

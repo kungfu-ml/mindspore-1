@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@ import os
 import numpy as np
 
 import mindspore._c_dataengine as cde
-from ..engine import samplers
 
 # POS_INT_MIN is used to limit values from starting from 0
 POS_INT_MIN = 1
@@ -46,6 +45,23 @@ valid_detype = [
 ]
 
 
+def is_iterable(obj):
+    """
+    Helper function to check if object is iterable.
+
+    Args:
+        obj (any): object to check if iterable
+
+    Returns:
+        bool, true if object iteratable
+    """
+    try:
+        iter(obj)
+    except TypeError:
+        return False
+    return True
+
+
 def pad_arg_name(arg_name):
     if arg_name != "":
         arg_name = arg_name + " "
@@ -56,24 +72,40 @@ def check_value(value, valid_range, arg_name=""):
     arg_name = pad_arg_name(arg_name)
     if value < valid_range[0] or value > valid_range[1]:
         raise ValueError(
-            "Input {0}is not within the required interval of ({1} to {2}).".format(arg_name, valid_range[0],
-                                                                                   valid_range[1]))
+            "Input {0}is not within the required interval of [{1}, {2}].".format(arg_name, valid_range[0],
+                                                                                 valid_range[1]))
+
+
+def check_value_cutoff(value, valid_range, arg_name=""):
+    arg_name = pad_arg_name(arg_name)
+    if value < valid_range[0] or value >= valid_range[1]:
+        raise ValueError(
+            "Input {0}is not within the required interval of [{1}, {2}).".format(arg_name, valid_range[0],
+                                                                                 valid_range[1]))
+
+
+def check_value_ratio(value, valid_range, arg_name=""):
+    arg_name = pad_arg_name(arg_name)
+    if value <= valid_range[0] or value > valid_range[1]:
+        raise ValueError(
+            "Input {0}is not within the required interval of ({1}, {2}].".format(arg_name, valid_range[0],
+                                                                                 valid_range[1]))
 
 
 def check_value_normalize_std(value, valid_range, arg_name=""):
     arg_name = pad_arg_name(arg_name)
     if value <= valid_range[0] or value > valid_range[1]:
         raise ValueError(
-            "Input {0}is not within the required interval of ({1} to {2}).".format(arg_name, valid_range[0],
-                                                                                   valid_range[1]))
+            "Input {0}is not within the required interval of ({1}, {2}].".format(arg_name, valid_range[0],
+                                                                                 valid_range[1]))
 
 
 def check_range(values, valid_range, arg_name=""):
     arg_name = pad_arg_name(arg_name)
     if not valid_range[0] <= values[0] <= values[1] <= valid_range[1]:
         raise ValueError(
-            "Input {0}is not within the required interval of ({1} to {2}).".format(arg_name, valid_range[0],
-                                                                                   valid_range[1]))
+            "Input {0}is not within the required interval of [{1}, {2}].".format(arg_name, valid_range[0],
+                                                                                 valid_range[1]))
 
 
 def check_positive(value, arg_name=""):
@@ -288,14 +320,15 @@ def check_sampler_shuffle_shard_options(param_dict):
     """
     shuffle, sampler = param_dict.get('shuffle'), param_dict.get('sampler')
     num_shards, shard_id = param_dict.get('num_shards'), param_dict.get('shard_id')
-
-    type_check(sampler, (type(None), samplers.BuiltinSampler, samplers.Sampler), "sampler")
+    num_samples = param_dict.get('num_samples')
 
     if sampler is not None:
         if shuffle is not None:
             raise RuntimeError("sampler and shuffle cannot be specified at the same time.")
-        if num_shards is not None:
+        if num_shards is not None or shard_id is not None:
             raise RuntimeError("sampler and sharding cannot be specified at the same time.")
+        if num_samples is not None:
+            raise RuntimeError("sampler and num_samples cannot be specified at the same time.")
 
     if num_shards is not None:
         check_pos_int32(num_shards)
@@ -342,7 +375,9 @@ def check_num_parallel_workers(value):
 
 def check_num_samples(value):
     type_check(value, (int,), "num_samples")
-    check_value(value, [0, INT32_MAX], "num_samples")
+    if value < 0 or value > INT64_MAX:
+        raise ValueError(
+            "num_samples exceeds the boundary between {} and {}(INT64_MAX)!".format(0, INT64_MAX))
 
 
 def validate_dataset_param_value(param_list, param_dict, param_type):
@@ -381,5 +416,17 @@ def check_gnn_list_or_ndarray(param, param_name):
 
 def check_tensor_op(param, param_name):
     """check whether param is a tensor op or a callable Python function"""
-    if not isinstance(param, cde.TensorOp) and not callable(param):
-        raise TypeError("{0} is neither a c_transform op (TensorOp) nor a callable pyfunc.".format(param_name))
+    if not isinstance(param, cde.TensorOp) and not callable(param) and not getattr(param, 'parse', None):
+        raise TypeError("{0} is neither a c_transform op (TensorOperation) nor a callable pyfunc.".format(param_name))
+
+
+def check_c_tensor_op(param, param_name):
+    """check whether param is a tensor op or a callable Python function but not a py_transform"""
+    if callable(param) and str(param).find("py_transform") >= 0:
+        raise TypeError("{0} is a py_transform op which is not allow to use.".format(param_name))
+    if not isinstance(param, cde.TensorOp) and not callable(param) and not getattr(param, 'parse', None):
+        raise TypeError("{0} is neither a c_transform op (TensorOperation) nor a callable pyfunc.".format(param_name))
+
+
+def replace_none(value, default):
+    return value if value is not None else default

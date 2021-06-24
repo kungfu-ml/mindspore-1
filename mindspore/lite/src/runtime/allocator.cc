@@ -18,7 +18,7 @@
 #include <utility>
 #include "src/common/log_adapter.h"
 
-namespace mindspore::lite {
+namespace mindspore {
 std::shared_ptr<Allocator> Allocator::Create() {
   return std::shared_ptr<Allocator>(new (std::nothrow) DefaultAllocator());
 }
@@ -55,7 +55,7 @@ void *DefaultAllocator::Malloc(size_t size) {
   }
   Lock();
   auto iter = freeList_.lower_bound(size);
-  if (iter != freeList_.end() && (iter->second->size >= size) && (iter->second->size < (size << shiftFactor_))) {
+  if (iter != freeList_.end() && (iter->second->size >= size) && (iter->second->size <= (size << shiftFactor_))) {
     auto membuf = iter->second;
     freeList_.erase(iter);
     allocatedList_[membuf->buf] = membuf;
@@ -110,4 +110,4 @@ void DefaultAllocator::Clear() {
   freeList_.clear();
   UnLock();
 }
-}  // namespace mindspore::lite
+}  // namespace mindspore

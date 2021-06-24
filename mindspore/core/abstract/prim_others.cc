@@ -102,7 +102,7 @@ AbstractBasePtr InferImplMakeRefKey(const AnalysisEnginePtr &, const PrimitivePt
   ValuePtr name_value = prim->GetAttr("tag");
   auto name = name_value->cast<StringImmPtr>();
   if (name == nullptr) {
-    MS_LOG(EXCEPTION) << "MakeRefKey attr tag sould be a String " << name_value->ToString() << ".";
+    MS_LOG(EXCEPTION) << "MakeRefKey attr tag should be a String " << name_value->ToString() << ".";
   }
   auto refkey = std::make_shared<RefKey>(name->value());
   if (refkey == nullptr) {
@@ -165,10 +165,27 @@ AbstractBasePtr InferImplStateSetItem(const AnalysisEnginePtr &, const Primitive
 AbstractBasePtr InferImplDepend(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                                 const AbstractBasePtrList &args_spec_list) {
   if (args_spec_list.empty()) {
-    MS_LOG(EXCEPTION) << primitive->name() << " input args size should be at lest 1, but got 0";
+    MS_LOG(EXCEPTION) << primitive->name() << " input args size should be at least 1, but got 0";
+  }
+  if (primitive->GetAttr(ATTR_NO_BROADEN) != nullptr) {
+    return args_spec_list[0];
   }
   auto depends = args_spec_list[0]->Broaden();
+  if (!MsContext::GetInstance()->get_param<bool>(MS_CTX_GRAD_FOR_SCALAR)) {
+    // For scalar, need to set value to kAnyValue, because broaden scalar will not change the value.
+    if (depends->isa<AbstractScalar>()) {
+      depends->set_value(kAnyValue);
+    }
+  }
   return depends;
+}
+
+AbstractBasePtr InferImplUpdateState(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                     const AbstractBasePtrList &args_spec_list) {
+  if (args_spec_list.empty()) {
+    MS_LOG(EXCEPTION) << primitive->name() << " input args size should be at least 1, but got 0";
+  }
+  return args_spec_list[0]->Broaden();
 }
 
 AbstractBasePtr InferImplControlDepend(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
@@ -182,7 +199,7 @@ AbstractBasePtr InferImplControlDepend(const AnalysisEnginePtr &, const Primitiv
     auto src_size = arg_src->cast<AbstractTuplePtr>()->size();
     auto dst_size = arg_src->cast<AbstractTuplePtr>()->size();
     if (src_size > 1 && dst_size > 1) {
-      MS_LOG(EXCEPTION) << "Control depend can not setup operator dependcy relationship from tuple from tuple";
+      MS_LOG(EXCEPTION) << "Control depend can not setup operator dependency relationship from tuple from tuple";
     }
   }
   return std::make_shared<AbstractScalar>(kAnyValue, kBool);
@@ -276,6 +293,18 @@ AbstractBasePtr InferImplRowTensorGetDenseShape(const AnalysisEnginePtr &, const
   auto row_tensor = CheckArg<AbstractRowTensor>(op_name, args_spec_list, 0);
   MS_EXCEPTION_IF_NULL(row_tensor->dense_shape());
   return row_tensor->dense_shape();
+}
+
+AbstractBasePtr InferImplRowTensorAdd(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                      const AbstractBasePtrList &args_spec_list) {
+  // Inputs: row tensor and tensor.
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  auto row_tensor = CheckArg<AbstractRowTensor>(op_name, args_spec_list, 0);
+  auto tensor = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(row_tensor->dense_shape());
+  MS_EXCEPTION_IF_NULL(tensor->shape());
+  return args_spec_list[0];
 }
 
 AbstractBasePtr InferImplMakeSparseTensor(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
@@ -505,7 +534,7 @@ AbstractBasePtr InferImplExpandDims(const AnalysisEnginePtr &, const PrimitivePt
   auto axis = primitive->GetAttr("axis");
   auto value = GetValue<int64_t>(axis);
   if (value < -(SizeToInt(x_shape.size()) + 1) || value > SizeToInt(x_shape.size())) {
-    MS_LOG(EXCEPTION) << " axis value shoud be in range [-intput_x.dim-1,input_x.dim], but axis value is" << value
+    MS_LOG(EXCEPTION) << " axis value should be in range [-input_x.dim-1,input_x.dim], but axis value is" << value
                       << " and input_x.dim is" << x_shape.size();
   }
   if (value < 0) {
@@ -531,6 +560,22 @@ AbstractBasePtr InferImplGpuConvertToDynamicShape(const AnalysisEnginePtr &, con
 
   ShapePtr shape = std::make_shared<Shape>(inferred_shape, min_shape, max_shape);
   return std::make_shared<AbstractTensor>(input->element(), shape);
+}
+
+AbstractBasePtr InferImplDType(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                               const AbstractBasePtrList &args_spec_list) {
+  MS_EXCEPTION_IF_NULL(primitive);
+  auto op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(args_spec_list[0]);
+  auto type = args_spec_list[0]->BuildType();
+  MS_EXCEPTION_IF_NULL(type);
+  auto tensor_type = type->cast<TensorTypePtr>();
+  MS_EXCEPTION_IF_NULL(tensor_type);
+  auto value = tensor_type->element();
+  auto abstract = std::make_shared<abstract::AbstractType>(value);
+  abstract->set_value(value);
+  return abstract;
 }
 }  // namespace abstract
 }  // namespace mindspore

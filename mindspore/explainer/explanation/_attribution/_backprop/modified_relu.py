@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,12 +16,13 @@
 
 import mindspore.nn as nn
 import mindspore.ops.operations as op
-
-from .gradient import Gradient
-from ...._utils import (
+from mindspore.explainer._utils import (
     unify_inputs,
     unify_targets,
 )
+
+from .backprop_utils import GradNet, get_bp_weights
+from .gradient import Gradient
 
 
 class ModifiedReLU(Gradient):
@@ -30,7 +31,8 @@ class ModifiedReLU(Gradient):
     def __init__(self, network, use_relu_backprop=False):
         super(ModifiedReLU, self).__init__(network)
         self.use_relu_backprop = use_relu_backprop
-        self.hooked_list = []
+        self._hook_relu_backward()
+        self._grad_net = GradNet(self._backward_model)
 
     def __call__(self, inputs, targets):
         """
@@ -43,21 +45,14 @@ class ModifiedReLU(Gradient):
 
         Returns:
             Tensor, a 4D tensor of shape :math:`(N, 1, H, W)`.
-
-        Examples:
-            >>> inputs = ms.Tensor(np.random.rand(1, 3, 224, 224), ms.float32)
-            >>> label = 5
-            >>> # explainer is a "Deconvolution" or "GuidedBackprop" object, parse data and the target label to be
-            >>> # explained and get the attribution
-            >>> saliency = explainer(inputs, label)
         """
 
         self._verify_data(inputs, targets)
         inputs = unify_inputs(inputs)
         targets = unify_targets(targets)
 
-        self._hook_relu_backward()
-        gradients = self._grad_op(self._backward_model, inputs, targets)
+        weights = get_bp_weights(self._backward_model, inputs, targets)
+        gradients = self._grad_net(*inputs, weights)
         saliency = self._aggregation_fn(gradients)
 
         return saliency
@@ -67,7 +62,6 @@ class ModifiedReLU(Gradient):
         for _, cell in self._backward_model.cells_and_names():
             if isinstance(cell, nn.ReLU):
                 cell.register_backward_hook(self._backward_hook)
-                self.hooked_list.append(cell)
 
     def _backward_hook(self, _, grad_inputs, grad_outputs):
         """Hook function for ReLU layers."""
@@ -108,16 +102,15 @@ class Deconvolution(ModifiedReLU):
         >>> import numpy as np
         >>> import mindspore as ms
         >>> from mindspore.explainer.explanation import Deconvolution
-        >>> from mindspore.train.serialization import load_checkpoint, load_param_into_net
-        >>> # init Deconvolution with a trained network.
-        >>> net = resnet50(10)  # please refer to model_zoo
-        >>> param_dict = load_checkpoint("resnet50.ckpt")
-        >>> load_param_into_net(net, param_dict)
+        >>> # The detail of LeNet5 is shown in model_zoo.official.cv.lenet.src.lenet.py
+        >>> net = LeNet5(10, num_channel=3)
         >>> deconvolution = Deconvolution(net)
         >>> # parse data and the target label to be explained and get the saliency map
-        >>> inputs = ms.Tensor(np.random.rand(1, 3, 224, 224), ms.float32)
+        >>> inputs = ms.Tensor(np.random.rand(1, 3, 32, 32), ms.float32)
         >>> label = 5
         >>> saliency = deconvolution(inputs, label)
+        >>> print(saliency.shape)
+        (1, 1, 32, 32)
     """
 
     def __init__(self, network):
@@ -153,17 +146,16 @@ class GuidedBackprop(ModifiedReLU):
     Examples:
         >>> import numpy as np
         >>> import mindspore as ms
-        >>> from mindspore.train.serialization import load_checkpoint, load_param_into_net
         >>> from mindspore.explainer.explanation import GuidedBackprop
-        >>> # init GuidedBackprop with a trained network.
-        >>> net = resnet50(10)  # please refer to model_zoo
-        >>> param_dict = load_checkpoint("resnet50.ckpt")
-        >>> load_param_into_net(net, param_dict)
+        >>> # The detail of LeNet5 is shown in model_zoo.official.cv.lenet.src.lenet.py
+        >>> net = LeNet5(10, num_channel=3)
         >>> gbp = GuidedBackprop(net)
-        >>> # parse data and the target label to be explained and get the saliency map
-        >>> inputs = ms.Tensor(np.random.rand(1, 3, 224, 224), ms.float32)
+        >>> # feed data and the target label to be explained and get the saliency map
+        >>> inputs = ms.Tensor(np.random.rand(1, 3, 32, 32), ms.float32)
         >>> label = 5
         >>> saliency = gbp(inputs, label)
+        >>> print(saliency.shape)
+        (1, 1, 32, 32)
     """
 
     def __init__(self, network):

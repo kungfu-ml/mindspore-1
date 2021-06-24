@@ -19,17 +19,18 @@
 
 #include "nnacl/op_base.h"
 
-#define MAX_TRANSPOSE_DIM_SIZE 5
+#define MAX_TRANSPOSE_DIM_SIZE 6
 
 typedef struct TransposeParameter {
   // primitive parameter
   OpParameter op_parameter_;
-  int perm_[8];
+  int perm_[MAX_SHAPE_SIZE];
+  size_t perm_size_;
   bool conjugate_;
 
   // shape correlative
-  int strides_[8];
-  int out_strides_[8];
+  int strides_[MAX_SHAPE_SIZE];
+  int out_strides_[MAX_SHAPE_SIZE];
 
   // other parameter
   int num_axes_;

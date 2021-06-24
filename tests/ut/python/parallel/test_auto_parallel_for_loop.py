@@ -54,7 +54,7 @@ class LayerNorm(nn.Cell):
         self.mean = P.ReduceMean(keep_dims=True)
         self.eps = eps
         self.sub = P.Sub()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.mul = P.Mul()
         self.div = P.RealDiv()
 
@@ -118,7 +118,7 @@ _w1 = Tensor(np.ones([512, 128]), dtype=ms.float32)
 
 
 def test_auto_parallel():
-    context.set_context(save_graphs=True)
+    context.set_context(save_graphs=False)
     context.set_auto_parallel_context(parallel_mode="auto_parallel", device_num=16, global_rank=0)
     net = Full(_w1, 3)
     net.set_auto_parallel()

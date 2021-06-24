@@ -28,7 +28,6 @@ using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
 using mindspore::lite::opencl::MemType;
-using mindspore::schema::PrimitiveType_ToFormat;
 
 namespace mindspore::kernel {
 
@@ -42,8 +41,6 @@ int ToFormatOpenCLKernel::CheckSpecs() {
     MS_LOG(ERROR) << "Unsupported data type " << data_type;
     return RET_ERROR;
   }
-  auto parameter = reinterpret_cast<OpenCLToFormatParameter *>(op_parameter_);
-  out_mem_type_ = parameter->out_mem_type;
   return RET_OK;
 }
 
@@ -65,26 +62,22 @@ void ToFormatOpenCLKernel::SetGlobalLocal() {
 }
 
 int ToFormatOpenCLKernel::Prepare() {
-  std::map<TypeId, std::string> dtype_str{
-    {kNumberTypeFloat32, "float"}, {kNumberTypeFloat16, "half"}, {kNumberTypeInt32, "float"}};
-  std::string kernel_name;
-  if (out_mem_type_ == MemType::IMG) {
-    kernel_name = "to_format_NHWC_to_NHWC4_IMG_" + dtype_str[in_tensors_.front()->data_type()];
-  } else {
-    kernel_name = "to_format_NHWC4_to_NHWC_BUF_" + dtype_str[out_tensors_.front()->data_type()];
-  }
+  static std::map<TypeId, std::string> dtype_str{{kNumberTypeFloat32, "float32"},
+                                                 {kNumberTypeFloat16, "float16"},
+                                                 {kNumberTypeInt32, "int32"},
+                                                 {kNumberTypeUInt32, "uint32"}};
+  auto in_tensor = in_tensors_.front();
+  auto out_tensor = out_tensors_.front();
+  std::string kernel_name = out_mem_type_ == MemType::IMG ? "BUF_to_IMG_" : "IMG_to_BUF_";
+  kernel_name += dtype_str[in_tensor->data_type()] + "_" + dtype_str[out_tensor->data_type()];
   this->set_name(kernel_name);
 
-#ifdef PROGRAM_WITH_IL
-  kernel_ = ocl_runtime_->GetKernelFromBinary(kernel_name);
-#else
   std::string program_name = "to_format";
   std::string source = to_format_source;
   ocl_runtime_->LoadSource(program_name, source);
   ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name);
-#endif
 
-  auto output = GpuTensorInfo(out_tensors_.front());
+  auto output = GpuTensorInfo(out_tensor);
   N_ = output.N;
   H_ = output.H;
   W_ = output.W;
@@ -106,6 +99,12 @@ int ToFormatOpenCLKernel::Run() {
   return RET_OK;
 }
 
-REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_ToFormat, OpenCLKernelCreator<ToFormatOpenCLKernel>)
-REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_ToFormat, OpenCLKernelCreator<ToFormatOpenCLKernel>)
+int ToFormatOpenCLKernel::InferShape() {
+  if (!op_parameter_->infer_flag_) {
+    op_parameter_->infer_flag_ = true;
+    out_tensors_.front()->set_shape(in_tensors_.front()->shape());
+  }
+  return RET_OK;
+}
+
 }  // namespace mindspore::kernel

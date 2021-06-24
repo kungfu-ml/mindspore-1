@@ -38,17 +38,15 @@ class Uniform(Distribution):
         ``Ascend`` ``GPU``
 
     Note:
-        `low` must be stricly less than `high`.
+        `low` must be strictly less than `high`.
         `dist_spec_args` are `high` and `low`.
         `dtype` must be float type because Uniform distributions are continuous.
 
     Examples:
         >>> import mindspore
-        >>> import mindspore.context as context
         >>> import mindspore.nn as nn
         >>> import mindspore.nn.probability.distribution as msd
         >>> from mindspore import Tensor
-        >>> context.set_context(mode=context.GRAPH_MODE)
         >>> # To initialize a Uniform distribution of the lower bound 0.0 and the higher bound 1.0.
         >>> u1 = msd.Uniform(0.0, 1.0, dtype=mindspore.float32)
         >>> # A Uniform distribution can be initialized without arguments.
@@ -145,14 +143,14 @@ class Uniform(Distribution):
         param = dict(locals())
         param['param_dict'] = {'low': low, 'high': high}
         valid_dtype = mstype.float_type
-        Validator.check_type_name("dtype", dtype, valid_dtype, type(self).__name__)
+        Validator.check_type_name(
+            "dtype", dtype, valid_dtype, type(self).__name__)
         super(Uniform, self).__init__(seed, dtype, name, param)
 
         self._low = self._add_parameter(low, 'low')
         self._high = self._add_parameter(high, 'high')
         if self.low is not None and self.high is not None:
             check_greater(self.low, self.high, 'low', 'high')
-
 
         # ops needed for the class
         self.exp = exp_generic
@@ -242,7 +240,7 @@ class Uniform(Distribution):
 
     def _cross_entropy(self, dist, low_b, high_b, low=None, high=None):
         """
-        Evaluate cross entropy between Uniform distributoins.
+        Evaluate cross entropy between Uniform distributions.
 
         Args:
             dist (str): The type of the distributions. Should be "Uniform" in this case.

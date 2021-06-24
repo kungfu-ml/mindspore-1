@@ -22,7 +22,8 @@
 #include "include/errorcode.h"
 #include "schema/model_generated.h"
 #include "src/runtime/kernel/arm/base/convolution_base.h"
-#include "nnacl/int8/conv_int8.h"
+#include "nnacl/int8/conv1x1_int8.h"
+#include "nnacl/base/conv1x1_base.h"
 #include "nnacl/int8/matmul_int8.h"
 #include "nnacl/matmul_parameter.h"
 #include "src/common/utils.h"
@@ -31,9 +32,8 @@ namespace mindspore::kernel {
 class Convolution1x1Int8CPUKernel : public ConvolutionBaseCPUKernel {
  public:
   Convolution1x1Int8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                              const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx,
-                              const mindspore::lite::PrimitiveC *primitive)
-      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                              const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx)
+      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx) {}
   ~Convolution1x1Int8CPUKernel() override;
 
   int Init() override;

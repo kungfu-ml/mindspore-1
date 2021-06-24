@@ -25,9 +25,8 @@ namespace mindspore::kernel {
 class AddNCPUKernel : public LiteKernel {
  public:
   AddNCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~AddNCPUKernel() = default;
 
   int Init() override;
@@ -39,7 +38,7 @@ class AddNCPUKernel : public LiteKernel {
   float *in1_addr_;
   float *in2_addr_;
   float *out_addr_;
-  size_t elements_num_;
+  int elements_num_;
 };
 }  // namespace mindspore::kernel
 

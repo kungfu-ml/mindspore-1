@@ -27,7 +27,7 @@ from mindspore.train._utils import _make_directory
 from mindspore.train.serialization import save_checkpoint, _save_graph
 from mindspore.parallel._ps_context import _is_role_pserver, _get_ps_mode_rank
 from ._callback import Callback, set_cur_net
-
+from ...common.tensor import Tensor
 
 _cur_dir = os.getcwd()
 _save_dir = _cur_dir
@@ -81,14 +81,14 @@ class CheckpointConfig:
 
     Args:
         save_checkpoint_steps (int): Steps to save checkpoint. Default: 1.
-        save_checkpoint_seconds (int): Seconds to save checkpoint. Default: 0.
-            Can't be used with save_checkpoint_steps at the same time.
+        save_checkpoint_seconds (int): Seconds to save checkpoint.
+            Can't be used with save_checkpoint_steps at the same time. Default: 0.
         keep_checkpoint_max (int): Maximum number of checkpoint files can be saved. Default: 5.
-        keep_checkpoint_per_n_minutes (int): Keep one checkpoint every n minutes. Default: 0.
-            Can't be used with keep_checkpoint_max at the same time.
+        keep_checkpoint_per_n_minutes (int): Keep one checkpoint every n minutes.
+            Can't be used with keep_checkpoint_max at the same time. Default: 0.
         integrated_save (bool): Whether to perform integrated save function in automatic model parallel scene.
-            Default: True. Integrated save function is only supported in automatic parallel scene, not supported
-            in manual parallel.
+            Integrated save function is only supported in automatic parallel scene, not supported
+            in manual parallel. Default: True.
         async_save (bool): Whether asynchronous execution saves the checkpoint to a file. Default: False.
         saved_network (Cell): Network to be saved in checkpoint file. If the saved_network has no relation
             with the network in training, the initial value of saved_network will be saved. Default: None.
@@ -128,6 +128,7 @@ class CheckpointConfig:
         >>> ckpoint_cb = ModelCheckpoint(prefix='LeNet5', directory='./checkpoint', config=config)
         >>> model.train(10, dataset, callbacks=ckpoint_cb)
     """
+
     def __init__(self,
                  save_checkpoint_steps=1,
                  save_checkpoint_seconds=0,
@@ -220,7 +221,11 @@ class ModelCheckpoint(Callback):
     """
     The checkpoint callback class.
 
-    It is called to combine with train process and save the model and network parameters after traning.
+    It is called to combine with train process and save the model and network parameters after training.
+
+    Note:
+        In the distributed training scenario, please specify different directories for each training process
+        to save the checkpoint file. Otherwise, the training may fail.
 
     Args:
         prefix (str): The prefix name of checkpoint files. Default: "CKP".
@@ -231,6 +236,7 @@ class ModelCheckpoint(Callback):
         ValueError: If the prefix is invalid.
         TypeError: If the config is not CheckpointConfig type.
     """
+
     def __init__(self, prefix='CKP', directory=None, config=None):
         super(ModelCheckpoint, self).__init__()
         self._latest_ckpt_file_name = ""
@@ -261,6 +267,7 @@ class ModelCheckpoint(Callback):
         self._manager = CheckpointManager()
         self._prefix = _chg_ckpt_file_name_if_same_exist(self._directory, self._prefix)
         self._graph_saved = False
+        self._need_flush_from_cache = True
 
     def step_end(self, run_context):
         """
@@ -280,7 +287,10 @@ class ModelCheckpoint(Callback):
                 os.remove(graph_file_name)
             _save_graph(cb_params.train_network, graph_file_name)
             self._graph_saved = True
-
+        thread_list = threading.enumerate()
+        for thread in thread_list:
+            if thread.getName() == "asyn_save_ckpt":
+                thread.join()
         self._save_ckpt(cb_params)
 
     def end(self, run_context):
@@ -292,13 +302,13 @@ class ModelCheckpoint(Callback):
         """
         cb_params = run_context.original_args()
         _to_save_last_ckpt = True
+
         self._save_ckpt(cb_params, _to_save_last_ckpt)
 
         thread_list = threading.enumerate()
-        if len(thread_list) > 1:
-            for thread in thread_list:
-                if thread.getName() == "asyn_save_ckpt":
-                    thread.join()
+        for thread in thread_list:
+            if thread.getName() == "asyn_save_ckpt":
+                thread.join()
 
         from mindspore.parallel._cell_wrapper import destroy_allgather_cell
         destroy_allgather_cell()
@@ -307,7 +317,7 @@ class ModelCheckpoint(Callback):
         """Check whether save checkpoint files or not."""
         if self._config.save_checkpoint_steps and self._config.save_checkpoint_steps > 0:
             if cb_params.cur_step_num >= self._last_triggered_step + self._config.save_checkpoint_steps \
-                 or force_to_save is True:
+                    or force_to_save is True:
                 return True
         elif self._config.save_checkpoint_seconds and self._config.save_checkpoint_seconds > 0:
             self._cur_time = time.time()
@@ -322,12 +332,16 @@ class ModelCheckpoint(Callback):
         if cb_params.cur_step_num == self._last_triggered_step:
             return
 
+        # if param is cache enable, flush data from cache to host before save_ckpt
+        if self._need_flush_from_cache:
+            self._flush_from_cache(cb_params)
+
         save_ckpt = self._check_save_ckpt(cb_params, force_to_save)
         step_num_in_epoch = int((cb_params.cur_step_num - 1) % cb_params.batch_num + 1)
 
         if save_ckpt:
             cur_ckpoint_file = self._prefix + "-" + str(cb_params.cur_epoch_num) + "_" \
-                               + str(step_num_in_epoch) + ".ckpt"
+                + str(step_num_in_epoch) + ".ckpt"
             # update checkpoint file list.
             self._manager.update_ckpoint_filelist(self._directory, self._prefix)
             # keep checkpoint files number equal max number.
@@ -357,6 +371,17 @@ class ModelCheckpoint(Callback):
 
             self._latest_ckpt_file_name = cur_file
 
+    def _flush_from_cache(self, cb_params):
+        """Flush cache data to host if tensor is cache enable."""
+        has_cache_params = False
+        params = cb_params.train_network.get_parameters()
+        for param in params:
+            if param.cache_enable:
+                has_cache_params = True
+                Tensor(param).flush_from_cache()
+        if not has_cache_params:
+            self._need_flush_from_cache = False
+
     @property
     def latest_ckpt_file_name(self):
         """Return the latest checkpoint path and file name."""
@@ -365,6 +390,7 @@ class ModelCheckpoint(Callback):
 
 class CheckpointManager:
     """Manage checkpoint files according to train_config of checkpoint."""
+
     def __init__(self):
         self._ckpoint_filelist = []
 

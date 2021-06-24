@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 #include <map>
+#include <string>
 #include "backend/kernel_compiler/kernel.h"
 namespace mindspore {
 namespace kernel {
@@ -26,9 +27,15 @@ namespace kernel {
  * @brief fuse op and return a callable mod
  */
 struct FusionScopeInfo {
-  FusionScopeInfo(int64_t id, std::vector<AnfNodePtr> in, std::vector<AnfNodePtr> comp, std::vector<AnfNodePtr> out)
-      : scope_id(id), input_nodes(std::move(in)), compute_nodes(std::move(comp)), output_nodes(std::move(out)) {}
+  FusionScopeInfo(int64_t id, std::string f_name, std::vector<AnfNodePtr> in, std::vector<AnfNodePtr> comp,
+                  std::vector<AnfNodePtr> out)
+      : scope_id(id),
+        full_name(f_name),
+        input_nodes(std::move(in)),
+        compute_nodes(std::move(comp)),
+        output_nodes(std::move(out)) {}
   int64_t scope_id{};
+  std::string full_name{};
   std::vector<AnfNodePtr> input_nodes;
   std::vector<AnfNodePtr> compute_nodes;
   std::vector<AnfNodePtr> output_nodes;

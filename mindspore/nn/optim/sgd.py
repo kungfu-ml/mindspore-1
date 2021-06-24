@@ -39,27 +39,29 @@ class SGD(Optimizer):
     Nesterov momentum is based on the formula from paper `On the importance of initialization and
     momentum in deep learning <http://proceedings.mlr.press/v28/sutskever13.html>`_.
 
-    Note:
-        When separating parameter groups, the weight decay in each group will be applied on the parameters if the
-        weight decay is positive. When not separating parameter groups, the `weight_decay` in the API will be applied
-        on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
-
-        To improve parameter groups performance, the customized order of parameters can be supported.
-
     .. math::
             v_{t+1} = u \ast v_{t} + gradient \ast (1-dampening)
 
     If nesterov is True:
-        .. math::
-                p_{t+1} = p_{t} - lr \ast (gradient + u \ast v_{t+1})
 
-    If nesterov is Flase:
-        .. math::
-                p_{t+1} = p_{t} - lr \ast v_{t+1}
+    .. math::
+            p_{t+1} = p_{t} - lr \ast (gradient + u \ast v_{t+1})
+
+    If nesterov is False:
+
+    .. math::
+            p_{t+1} = p_{t} - lr \ast v_{t+1}
 
     To be noticed, for the first step, v_{t+1} = gradient
 
     Here : where p, v and u denote the parameters, accum, and momentum respectively.
+
+    Note:
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
+
+        To improve parameter groups performance, the customized order of parameters can be supported.
 
     Args:
         params (Union[list[Parameter], list[dict]]): When the `params` is a list of `Parameter` which will be updated,
@@ -71,12 +73,13 @@ class SGD(Optimizer):
             - lr: Optional. If "lr" in the keys, the value of corresponding learning rate will be used.
               If not, the `learning_rate` in the API will be used.
 
-            - weight_decay: Optional. If "weight_decay" in the keys, the value of corresponding weight decay
-              will be used. If not, the `weight_decay` in the API will be used.
-
             - order_params: Optional. If "order_params" in the keys, the value must be the order of parameters and
               the order will be followed in optimizer. There are no other keys in the `dict` and the parameters which
               in the value of 'order_params' must be in one of group parameters.
+
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
 
         learning_rate (Union[float, Tensor, Iterable, LearningRateSchedule]): A value or a graph for the learning rate.
             When the learning_rate is an Iterable or a Tensor in a 1D dimension, use dynamic learning rate, then
@@ -91,8 +94,11 @@ class SGD(Optimizer):
         weight_decay (float): Weight decay (L2 penalty). It must be equal to or greater than 0. Default: 0.0.
         nesterov (bool): Enables the Nesterov momentum. If use nesterov, momentum must be positive,
                          and dampening must equal to 0.0. Default: False.
-        loss_scale (float): A floating point value for the loss scale, which must be larger
-                            than 0.0. Default: 1.0.
+        loss_scale (float): A floating point value for the loss scale, which must be larger than 0.0. In general, use
+            the default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
 
     Inputs:
         - **gradients** (tuple[Tensor]) - The gradients of `params`, the shape is the same as `params`.
@@ -114,12 +120,14 @@ class SGD(Optimizer):
         >>> #2) Use parameter groups and set different values
         >>> conv_params = list(filter(lambda x: 'conv' in x.name, net.trainable_params()))
         >>> no_conv_params = list(filter(lambda x: 'conv' not in x.name, net.trainable_params()))
-        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01},
+        >>> group_params = [{'params': conv_params,'grad_centralization':True},
         ...                 {'params': no_conv_params, 'lr': 0.01},
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.SGD(group_params, learning_rate=0.1, weight_decay=0.0)
-        >>> # The conv_params's parameters will use a learning rate of default value 0.1 and a weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use a learning rate of 0.01 and a weight decay of default value 0.0.
+        >>> # The conv_params's parameters will use default learning rate of 0.1 default weight decay of 0.0 and grad
+        >>> # centralization of True.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0 and grad
+        >>> # centralization of False.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -169,6 +177,7 @@ class SGD(Optimizer):
         accum = self.accum
         stat = self.stat
         gradients = self.scale_grad(gradients)
+        gradients = self.gradients_centralization(gradients)
         lr = self.get_lr()
         if self.is_group_lr:
             success = self.hyper_map(F.partial(_sgd_opt, self.opt, self.momentum), lr, gradients, params, accum, stat)

@@ -19,17 +19,19 @@
 #include <set>
 #include <string>
 
+#include "base/core_ops.h"
+
 namespace mindspore {
 // clang-format off
-static const std::set<std::string> PARALLEL_BLACK_LIST_ = {"tuple_getitem", "J", "list_getitem",
+static const std::set<std::string> PARALLEL_BLACK_LIST_ = {prim::kTupleGetItem, "J", "list_getitem",
   "array_getitem", "tuple_setitem", "Depend", "list_setitem", "array_setitem", "dict_getitem",
   "list_append", "list_map", "list_reduce", "tuple_reversed", "tile_shape", "tuple_div", "tuple_to_array",
-  "make_dict", "make_slice", "make_record", "string_equal", "VirtualLoss", "return", "env_getitem",
+  "make_dict", "make_slice", "make_record", "string_equal", "VirtualLoss", "Return", "env_getitem",
   "identity", "partial", "env_setitem", "env_getitem", "env_add", "MakeRefKey", "make_ref", "get_ref_key",
   "get_ref_value", "get_ref_origin", "dot", "im2col", "col2im", "im2col_v1", "state_setitem", "ScalarSummary",
   "ImageSummary", "TensorSummary", "Debug", "HistogramSummary", "col2im_v1", "resolve", "BroadcastGradientArgs",
   "InvertPermutation", "ControlDepend", "DropoutGenMask", "embed", "create_instance", "RefToEmbed",
-  "stop_gradient", "Send"};
+  "stop_gradient", "Send", "UpdateState", "Load"};
 // clang-format on
 
 bool IsInParallelBlackList(const PrimitivePtr &prim) {

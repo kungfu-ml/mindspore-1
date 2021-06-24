@@ -15,21 +15,16 @@
  */
 
 #include "src/runtime/kernel/arm/fp16/convolution_1x1_fp16.h"
-#include "nnacl/fp16/conv_fp16.h"
+#include "nnacl/base/conv1x1_base.h"
 #include "nnacl/fp16/cast_fp16.h"
 #include "nnacl/fp16/pack_fp16.h"
 #include "src/runtime/kernel/arm/fp16/layout_transform_fp16.h"
-#include "schema/model_generated.h"
-#include "src/kernel_registry.h"
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
 
-using mindspore::kernel::KERNEL_ARCH::kCPU;
-using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_MEMORY_FAILED;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_Conv2D;
 
 namespace mindspore::kernel {
 int Convolution1x1FP16CPUKernel::InitMatmulParam() {
@@ -93,11 +88,10 @@ int Convolution1x1FP16CPUKernel::InitWeightBias() {
       MS_LOG(ERROR) << "Conv1x1 Malloc bias_ptr_ error!";
       return RET_ERROR;
     }
-    auto bias_tensor = in_tensors_.at(kBiasIndex);
-    if (bias_tensor->data_type() == kNumberTypeFloat16) {
-      memcpy(bias_data_, bias_tensor->MutableData(), output_channel * sizeof(float16_t));
+    if (origin_bias_data_type_ == kNumberTypeFloat16) {
+      memcpy(bias_data_, origin_bias_, output_channel * sizeof(float16_t));
     } else {
-      Float32ToFloat16(reinterpret_cast<float *>(bias_tensor->MutableData()), reinterpret_cast<float16_t *>(bias_data_),
+      Float32ToFloat16(reinterpret_cast<float *>(origin_bias_), reinterpret_cast<float16_t *>(bias_data_),
                        output_channel);
     }
     memset(reinterpret_cast<char *>(bias_data_) + weight_size, 0, size - weight_size);
@@ -111,8 +105,8 @@ int Convolution1x1FP16CPUKernel::InitWeightBias() {
     return RET_ERROR;
   }
   memset(reinterpret_cast<char *>(weight_ptr_) + down_size, 0, size - down_size);
-  ColMajor2Row8MajorFp16(weight_tensor->MutableData(), weight_ptr_, input_channel, output_channel,
-                         weight_tensor->data_type() == kNumberTypeFloat16);
+  ColMajor2Row8MajorFp16(origin_weight_, weight_ptr_, input_channel, output_channel,
+                         origin_weight_data_type_ == kNumberTypeFloat16);
   return RET_OK;
 }
 
@@ -127,10 +121,7 @@ int Convolution1x1FP16CPUKernel::Init() {
     MS_LOG(ERROR) << "Init weight bias failed.";
     return ret;
   }
-  if (!InferShapeDone()) {
-    return RET_OK;
-  }
-  return ReSize();
+  return RET_OK;
 }
 
 void Convolution1x1FP16CPUKernel::FreeTmpBuffer() {
@@ -143,7 +134,6 @@ void Convolution1x1FP16CPUKernel::FreeTmpBuffer() {
 
 int Convolution1x1FP16CPUKernel::ReSize() {
   FreeTmpBuffer();
-
   auto ret = ConvolutionBaseCPUKernel::Init();
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "ConvolutionBase init failed.";
@@ -218,18 +208,12 @@ static int Convolution1x1Fp16RunHw(void *cdata, int task_id) {
 }
 
 int Convolution1x1FP16CPUKernel::Run() {
-  auto ret = ConvolutionBaseFP16CPUKernel::GetExecuteTensor();
-  if (ret != RET_OK) {
-    MS_LOG(ERROR) << "Get executor tensor failed.";
-    ConvolutionBaseFP16CPUKernel::FreeTmpBuffer();
-    return ret;
-  }
+  ConvolutionBaseFP16CPUKernel::GetExecuteTensor();
 
   pack_input_ = reinterpret_cast<float16_t *>(
     ctx_->allocator->Malloc(matmul_param_->row_16_ * matmul_param_->deep_ * sizeof(float16_t)));
   if (pack_input_ == nullptr) {
     MS_LOG(ERROR) << "Conv1x1 Malloc pack_input_ error!";
-    ConvolutionBaseFP16CPUKernel::FreeTmpBuffer();
     return RET_MEMORY_FAILED;
   }
 
@@ -243,6 +227,7 @@ int Convolution1x1FP16CPUKernel::Run() {
       input_ptr_ = batch_in;
     }
 
+    int ret = RET_ERROR;
     if (multi_thread_by_hw_) {
       ret = ParallelLaunch(this->context_->thread_pool_, Convolution1x1Fp16RunHw, this, thread_count_);
     } else {
@@ -251,15 +236,11 @@ int Convolution1x1FP16CPUKernel::Run() {
     }
     if (ret != RET_OK) {
       MS_LOG(ERROR) << "ParallelLaunch failed.";
-      ConvolutionBaseFP16CPUKernel::FreeTmpBuffer();
       ctx_->allocator->Free(pack_input_);
       pack_input_ = nullptr;
       return ret;
     }
   }
-
-  ConvolutionBaseFP16CPUKernel::IfCastOutput();
-  ConvolutionBaseFP16CPUKernel::FreeTmpBuffer();
 
   ctx_->allocator->Free(pack_input_);
   pack_input_ = nullptr;

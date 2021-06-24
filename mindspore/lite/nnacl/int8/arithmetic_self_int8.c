@@ -15,13 +15,12 @@
  */
 
 #include <math.h>
-#include <assert.h>
 #include "nnacl/int8/arithmetic_self_int8.h"
 #ifdef ENABLE_NEON
 #include <arm_neon.h>
 #include "nnacl/int8/common_func_int8.h"
 #endif
-#include "nnacl/quantization/fixed_point.h"
+#include "nnacl/int8/fixed_point.h"
 
 int Int8ElementFloor(int8_t *input, int8_t *output, int element_size, ArithSelfQuantArg para) {
   float in_scale = para.in_args_.scale_;

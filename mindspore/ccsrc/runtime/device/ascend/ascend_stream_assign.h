@@ -165,7 +165,9 @@ class AscendStreamAssign {
   void CheckScenario(const NotNull<KernelGraphPtr> &graph_ptr, vector<CNodePtr> *last_grad_and_status);
   CNodePtr GetCNodesNeededMoved(vector<CNodePtr> *moved_backward_cnodes, vector<CNodePtr> *moved_forward_cnodes,
                                 const vector<CNodePtr> &last_grad_and_status, const NotNull<KernelGraphPtr> &graph_ptr);
-  void FinetuneSubgraphExecOrder(vector<CNodePtr> *cnodes);
+  CNodePtr GetTargetOutputNode(const vector<CNodePtr> &moved_backward_cnodes, const CNodePtr first_node,
+                               const NotNull<KernelGraphPtr> &graph_ptr);
+  bool FinetuneSubgraphExecOrder(vector<CNodePtr> *cnodes);
   void TrailingTimeOptimizationByReorder(const NotNull<KernelGraphPtr> &graph_ptr);
 
   uint32_t GetMaxIndexTarget(const NotNull<KernelGraphPtr> &graph_ptr);
@@ -182,7 +184,7 @@ class AscendStreamAssign {
   void GetParallelStream(uint32_t cur_stream_id, uint32_t stream_acitve_id, std::vector<uint32_t> *parallel_streams);
   void SetLoopSink();
 
-  // function for memory resue
+  // function for memory reuse
   void GetStreamRelations();
   void DFS(uint32_t start, std::vector<uint32_t> *group);
   bool IsVecExist(const std::vector<uint32_t> &group);
@@ -200,10 +202,14 @@ class AscendStreamAssign {
   bool independent_stream_activated_{false};
   bool hcom_stream_activated_{false};
   bool loop_sink_{false};
-  // key:stream id, value:task nums;
-  std::map<uint32_t, uint32_t> independent_stream_map_{};
-  std::map<uint32_t, uint32_t> hcom_stream_map_{};
+
+  // key:stream id, value:node number
   std::map<uint32_t, uint32_t> common_stream_map_{};
+  // key:stream id, value:node number
+  std::map<uint32_t, uint32_t> independent_stream_map_{};
+  // key:stream id, value:task number
+  std::map<uint32_t, uint32_t> hcom_stream_map_{};
+
   std::set<uint32_t> processed_streams_{};
   std::vector<uint32_t> need_first_active_streams_{};
   std::set<CNodeKey> independent_targets_;

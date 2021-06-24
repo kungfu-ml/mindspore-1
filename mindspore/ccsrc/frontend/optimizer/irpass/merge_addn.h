@@ -71,12 +71,19 @@ class MergeAddN : public AnfVisitor {
       is_inner_ = true;
 
       // {prim::kPrimMakeTuple, {PrimAddN, {prim::kPrimMakeTuple, Xs}}, Ys}
-      AnfVisitor::Match(prim::kPrimAddN, {IsCNode})(inputs[1]);
+      const auto &first_input = inputs.at(1);
+      AnfVisitor::Match(prim::kPrimAddN, {IsCNode})(first_input);
       if (is_match_) {
-        if (!is_unique(inputs[1])) {
+        if (!is_unique(first_input)) {
           is_match_ = false;
           return;
         }
+
+        if (!IsStateEquivalent(cnode, first_input)) {
+          is_match_ = false;
+          return;
+        }
+
         (void)Ys_.erase(Ys_.begin());
         (void)std::copy(Xs_.begin(), Xs_.end(), std::back_inserter(args_));
         (void)std::copy(Ys_.begin(), Ys_.end(), std::back_inserter(args_));
@@ -84,12 +91,19 @@ class MergeAddN : public AnfVisitor {
       }
 
       // {prim::kPrimMakeTuple, Ys, {PrimAddN, {prim::kPrimMakeTuple, Xs}}}
-      AnfVisitor::Match(prim::kPrimAddN, {IsCNode})(inputs.back());
+      const auto &last_input = inputs.back();
+      AnfVisitor::Match(prim::kPrimAddN, {IsCNode})(last_input);
       if (is_match_) {
-        if (!is_unique(inputs.back())) {
+        if (!is_unique(last_input)) {
           is_match_ = false;
           return;
         }
+
+        if (!IsStateEquivalent(cnode, last_input)) {
+          is_match_ = false;
+          return;
+        }
+
         Ys_.pop_back();
         (void)std::copy(Ys_.begin(), Ys_.end(), std::back_inserter(args_));
         (void)std::copy(Xs_.begin(), Xs_.end(), std::back_inserter(args_));
@@ -272,7 +286,7 @@ class AddNEliminater : public AnfVisitor {
       if (tuple_inputs.size() == 3) {
         // case2: inputs size = 2, -> TensorAdd(Tensor, Tensor)
         MS_LOG(DEBUG) << "Replace AddN with two inputs with TensorAdd. " << cnode->DebugString(2);
-        ValuePtr prim_tensoradd = prim::GetPythonOps("TensorAdd", "mindspore.ops.operations");
+        ValuePtr prim_tensoradd = prim::GetPythonOps("Add", "mindspore.ops.operations");
         std::vector<AnfNodePtr> new_xs{func_graph->NewCNode({NewValueNode(prim_tensoradd)}), tuple_inputs[1],
                                        tuple_inputs[2]};
         mng->Replace(node, func_graph->NewCNode(new_xs));
@@ -299,7 +313,7 @@ class AddNEliminater : public AnfVisitor {
         ValuePtr prim_addn = prim::GetPythonOps("AddN", "mindspore.ops.operations");
         auto new_addn = func_graph->NewCNode(
           {func_graph->NewCNode({NewValueNode(prim_addn)}), func_graph->NewCNode(make_tuple_new_xs)});
-        ValuePtr prim_tensoradd = prim::GetPythonOps("TensorAdd", "mindspore.ops.operations");
+        ValuePtr prim_tensoradd = prim::GetPythonOps("Add", "mindspore.ops.operations");
         auto new_add =
           func_graph->NewCNode({func_graph->NewCNode({NewValueNode(prim_tensoradd)}), *first_valuenode, new_addn});
         (void)mng->Replace(node, new_add);

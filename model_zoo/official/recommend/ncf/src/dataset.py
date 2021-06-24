@@ -22,12 +22,11 @@ import pickle
 import numpy as np
 import pandas as pd
 
-from mindspore.dataset.engine import GeneratorDataset
+from mindspore.dataset import GeneratorDataset, Sampler
 
 import src.constants as rconst
 import src.movielens as movielens
 import src.stat_utils as stat_utils
-
 
 DATASET_TO_NUM_USERS_AND_ITEMS = {
     "ml-1m": (6040, 3706),
@@ -205,6 +204,7 @@ class NCFDataset:
     """
     A dataset for NCF network.
     """
+
     def __init__(self,
                  pos_users,
                  pos_items,
@@ -214,6 +214,7 @@ class NCFDataset:
                  total_negatives,
                  index_bounds,
                  sorted_train_pos_items,
+                 num_neg,
                  is_training=True):
         self._pos_users = pos_users
         self._pos_items = pos_items
@@ -233,6 +234,10 @@ class NCFDataset:
         else:
             self._eval_users_per_batch = int(
                 batch_size // (1 + rconst.NUM_EVAL_NEGATIVES))
+
+        _pos_count = pos_users.shape[0]
+        _num_samples = (1 + num_neg) * _pos_count
+        self.dataset_len = math.ceil(_num_samples / batch_size)
 
     def lookup_negative_items(self, negative_users):
         """Lookup negative items"""
@@ -402,16 +407,24 @@ class NCFDataset:
 
         return self._get_eval_item(index)
 
+    def __len__(self):
+        """
+        Return length of the dataset, i.e., the number of batches for an epoch
+        """
+        return self.dataset_len
 
-class RandomSampler:
+
+class RandomSampler(Sampler):
     """
     A random sampler for dataset.
     """
+
     def __init__(self, pos_count, num_train_negatives, batch_size):
         self.pos_count = pos_count
         self._num_samples = (1 + num_train_negatives) * self.pos_count
         self._batch_size = batch_size
         self._num_batches = math.ceil(self._num_samples / self._batch_size)
+        super().__init__(self._num_batches)
 
     def __iter__(self):
         """
@@ -420,19 +433,21 @@ class RandomSampler:
         indices = stat_utils.permutation((self._num_samples, stat_utils.random_int32()))
 
         batch_indices = [indices[x * self._batch_size:(x + 1) * self._batch_size] for x in range(self._num_batches)]
-        return iter(batch_indices)
 
-    def __len__(self):
-        """
-        Return length of the sampler, i.e., the number of batches for an epoch.
-        """
-        return self._num_batches
+        # padding last batch indices if necessary
+        if len(batch_indices) > 2 and len(batch_indices[-2]) != len(batch_indices[-1]):
+            pad_nums = len(batch_indices[-2]) - len(batch_indices[-1])
+            pad_indices = np.random.randint(0, self._num_samples, pad_nums)
+            batch_indices[-1] = np.hstack((batch_indices[-1], pad_indices))
+
+        return iter(batch_indices)
 
 
 class DistributedSamplerOfTrain:
     """
     A distributed sampler for dataset.
     """
+
     def __init__(self, pos_count, num_train_negatives, batch_size, rank_id, rank_size):
         """
         Distributed sampler of training dataset.
@@ -443,15 +458,16 @@ class DistributedSamplerOfTrain:
         self._batch_size = batch_size
 
         self._batchs_per_rank = int(math.ceil(self._num_samples / self._batch_size / rank_size))
-        self._samples_per_rank = int(math.ceil(self._batchs_per_rank *  self._batch_size))
+        self._samples_per_rank = int(math.ceil(self._batchs_per_rank * self._batch_size))
         self._total_num_samples = self._samples_per_rank * self._rank_size
+
     def __iter__(self):
         """
         Returns the data after each sampling.
         """
         indices = stat_utils.permutation((self._num_samples, stat_utils.random_int32()))
         indices = indices.tolist()
-        indices.extend(indices[:self._total_num_samples-len(indices)])
+        indices.extend(indices[:self._total_num_samples - len(indices)])
         indices = indices[self._rank_id:self._total_num_samples:self._rank_size]
         batch_indices = [indices[x * self._batch_size:(x + 1) * self._batch_size] for x in range(self._batchs_per_rank)]
 
@@ -463,20 +479,30 @@ class DistributedSamplerOfTrain:
         """
         return self._batchs_per_rank
 
-class SequenceSampler:
+
+class SequenceSampler(Sampler):
     """
     A sequence sampler for dataset.
     """
+
     def __init__(self, eval_batch_size, num_users):
         self._eval_users_per_batch = int(
             eval_batch_size // (1 + rconst.NUM_EVAL_NEGATIVES))
         self._eval_elements_in_epoch = num_users * (1 + rconst.NUM_EVAL_NEGATIVES)
         self._eval_batches_per_epoch = self.count_batches(
             self._eval_elements_in_epoch, eval_batch_size)
+        super().__init__(self._eval_batches_per_epoch)
 
     def __iter__(self):
         indices = [(x * self._eval_users_per_batch, (x + 1) * self._eval_users_per_batch)
                    for x in range(self._eval_batches_per_epoch)]
+
+        # padding last batch indices if necessary
+        if len(indices) > 2 and len(indices[-2]) != len(indices[-1]):
+            pad_nums = len(indices[-2]) - len(indices[-1])
+            pad_indices = np.random.randint(0, self._eval_elements_in_epoch, pad_nums)
+            indices[-1] = np.hstack((indices[-1], pad_indices))
+
         return iter(indices)
 
     @staticmethod
@@ -485,16 +511,12 @@ class SequenceSampler:
         x = (example_count + batch_size - 1) // batch_size
         return (x + batches_per_step - 1) // batches_per_step * batches_per_step
 
-    def __len__(self):
-        """
-        Return the length of the sampler, i,e, the number of batches in an epoch.
-        """
-        return self._eval_batches_per_epoch
 
 class DistributedSamplerOfEval:
     """
     A distributed sampler for eval dataset.
     """
+
     def __init__(self, eval_batch_size, num_users, rank_id, rank_size):
         self._eval_users_per_batch = int(
             eval_batch_size // (1 + rconst.NUM_EVAL_NEGATIVES))
@@ -507,8 +529,6 @@ class DistributedSamplerOfEval:
         self._eval_batch_size = eval_batch_size
 
         self._batchs_per_rank = int(math.ceil(self._eval_batches_per_epoch / rank_size))
-        #self._samples_per_rank = int(math.ceil(self._batchs_per_rank *  self._eval_batch_size))
-        #self._total_num_samples = self._samples_per_rank * self._rank_size
 
     def __iter__(self):
         indices = [(x * self._eval_users_per_batch, (x + self._rank_id + 1) * self._eval_users_per_batch)
@@ -524,6 +544,7 @@ class DistributedSamplerOfEval:
 
     def __len__(self):
         return self._batchs_per_rank
+
 
 def parse_eval_batch_size(eval_batch_size):
     """
@@ -554,7 +575,7 @@ def create_dataset(test_train=True, data_dir='./dataset/', dataset='ml-1m', trai
         print(train_pos_users, train_pos_items, num_users, num_items, batch_size, total_negatives, index_bounds,
               sorted_train_pos_items)
         dataset = NCFDataset(train_pos_users, train_pos_items, num_users, num_items, batch_size, total_negatives,
-                             index_bounds, sorted_train_pos_items)
+                             index_bounds, sorted_train_pos_items, num_neg)
         sampler = RandomSampler(train_pos_users.shape[0], num_neg, batch_size)
         if rank_id is not None and rank_size is not None:
             sampler = DistributedSamplerOfTrain(train_pos_users.shape[0], num_neg, batch_size, rank_id, rank_size)
@@ -577,7 +598,7 @@ def create_dataset(test_train=True, data_dir='./dataset/', dataset='ml-1m', trai
         eval_batch_size = parse_eval_batch_size(eval_batch_size=eval_batch_size)
         dataset = NCFDataset(eval_pos_users, eval_pos_items, num_users, num_items,
                              eval_batch_size, total_negatives, index_bounds,
-                             sorted_train_pos_items, is_training=False)
+                             sorted_train_pos_items, num_neg, is_training=False)
         sampler = SequenceSampler(eval_batch_size, num_users)
 
         ds = GeneratorDataset(dataset,

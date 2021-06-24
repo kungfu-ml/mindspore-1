@@ -29,9 +29,7 @@ enum class TransposeType { AXIS0312, AXIS0231, GENERAL };
 
 class TransposeOpenCLKernel : public OpenCLKernel {
  public:
-  TransposeOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                        const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
   ~TransposeOpenCLKernel() override = default;
 
   int Run() override;
@@ -42,7 +40,7 @@ class TransposeOpenCLKernel : public OpenCLKernel {
 
  private:
   TransposeType type_{TransposeType::AXIS0312};
-  GpuTensorInfo tensor_size_{GpuTensorInfo(nullptr)};
+  GpuTensorInfo tensor_size_;
   int perm_4d_[4];
 };
 }  // namespace mindspore::kernel

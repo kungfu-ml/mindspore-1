@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,13 +26,13 @@ namespace mindspore::kernel {
 class ConvolutionBaseNPUKernel : public NPUKernel {
  public:
   ConvolutionBaseNPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                           const mindspore::lite::PrimitiveC *primitive)
-      : NPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : NPUKernel(parameter, inputs, outputs, ctx) {}
   ~ConvolutionBaseNPUKernel() override;
 
  protected:
-  int InitWeightBiasConst(const std::vector<lite::Tensor *> &inputs);
+  int InitWeightConst(const std::vector<lite::Tensor *> &inputs);
+  int InitBiasConst(const std::vector<lite::Tensor *> &inputs);
   int SetActivation(const ge::Operator *input, ActType act_type);
   hiai::op::Activation *act_ = nullptr;
   hiai::op::Const *weight_ = nullptr;

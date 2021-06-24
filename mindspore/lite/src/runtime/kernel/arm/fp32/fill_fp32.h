@@ -18,9 +18,8 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-
 #include "include/context.h"
-#include "nnacl/fp32/fill_fp32.h"
+#include "nnacl/base/fill_base.h"
 
 using mindspore::lite::InnerContext;
 
@@ -28,9 +27,8 @@ namespace mindspore::kernel {
 class FillCPUKernel : public LiteKernel {
  public:
   FillCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive), thread_count_(ctx->thread_num_) {}
+                const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx), thread_count_(ctx->thread_num_) {}
   ~FillCPUKernel() override = default;
 
   int Init() override;
@@ -39,8 +37,8 @@ class FillCPUKernel : public LiteKernel {
   int DoFill(int task_id);
 
  private:
-  int thread_sz_count_;
-  int thread_sz_stride_;
+  int thread_sz_count_ = 0;
+  int thread_sz_stride_ = 0;
   int data_size_;
   float src_data_;
   float *out_ptr_;

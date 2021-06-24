@@ -24,9 +24,8 @@ namespace mindspore::kernel {
 class ConvolutionTrainCPUKernel : public LiteKernel {
  public:
   explicit ConvolutionTrainCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                                     const lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~ConvolutionTrainCPUKernel() override {}
 
   int Init() override;
@@ -35,18 +34,19 @@ class ConvolutionTrainCPUKernel : public LiteKernel {
   int Execute(int task_id);
 
  private:
-  int ws_size = 0;
+  int ws_size_ = 0;
+  bool do_img2col_ = true;
+  bool do_dw_ = false;
 #ifdef ENABLE_ARM32
-  const int chunk = C4NUM;
+  const int chunk_ = C4NUM * 2;
 #else
-  const int chunk = C12NUM;
+  const int chunk_ = C12NUM * 2;
 #endif
 };
 
 kernel::LiteKernel *CpuConvTrainFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                   const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                                  const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                                  const lite::PrimitiveC *primitive);
+                                                  const lite::InnerContext *ctx, const kernel::KernelKey &desc);
 }  // namespace mindspore::kernel
 
 #endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_GRAD_CONVOLUTION_H_

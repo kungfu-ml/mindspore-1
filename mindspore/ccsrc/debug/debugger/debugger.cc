@@ -31,8 +31,9 @@
 #include "backend/session/anf_runtime_algorithm.h"
 #include "runtime/device/kernel_runtime_manager.h"
 #include "runtime/device/kernel_runtime.h"
-#include "debug/data_dump/e2e_dump_util.h"
+#include "debug/data_dump/e2e_dump.h"
 #include "utils/config_manager.h"
+#include "debug/env_config_parser.h"
 
 using debugger::Chunk;
 using debugger::EventReply;
@@ -52,8 +53,6 @@ namespace mindspore {
 
 DebuggerPtr Debugger::debugger_ = nullptr;
 std::mutex Debugger::instance_lock_;
-static const size_t PARAMETER_OUTPUT_INDEX = 0;
-static const size_t VALUE_NODE_OUTPUT_INDEX = 0;
 
 Debugger::Debugger()
     : grpc_client_(nullptr),
@@ -73,14 +72,18 @@ Debugger::Debugger()
       not_dataset_graph_sum_(0),
       version_("") {
   CheckDebuggerEnabledParam();
-  if (CheckDebuggerEnabled()) {
+  auto ms_context = MsContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(ms_context);
+  std::string device_target = ms_context->get_param<std::string>(MS_CTX_DEVICE_TARGET);
+  MS_LOG(INFO) << "Debugger got device_target: " << device_target;
+  if (device_target == kCPUDevice) {
+    MS_LOG(WARNING) << "Not enabling debugger. Debugger does not support CPU.";
+  } else if (CheckDebuggerEnabled()) {
     // configure partial memory reuse
     partial_memory_ = CheckDebuggerPartialMemoryEnabled();
 
-    auto context_ptr = MsContext::GetInstance();
-    MS_EXCEPTION_IF_NULL(context_ptr);
     // switch memory reuse on or off
-    context_ptr->set_param<bool>(MS_CTX_ENABLE_MEM_REUSE, partial_memory_);
+    EnvConfigParser::GetInstance().SetSysMemreuse(partial_memory_);
     // print some message about memory reuse to user
     if (partial_memory_) {
       MS_LOG(WARNING)
@@ -102,7 +105,7 @@ void Debugger::Init(const uint32_t device_id, const std::string device_target) {
   device_id_ = device_id;
   MS_LOG(INFO) << "Debugger got device_target: " << device_target;
   device_target_ = device_target;
-  version_ = "1.1.0";
+  version_ = "1.2.0";
 }
 
 void Debugger::EnableDebugger() {
@@ -227,7 +230,7 @@ bool Debugger::CheckDebuggerEnabled() {
   if (env_enable_char != nullptr) {
     std::string env_enable_str = env_enable_char;
     (void)std::transform(env_enable_str.begin(), env_enable_str.end(), env_enable_str.begin(), ::tolower);
-    if (env_enable_str == "1" || env_enable_str == "true") {
+    if ((env_enable_str == "1" || env_enable_str == "true") && device_target_ != kCPUDevice) {
       return true;
     }
   }
@@ -617,80 +620,18 @@ void Debugger::CommandLoop() {
         run = true;
         break;
       case DebuggerCommand::kRunCMD:
-        MS_LOG(INFO) << "RunCMD";
-        if (GetRunLevel(reply) == "recheck") {
-          MS_LOG(INFO) << "rechecking all watchpoints";
-          SendWatchpoints(CheckWatchpoints("", nullptr, true));
-        } else {
-          // no longer the initial suspension.
-          initial_suspend_ = false;
-          // print run cmd content
-          // get run_level and node_name
-          run_level_ = GetRunLevel(reply);
-          node_name_ = GetNodeName(reply);
-
-          MS_LOG(INFO) << "run_level: " << run_level_;
-          MS_LOG(INFO) << "node_name_: " << node_name_;
-
+        ProcessRunCMD(reply);
+        if (GetRunLevel(reply) != "recheck") {
           // exit loop
           run = true;
         }
         break;
       case DebuggerCommand::kSetCMD:
-        MS_LOG(INFO) << "SetCMD";
-        MS_LOG(INFO) << "id: " << GetWatchpointID(reply);
-        MS_LOG(INFO) << "delete: " << GetWatchpointDelete(reply);
-        if (GetWatchpointDelete(reply)) {
-          MS_LOG(INFO) << "Deleting watchpoint";
-          RemoveWatchpoint(GetWatchpointID(reply));
-        } else {
-          MS_LOG(INFO) << "Setting watchpoint";
-          MS_LOG(INFO) << "condition: " << GetWatchcondition(reply).condition();
-          ProtoVector<WatchNode> recieved_nodes = GetWatchnodes(reply);
-          for (const auto &node : recieved_nodes) {
-            MS_LOG(INFO) << "node name: " << node.node_name();
-            MS_LOG(INFO) << "node type: " << node.node_type();
-          }
-          ProtoVector<WatchCondition_Parameter> parameters = GetParameters(reply);
-          for (const auto &parameter : parameters) {
-            MS_LOG(INFO) << "parameter name: " << parameter.name();
-            MS_LOG(INFO) << "parameter is disabled: " << parameter.disabled();
-            MS_LOG(INFO) << "parameter value: " << parameter.value();
-          }
-          SetWatchpoint(GetWatchnodes(reply), GetWatchcondition(reply), GetWatchpointID(reply), GetParameters(reply));
-        }
+        ProcessKSetCMD(reply);
         break;
-      case DebuggerCommand::kViewCMD: {
-        MS_LOG(INFO) << "ViewCMD";
-        // print view cmd content
-        ProtoVector<TensorProto> received_tensors = GetTensors(reply);
-        for (auto received_tensor : received_tensors) {
-          MS_LOG(INFO) << "tensor node name: " << received_tensor.node_name();
-          MS_LOG(INFO) << "tensor slot: " << received_tensor.slot();
-          MS_LOG(INFO) << "tensor finished: " << std::boolalpha << received_tensor.finished() << std::noboolalpha;
-          MS_LOG(INFO) << "tensor iter: " << received_tensor.iter();
-          MS_LOG(INFO) << "tensor truncate: " << std::boolalpha << received_tensor.truncate() << std::noboolalpha;
-        }
-        MS_LOG(INFO) << "Sending tensors";
-        std::list<TensorProto> tensors = LoadTensors(GetTensors(reply));
-        // print view cmd reply
-        for (auto tensor : tensors) {
-          MS_LOG(INFO) << "tensor node name: " << tensor.node_name();
-          MS_LOG(INFO) << "tensor slot: " << tensor.slot();
-          MS_LOG(INFO) << "tensor finished: " << std::boolalpha << tensor.finished() << std::noboolalpha;
-          MS_LOG(INFO) << "tensor iter: " << tensor.iter();
-          MS_LOG(INFO) << "tensor truncate: " << std::boolalpha << tensor.truncate() << std::noboolalpha;
-          MS_LOG(INFO) << "tensor dims: ";
-          for (auto dim : tensor.dims()) {
-            MS_LOG(INFO) << dim << ",";
-          }
-          MS_LOG(INFO) << "tensor dtype: " << tensor.data_type();
-        }
-        EventReply send_tensors_reply = grpc_client_->SendTensors(tensors);
-        if (send_tensors_reply.status() != send_tensors_reply.OK) {
-          MS_LOG(ERROR) << "Error: SendTensors failed";
-        }
-      } break;
+      case DebuggerCommand::kViewCMD:
+        ProcessKViewCMD(reply);
+        break;
       case DebuggerCommand::kVersionMatchedCMD:
         MS_LOG(ERROR) << "Received unexpected Version Matched CMD from Mindinsight.";
         Exit();
@@ -700,6 +641,81 @@ void Debugger::CommandLoop() {
         Exit();
         break;
     }
+  }
+}
+
+void Debugger::ProcessRunCMD(const EventReply &reply) {
+  MS_LOG(INFO) << "RunCMD";
+  if (GetRunLevel(reply) == "recheck") {
+    MS_LOG(INFO) << "rechecking all watchpoints";
+    SendWatchpoints(CheckWatchpoints("", nullptr, true));
+  } else {
+    // no longer the initial suspension.
+    initial_suspend_ = false;
+    // print run cmd content
+    // get run_level and node_name
+    run_level_ = GetRunLevel(reply);
+    node_name_ = GetNodeName(reply);
+
+    MS_LOG(INFO) << "run_level: " << run_level_;
+    MS_LOG(INFO) << "node_name_: " << node_name_;
+  }
+}
+
+void Debugger::ProcessKSetCMD(const EventReply &reply) {
+  MS_LOG(INFO) << "SetCMD";
+  MS_LOG(INFO) << "id: " << GetWatchpointID(reply);
+  MS_LOG(INFO) << "delete: " << GetWatchpointDelete(reply);
+  if (GetWatchpointDelete(reply)) {
+    MS_LOG(INFO) << "Deleting watchpoint";
+    RemoveWatchpoint(GetWatchpointID(reply));
+  } else {
+    MS_LOG(INFO) << "Setting watchpoint";
+    MS_LOG(INFO) << "condition: " << GetWatchcondition(reply).condition();
+    ProtoVector<WatchNode> recieved_nodes = GetWatchnodes(reply);
+    for (const auto &node : recieved_nodes) {
+      MS_LOG(INFO) << "node name: " << node.node_name();
+      MS_LOG(INFO) << "node type: " << node.node_type();
+    }
+    ProtoVector<WatchCondition_Parameter> parameters = GetParameters(reply);
+    for (const auto &parameter : parameters) {
+      MS_LOG(INFO) << "parameter name: " << parameter.name();
+      MS_LOG(INFO) << "parameter is disabled: " << parameter.disabled();
+      MS_LOG(INFO) << "parameter value: " << parameter.value();
+    }
+    SetWatchpoint(GetWatchnodes(reply), GetWatchcondition(reply), GetWatchpointID(reply), GetParameters(reply));
+  }
+}
+
+void Debugger::ProcessKViewCMD(const EventReply &reply) {
+  MS_LOG(INFO) << "ViewCMD";
+  // print view cmd content
+  ProtoVector<TensorProto> received_tensors = GetTensors(reply);
+  for (auto received_tensor : received_tensors) {
+    MS_LOG(INFO) << "tensor node name: " << received_tensor.node_name();
+    MS_LOG(INFO) << "tensor slot: " << received_tensor.slot();
+    MS_LOG(INFO) << "tensor finished: " << std::boolalpha << received_tensor.finished() << std::noboolalpha;
+    MS_LOG(INFO) << "tensor iter: " << received_tensor.iter();
+    MS_LOG(INFO) << "tensor truncate: " << std::boolalpha << received_tensor.truncate() << std::noboolalpha;
+  }
+  MS_LOG(INFO) << "Sending tensors";
+  std::list<TensorProto> tensors = LoadTensors(GetTensors(reply));
+  // print view cmd reply
+  for (auto tensor : tensors) {
+    MS_LOG(INFO) << "tensor node name: " << tensor.node_name();
+    MS_LOG(INFO) << "tensor slot: " << tensor.slot();
+    MS_LOG(INFO) << "tensor finished: " << std::boolalpha << tensor.finished() << std::noboolalpha;
+    MS_LOG(INFO) << "tensor iter: " << tensor.iter();
+    MS_LOG(INFO) << "tensor truncate: " << std::boolalpha << tensor.truncate() << std::noboolalpha;
+    MS_LOG(INFO) << "tensor dims: ";
+    for (auto dim : tensor.dims()) {
+      MS_LOG(INFO) << dim << ",";
+    }
+    MS_LOG(INFO) << "tensor dtype: " << tensor.data_type();
+  }
+  EventReply send_tensors_reply = grpc_client_->SendTensors(tensors);
+  if (send_tensors_reply.status() != send_tensors_reply.OK) {
+    MS_LOG(ERROR) << "Error: SendTensors failed";
   }
 }
 
@@ -967,7 +983,7 @@ ProtoVector<TensorProto> GetTensors(const EventReply &reply) {
 std::string GetTensorFullName(const TensorProto &tensor) {
   string node_name = tensor.node_name();
   if (tensor.truncate()) {
-    // scopes in node name are seperated by '/'
+    // scopes in node name are separated by '/'
     // use the name without scope if truncate is true
     std::size_t found = node_name.find_last_of("/");
     node_name = node_name.substr(found + 1);
@@ -1116,7 +1132,7 @@ void Debugger::LoadSingleAnfnode(const AnfNodePtr &anf_node, const size_t output
   // for parameters and value nodes, set its execution order to be 0;
   int exec_order = 0;
   std::string node_name = anf_node->fullname_with_scope();
-  E2eDumpUtil::GetFileKernelName(NOT_NULL(&node_name));
+  GetFileKernelName(NOT_NULL(&node_name));
   // check if output adde exists, if not, return;
   if (!AnfAlgo::OutputAddrExist(anf_node, output_index)) {
     return;
@@ -1124,6 +1140,9 @@ void Debugger::LoadSingleAnfnode(const AnfNodePtr &anf_node, const size_t output
   auto addr = AnfAlgo::GetOutputAddr(anf_node, output_index);
   MS_EXCEPTION_IF_NULL(addr);
   auto type = AnfAlgo::GetOutputInferDataType(anf_node, output_index);
+  if (type == kObjectTypeUMonad || type == kObjectTypeMonad || type == kObjectTypeIOMonad) {
+    return;
+  }
   auto format = kOpFormat_DEFAULT;
   string tensor_name = node_name + ':' + "0";
   ShapeVector int_shapes;
@@ -1186,6 +1205,9 @@ void Debugger::LoadGraphOutputs() {
       auto addr = AnfAlgo::GetOutputAddr(node, j);
       MS_EXCEPTION_IF_NULL(addr);
       auto type = AnfAlgo::GetOutputInferDataType(node, j);
+      if (type == kObjectTypeUMonad || type == kObjectTypeMonad || type == kObjectTypeIOMonad) {
+        continue;
+      }
       auto format = kOpFormat_DEFAULT;
       string tensor_name = kernel_name + ':' + std::to_string(j);
       ShapeVector int_shapes;

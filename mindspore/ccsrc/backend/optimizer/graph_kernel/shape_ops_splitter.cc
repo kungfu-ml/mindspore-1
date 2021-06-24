@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 #include "backend/optimizer/graph_kernel/shape_ops_splitter.h"
 #include <algorithm>
 #include <vector>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -34,12 +35,12 @@ namespace mindspore {
 namespace opt {
 namespace {
 AnfNodePtr CloneCNode(const AnfNodePtr &anf_node) {
-  auto kernel_graph = std::dynamic_pointer_cast<session::KernelGraph>(anf_node->func_graph());
-  MS_EXCEPTION_IF_NULL(kernel_graph);
+  auto func_graph = anf_node->func_graph();
+  MS_EXCEPTION_IF_NULL(func_graph);
   auto cnode = anf_node->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(cnode);
   TraceGuard guard(std::make_shared<TraceOpt>(cnode->debug_info()));
-  CNodePtr node = kernel_graph->NewCNode(cnode->inputs());
+  CNodePtr node = func_graph->NewCNode(cnode->inputs());
   node->set_abstract(cnode->abstract());
   node->set_forward(cnode->forward().first, cnode->forward().second);
   node->set_inputs_value(cnode->inputs_value());
@@ -50,18 +51,24 @@ AnfNodePtr CloneCNode(const AnfNodePtr &anf_node) {
 }
 
 void SplitNode(const AnfNodePtr &node, const FuncGraphManagerPtr &mng) {
-  auto &users = mng->node_users();
-  AnfNodePtrList splitted_nodes;
-  for (size_t i = 0; i < users[node].size(); ++i) {
-    splitted_nodes.push_back(CloneCNode(node));
+  const auto &index_set = mng->node_users()[node];
+  std::map<AnfNodePtr, std::vector<int>> users_info;
+  std::for_each(index_set.cbegin(), index_set.cend(), [&users_info](const std::pair<AnfNodePtr, int> &iter) {
+    users_info[iter.first].push_back(iter.second);
+  });
+
+  AnfNodePtrList split_nodes;
+  for (size_t i = 0; i < users_info.size(); ++i) {
+    split_nodes.push_back(CloneCNode(node));
   }
 
-  const auto &index_set = users[node];
   int i = 0;
-  for (auto [user, index] : index_set) {
+  for (auto [user, indices] : users_info) {
     auto user_node = user->cast<CNodePtr>();
     MS_EXCEPTION_IF_NULL(user_node);
-    user_node->set_input(index, splitted_nodes[i]);
+    for (auto index : indices) {
+      user_node->set_input(index, split_nodes[i]);
+    }
     i++;
   }
 }
@@ -69,9 +76,11 @@ void SplitNode(const AnfNodePtr &node, const FuncGraphManagerPtr &mng) {
 
 bool ShapeOpsSplitter::IsMultiUserShapeOps(const AnfNodePtr &node, const FuncGraphManagerPtr &mng) {
   auto &users = mng->node_users();
-  return users[node].size() > 1 && std::any_of(shape_ops_.begin(), shape_ops_.end(), [&node](const PrimitivePtr &prim) {
-           return IsPrimitiveCNode(node, prim);
-         });
+  std::set<AnfNodePtr> user_set;
+  std::transform(users[node].cbegin(), users[node].cend(), std::inserter(user_set, user_set.end()),
+                 [](const std::pair<AnfNodePtr, int> &iter) { return iter.first; });
+  return user_set.size() > 1 && std::any_of(shape_ops_.begin(), shape_ops_.end(),
+                                            [&node](const PrimitivePtr &prim) { return IsPrimitiveCNode(node, prim); });
 }
 
 bool ShapeOpsSplitter::Process(const FuncGraphPtr &func_graph) {
@@ -90,19 +99,38 @@ bool ShapeOpsSplitter::Process(const FuncGraphPtr &func_graph) {
       changed = true;
     }
   }
-
-  mng->RemoveRoots();
-  mng->KeepRoots({func_graph});
+  if (changed) {
+    mng->RemoveRoots();
+    mng->KeepRoots({func_graph});
+  }
   return changed;
 }
 
 bool ShapeOpsSplitter::Run(const FuncGraphPtr &func_graph) {
+  MS_EXCEPTION_IF_NULL(func_graph);
+  auto mng = func_graph->manager();
+  if (mng == nullptr) {
+    mng = Manage(func_graph, true);
+    func_graph->set_manager(mng);
+  }
+
+  auto todos = TopoSort(func_graph->get_return());
   bool result = false;
-  bool changed;
-  do {
-    changed = Process(func_graph);
-    result |= changed;
-  } while (changed);
+  for (const auto &anf_node : todos) {
+    if (AnfAlgo::IsGraphKernel(anf_node)) {
+      auto sub_graph = AnfAlgo::GetCNodeFuncGraphPtr(anf_node);
+      bool changed = false;
+      do {
+        changed = Process(sub_graph);
+        result = result || changed;
+      } while (changed);
+    }
+  }
+
+  if (result) {
+    mng->RemoveRoots();
+    mng->KeepRoots({func_graph});
+  }
   return result;
 }
 }  // namespace opt

@@ -79,13 +79,31 @@ class BatchNode : public DatasetNode {
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status Accept(IRNodePass *p, bool *modified) override;
+  Status Accept(IRNodePass *const p, bool *const modified) override;
 
   /// \brief Base-class override for accepting IRNodePass visitor
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status AcceptAfter(IRNodePass *p, bool *modified) override;
+  Status AcceptAfter(IRNodePass *const p, bool *const modified) override;
+
+  /// \brief Getter functions
+  int32_t BatchSize() const { return batch_size_; }
+  bool DropRemainder() const { return drop_remainder_; }
+#ifdef ENABLE_PYTHON
+  bool Pad() const { return pad_; }
+  const std::vector<std::string> &InColNames() const { return in_col_names_; }
+  const std::vector<std::string> &OutColNames() const { return out_col_names_; }
+  const std::vector<std::string> &ColOrder() const { return col_order_; }
+  const py::function &BatchSizeFunc() const { return batch_size_func_; }
+  const py::function &BatchMapFunc() const { return batch_map_func_; }
+  const std::map<std::string, std::pair<TensorShape, std::shared_ptr<Tensor>>> &PadMap() const { return pad_map_; }
+#endif
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
 
  private:
   int32_t batch_size_;

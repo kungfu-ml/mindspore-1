@@ -29,7 +29,7 @@ void MaxPoolingGradCPUKernel::InitKernel(const CNodePtr &kernel_node) {
   dst_shape_ = AnfAlgo::GetInputDeviceShape(kernel_node, 1);
   std::vector<int> kernel_sizes;
   std::vector<int> strides;
-  auto kernel_sizes_me = AnfAlgo::GetNodeAttr<std::vector<int64_t>>(kernel_node, KSIZE);
+  auto kernel_sizes_me = AnfAlgo::GetNodeAttr<std::vector<int64_t>>(kernel_node, KERNEL_SIZE);
   auto strides_me = AnfAlgo::GetNodeAttr<std::vector<int64_t>>(kernel_node, STRIDES);
   (void)std::transform(kernel_sizes_me.begin(), kernel_sizes_me.end(), std::back_inserter(kernel_sizes),
                        [](const int64_t &value) { return static_cast<int>(value); });
@@ -39,10 +39,12 @@ void MaxPoolingGradCPUKernel::InitKernel(const CNodePtr &kernel_node) {
     MS_LOG(EXCEPTION) << "pooling grad invalid input size";
   }
   std::vector<int> padding_r;
-  const std::string pad_mode = AnfAlgo::GetNodeAttr<std::string>(kernel_node, PADDING);
+  const std::string pad_mode = AnfAlgo::GetNodeAttr<std::string>(kernel_node, PAD_MODE);
   kernel_size_ = {IntToSize(kernel_sizes[2]), IntToSize(kernel_sizes[3])};
-  stride_ = strides[3];
-  GetPadding(kernel_node, pad_mode, src_shape_, kernel_size_, stride_, &padding_l_, &padding_r);
+  stride_.push_back(strides[2]);
+  stride_.push_back(strides[3]);
+  std::vector<int> dummy_dilation{1, 1};
+  GetPadding(kernel_node, pad_mode, src_shape_, kernel_size_, stride_, &padding_l_, &padding_r, dummy_dilation);
 }
 
 void MaxPoolingGradCPUKernel::RowPoolingGrad(const float *input, float *output, float diff,
@@ -94,9 +96,9 @@ void MaxPoolingGradCPUKernel::ChannelPoolingGrad(const float *input, const float
       box[1].second = IntToSize(std::min(w_start + SizeToInt(kernel_size_[1]), src_width));
       RowPoolingGrad(input, output, diff[diff_index], box, &row_max_pair);
       diff_index += 1;
-      w_start += stride_;
+      w_start += stride_[1];
     }
-    h_start += stride_;
+    h_start += stride_[0];
   }
 }
 

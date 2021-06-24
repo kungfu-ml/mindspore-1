@@ -25,10 +25,9 @@
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_Reverse;
+using mindspore::schema::PrimitiveType_ReverseV2;
 
 namespace mindspore::kernel {
-
 int ReverseCPUKernel::Stride(int index) {
   int stride = 1;
   for (size_t i = index + 1; i < in_tensors_.at(0)->shape().size(); ++i) {
@@ -38,8 +37,11 @@ int ReverseCPUKernel::Stride(int index) {
 }
 
 int ReverseCPUKernel::ReSize() {
+  // trans negative to positive axis
+  UpdateAxisInfo();
+
   data_size_ = in_tensors_.at(0)->ElementsNum();
-  thread_sz_count_ = MSMIN(thread_count_, data_size_);
+  thread_sz_count_ = MSMIN(op_parameter_->thread_num_, data_size_);
   thread_sz_stride_ = UP_DIV(data_size_, thread_sz_count_);
 
   auto *param = reinterpret_cast<ReverseParameter *>(op_parameter_);
@@ -135,5 +137,16 @@ int ReverseCPUKernel::Run() {
   return RET_OK;
 }
 
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Reverse, LiteKernelCreator<ReverseCPUKernel>)
+void ReverseCPUKernel::UpdateAxisInfo() {
+  auto reverse_param = reinterpret_cast<ReverseParameter *>(op_parameter_);
+  int in_shape_len = in_tensors_.front()->shape().size();
+  for (int i = 0; i < reverse_param->num_axis_; ++i) {
+    if (reverse_param->axis_[i] < 0) {
+      reverse_param->axis_[i] += in_shape_len;
+    }
+  }
+}
+
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_ReverseV2, LiteKernelCreator<ReverseCPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeInt32, PrimitiveType_ReverseV2, LiteKernelCreator<ReverseCPUKernel>)
 }  // namespace mindspore::kernel

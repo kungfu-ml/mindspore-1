@@ -17,6 +17,7 @@
 #include "backend/kernel_compiler/kernel_fusion.h"
 
 #include <map>
+#include <set>
 #include <string>
 #include <memory>
 #include "backend/kernel_compiler/tbe/tbe_kernel_build.h"
@@ -52,10 +53,24 @@ static size_t GenFusionJsonHash(const nlohmann::json &fusion_json) {
 }
 
 std::map<int64_t, KernelModPtr> KernelFusion(const std::vector<FusionScopeInfo> &fusion_scopes) {
-  MS_LOG(INFO) << "kernel fusion build start, scope size:" << fusion_scopes.size();
   std::map<int64_t, KernelModPtr> kernel_mod_ret;
+  static std::set<std::string> processed_fusion_kernel;
   auto build_manger = std::make_shared<ParallelBuildManager>();
   MS_EXCEPTION_IF_NULL(build_manger);
+  auto context_ptr = MsContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(context_ptr);
+  auto device_id = context_ptr->get_param<uint32_t>(MS_CTX_DEVICE_ID);
+  auto tune_mode = context_ptr->get_param<std::string>(MS_CTX_TUNE_MODE);
+  std::string offline_tune = common::GetEnv("ENABLE_TUNE_DUMP");
+  if (!offline_tune.empty()) {
+    for (size_t j = 0; j < offline_tune.length(); j++) {
+      offline_tune[j] = tolower(offline_tune[j]);
+    }
+    if (!(offline_tune == "true" || offline_tune == "false")) {
+      MS_LOG(EXCEPTION) << "The value of ENABLE_TUNE_DUMP must be 'true' or 'false'";
+    }
+  }
+
   for (const auto &fusion_scope_iter : fusion_scopes) {
     string fusion_kernel_name;
     nlohmann::json fusion_op;
@@ -65,13 +80,10 @@ std::map<int64_t, KernelModPtr> KernelFusion(const std::vector<FusionScopeInfo> 
     }
     // gen kernel_name & check cache
     size_t hash_id = GenFusionJsonHash(fusion_op);
-    MS_LOG(INFO) << "Fusion op hash id: " << hash_id;
-    auto context_ptr = MsContext::GetInstance();
-    MS_EXCEPTION_IF_NULL(context_ptr);
-    auto device_id = context_ptr->get_param<uint32_t>(MS_CTX_DEVICE_ID);
     auto json_name =
       fusion_kernel_name.append("_").append(std::to_string(hash_id)).append("_").append(std::to_string(device_id));
     fusion_op["fusion_op_name"] = json_name;
+    fusion_op["full_name"] = fusion_scope_iter.full_name;
     // get io size
     std::vector<size_t> input_size_list;
     std::vector<size_t> output_size_list;
@@ -81,8 +93,7 @@ std::map<int64_t, KernelModPtr> KernelFusion(const std::vector<FusionScopeInfo> 
     }
     // search cache
     auto kernel_pack = TbeUtils::SearchCache(json_name, tbe::kProcessorAiCore);
-    if (kernel_pack != nullptr) {
-      MS_LOG(INFO) << "Use cached kernel, kernel json name: " << json_name;
+    if (kernel_pack != nullptr && ((!offline_tune.empty() && offline_tune != "true") || tune_mode == "NO_TUNE")) {
       auto kernel_mod =
         build_manger->GenKernelMod(json_name, tbe::kProcessorAiCore, input_size_list, output_size_list, kernel_pack);
       if (kernel_mod != nullptr) {
@@ -90,9 +101,23 @@ std::map<int64_t, KernelModPtr> KernelFusion(const std::vector<FusionScopeInfo> 
         continue;
       }
     }
+    // same op not need build, but need wait build finish to set kernel mode
+    if (processed_fusion_kernel.find(json_name) != processed_fusion_kernel.end()) {
+      build_manger->SaveSameFusionOpInfo(fusion_scope_iter.scope_id, json_name, tbe::kProcessorAiCore, input_size_list,
+                                         output_size_list);
+      continue;
+    }
+    (void)processed_fusion_kernel.insert(json_name);
+    // generate soc info json
+    nlohmann::json soc_info_json;
+    TbeUtils::GenSocInfo(&soc_info_json);
+    soc_info_json["autoTilingMode"] = tune_mode;
+    auto soc_version = TbeKernelJsonCreator::GetSocVersion();
+    soc_info_json["socVersion"] = soc_version;
     // fusion build
     nlohmann::json fusion_json;
     fusion_json["fusion_op"] = fusion_op;
+    fusion_json["SocInfo"] = soc_info_json;
     auto task_id = build_manger->StartCompileOp(fusion_json);
     TbeUtils::SaveJsonInfo(json_name, fusion_json.dump());
     if (task_id < 0) {
@@ -122,6 +147,11 @@ std::map<int64_t, KernelModPtr> KernelFusion(const std::vector<FusionScopeInfo> 
       (void)kernel_mod_ret.emplace(kernel_mod_item);
     }
   }
+  bool ret = build_manger->GenSameFusionOpKernelMod(&kernel_mod_ret);
+  if (!ret) {
+    MS_LOG(INFO) << "Fusion warning: Fuison op has cache failed.";
+  }
+
   MS_LOG(INFO) << "Build Fusion Kernel Failed Num: " << build_failed_num;
   return kernel_mod_ret;
 }

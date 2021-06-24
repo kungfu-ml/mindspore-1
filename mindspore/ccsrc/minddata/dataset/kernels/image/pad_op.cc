@@ -16,7 +16,7 @@
 #include "minddata/dataset/kernels/image/pad_op.h"
 
 #include "minddata/dataset/kernels/image/image_utils.h"
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/util/status.h"
 
 namespace mindspore {
@@ -48,7 +48,7 @@ Status PadOp::OutputShape(const std::vector<TensorShape> &inputs, std::vector<Te
   TensorShape out({-1, -1, 3});  // we don't know what is output image size, but we know it should be 3 channels
   if (inputs[0].Rank() == 1) outputs.emplace_back(out);
   if (!outputs.empty()) return Status::OK();
-  return Status(StatusCode::kUnexpectedError, "Input has a wrong shape");
+  return Status(StatusCode::kMDUnexpectedError, "Pad: invalid input shape");
 }
 }  // namespace dataset
 }  // namespace mindspore

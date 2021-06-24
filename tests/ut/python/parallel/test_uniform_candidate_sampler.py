@@ -32,7 +32,7 @@ class Net(nn.Cell):
         if strategy1:
             self.sampler.shard(strategy1)
         self.embedding_table = Parameter(embedding_weight, "embedding_weight")
-        self.gatherv2 = P.GatherV2()
+        self.gatherv2 = P.Gather()
         self.reduce_sum = P.ReduceSum()
         self.reduce_sum2 = P.ReduceSum()
         self.reduce_sum3 = P.ReduceSum()
@@ -73,7 +73,7 @@ _x = Tensor(np.ones([48, 16]), dtype=ms.int32)
 
 
 def compile_net(net):
-    context.set_context(mode=context.GRAPH_MODE, save_graphs=True)
+    context.set_context(mode=context.GRAPH_MODE, save_graphs=False)
     optimizer = Momentum(net.trainable_params(), learning_rate=0.1, momentum=0.9)
     train_net = TrainOneStepCell(net, optimizer)
     train_net.set_auto_parallel()

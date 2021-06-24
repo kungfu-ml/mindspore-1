@@ -32,9 +32,9 @@ DATASET=$(get_real_path $1)
 echo $DATASET
 DATANAME=$2
 MODEL_CKPT=$(get_real_path $3)
-ulimit -u unlimited
+DEVICEID=$4
 export DEVICE_NUM=1
-export DEVICE_ID=5
+export DEVICE_ID=$DEVICEID
 export RANK_ID=0
 export RANK_SIZE=1
 

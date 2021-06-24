@@ -51,8 +51,8 @@ def test_linear():
         def __init__(self, strategy0, strategy1, strategy2):
             super().__init__()
             self.fc_nobias = P.MatMul(transpose_b=True).shard(strategy0)
-            self.add = P.TensorAdd().shard(strategy1)
-            self.gelu = P.Gelu().shard(strategy2)
+            self.add = P.Add().shard(strategy1)
+            self.gelu = P.GeLU().shard(strategy2)
 
         def construct(self, x, y, bias):
             out = self.fc_nobias(x, y)

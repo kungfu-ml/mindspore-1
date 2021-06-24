@@ -29,9 +29,7 @@ extern std::set<schema::PrimitiveType> SupportedOpenCLArithmetics;
 
 class ArithmeticOpenCLKernel : public OpenCLKernel {
  public:
-  ArithmeticOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                         const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
   ~ArithmeticOpenCLKernel() override = default;
 
   int Run() override;
@@ -45,8 +43,10 @@ class ArithmeticOpenCLKernel : public OpenCLKernel {
   bool element_flag_{true};
   float activation_min_{-FLT_MAX};
   float activation_max_{FLT_MAX};
-  std::vector<std::vector<int>> inputs_nhwc_shapes_;
-  std::vector<void *> inputs_weight_ptrs_;
+  GpuTensorInfo in0_shape_;
+  GpuTensorInfo in1_shape_;
+  GpuTensorInfo out_shape_;
+  std::vector<void *> weight_ptrs_;
   std::string kernel_name_;
 };
 }  // namespace mindspore::kernel

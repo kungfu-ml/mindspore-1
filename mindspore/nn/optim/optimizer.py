@@ -19,6 +19,7 @@ import numpy as np
 
 import mindspore
 from mindspore.ops import functional as F, composite as C, operations as P
+from mindspore.ops.operations import _inner_ops as inner
 from mindspore.nn.cell import Cell
 from mindspore.nn.layer.container import CellList
 from mindspore.common.parameter import Parameter, ParameterTuple
@@ -43,11 +44,15 @@ class Optimizer(Cell):
         This class defines the API to add Ops to train a model. Never use
         this class directly, but instead instantiate one of its subclasses.
 
-        Different parameter groups can set different `learning_rate` and `weight_decay`.
+        Different parameter groups can set different `learning_rate`, `weight_decay` and `grad_centralization`.
 
         When separating parameter groups, the weight decay in each group will be applied on the parameters if the
         weight_decay is positive. For most optimizer, when not separating parameters, the `weight_decay` in the API will
         be applied on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
+
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
 
         To improve parameter groups performance, the customized order of parameters can be supported.
 
@@ -75,14 +80,28 @@ class Optimizer(Cell):
               the order will be followed in optimizer. There are no other keys in the `dict` and the parameters which
               in the value of 'order_params' must be in one of group parameters.
 
-        weight_decay (float): A floating point value for the weight decay. It must be equal to or greater than 0.
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
+
+        weight_decay (Union[float, int]): An int or a floating point value for the weight decay.
+            It must be equal to or greater than 0.
             If the type of `weight_decay` input is int, it will be converted to float. Default: 0.0.
         loss_scale (float): A floating point value for the loss scale. It must be greater than 0. If the
-            type of `loss_scale` input is int, it will be converted to float. Default: 1.0.
+            type of `loss_scale` input is int, it will be converted to float. In general, use the default value. Only
+            when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
 
     Raises:
-        ValueError: If the learning_rate is a Tensor, but the dimension of tensor is greater than 1.
-        TypeError: If the learning_rate is not any of the three types: float, Tensor, nor Iterable.
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `loss_scale` is not a float.
+        TypeError: If `weight_decay` is neither float nor int.
+        ValueError: If `loss_scale` is less than or equal to 0.
+        ValueError: If `weight_decay` is less than 0.
+        ValueError: If `learning_rate` is a Tensor, but the dimension of tensor is greater than 1.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -106,6 +125,7 @@ class Optimizer(Cell):
         self.loss_scale = loss_scale
 
         weight_decay = self._preprocess_weight_decay(weight_decay)
+        self.grad_centralization = False
 
         self._unique = True
         self._target = context.get_context("device_target")
@@ -121,7 +141,8 @@ class Optimizer(Cell):
             self.group_params = []
             self.group_lr = []
             self.group_weight_decay = []
-            self._init_group_params(parameters, learning_rate, weight_decay)
+            self.group_grad_centralization = []
+            self._init_group_params(parameters, learning_rate, weight_decay, self.grad_centralization)
 
         # The final value of dynamic_lr can be determined after the process of parse_single_lr and init_group_params
         if self.dynamic_lr:
@@ -129,12 +150,11 @@ class Optimizer(Cell):
             self.global_step = Parameter(initializer(0, [1], mindspore.int32), name='global_step')
 
         if self.is_group_lr:
-            if self.dynamic_lr:
-                self.learning_rate = CellList(self.group_lr)
-            else:
-                self.learning_rate = ParameterTuple(self.group_lr)
+            self.learning_rate = CellList(self.group_lr, auto_prefix=False) if self.dynamic_lr \
+                else ParameterTuple(self.group_lr)
         else:
             self.learning_rate = self._build_single_lr(learning_rate, 'learning_rate')
+
         if self.is_group:
             self.parameters = ParameterTuple(self.group_params)
             self.weight_decay = tuple(self.group_weight_decay)
@@ -142,6 +162,7 @@ class Optimizer(Cell):
             decay_filter = lambda x: x > 0
             self.decay_flags = tuple(decay_filter(x) for x in self.weight_decay)
             self.exec_weight_decay = any(self.decay_flags)
+            self.grad_centralization_flags = tuple(self.group_grad_centralization)
         else:
             self.parameters = ParameterTuple(parameters)
             self.weight_decay = weight_decay * loss_scale
@@ -156,13 +177,17 @@ class Optimizer(Cell):
                 break
         ps_filter = lambda x: x.is_param_ps
         self.ps_parameters = tuple(ps_filter(x) for x in self.parameters)
-        ps_cache_filter = lambda x: x.cache_enable
-        self.cache_enable = tuple(ps_cache_filter(x) for x in self.parameters)
+        cache_filter = lambda x: x.cache_enable
+        self.cache_enable = tuple(cache_filter(x) for x in self.parameters)
         self.reciprocal_scale = Tensor(1.0 / loss_scale, mstype.float32)
         self.need_scale = loss_scale != 1.0
         self.global_step_increase_tensor = Tensor(1, mstype.int32)
         self.param_length = len(self.parameters)
         self.map_ = C.Map()
+        self._use_parallel_optimizer()
+
+    def _use_parallel_optimizer(self):
+        """Indicates whether to use automatic parallelism."""
         if context.get_auto_parallel_context("enable_parallel_optimizer"):
             if _get_parallel_mode() == ParallelMode.DATA_PARALLEL and context.get_context("device_target") == "Ascend":
                 self.use_parallel = True
@@ -187,7 +212,6 @@ class Optimizer(Cell):
             self.param_names = []
             for param in self.parameters:
                 self.param_names.append(param.name)
-
         else:
             self.optim_filter = (True,) * self.param_length
 
@@ -239,6 +263,25 @@ class Optimizer(Cell):
 
         return gradients
 
+    def gradients_centralization(self, gradients):
+        """
+        Gradients centralization.
+
+        A method for optimizing convolutional layer parameters to impore the training speed of a deep learning neural
+        network model.
+
+        Args:
+            gradients (tuple[Tensor]): The gradients of `self.parameters`, and have the same shape as
+                `self.parameters`.
+
+        Returns:
+            tuple[Tensor], The gradients after gradients centralization.
+        """
+        if self.is_group:
+            gradients = self.map_(F.partial(_apply_grad_centralization), self.grad_centralization_flags, gradients)
+
+        return gradients
+
     def scale_grad(self, gradients):
         """
         Loss scale for mixed precision.
@@ -260,7 +303,7 @@ class Optimizer(Cell):
         return gradients
 
     def _grad_sparse_indices_deduplicate(self, gradients):
-        """ In the case of using big operators, de duplicate the 'indexes' in gradients."""
+        """ In the case of using big operators, deduplicate the 'indexes' in gradients."""
         if self._target != 'CPU' and self._unique:
             gradients = self.map_(F.partial(_indices_deduplicate), gradients)
         return gradients
@@ -272,6 +315,11 @@ class Optimizer(Cell):
             validator.check_non_negative_float(weight_decay, "weight_decay", self.cls_name)
             return weight_decay
         raise TypeError("Weight decay should be int or float.")
+
+    def _preprocess_grad_centralization(self, grad_centralization):
+        if not isinstance(grad_centralization, bool):
+            raise TypeError("The gradients centralization should be bool")
+        return grad_centralization
 
     def _preprocess_single_lr(self, learning_rate):
         """Check lr value, and convert lr to a float, a Tensor or a LearningRateSchedule."""
@@ -315,7 +363,7 @@ class Optimizer(Cell):
 
     def _check_group_params(self, parameters):
         """Check group params."""
-        parse_keys = ['params', 'lr', 'weight_decay', 'order_params']
+        parse_keys = ['params', 'lr', 'weight_decay', 'order_params', 'grad_centralization']
         for group_param in parameters:
             invalid_key = list(filter(lambda x: x not in parse_keys, group_param.keys()))
             if invalid_key:
@@ -365,8 +413,8 @@ class Optimizer(Cell):
                     elif group_lr_length != tensor_lr_length:
                         raise ValueError("The Tensor type dynamic learning rate in group should be the same size.")
 
-    def _init_group_params(self, parameters, learning_rate, weight_decay):
-        """Initialize learning rate or weight decay in group params."""
+    def _init_group_params(self, parameters, learning_rate, weight_decay, grad_centralization):
+        """Initialize learning rate, weight decay or grad centralization in group params."""
         self._parse_group_params(parameters, learning_rate)
         default_lr = self._build_single_lr(learning_rate, 'learning_rate')
 
@@ -391,8 +439,20 @@ class Optimizer(Cell):
             else:
                 weight_decay_ = weight_decay * self.loss_scale
 
+            if 'grad_centralization' in group_param.keys():
+                self.grad_centralization = self._preprocess_grad_centralization(group_param['grad_centralization'])
+                for param in group_param['params']:
+                    validator.check_value_type("parameter", param, [Parameter], self.cls_name)
+                    if "conv" not in param.name and self.grad_centralization is True:
+                        raise ValueError("Grad centralization can be perform only on the conv layer. If the parameter"
+                                         "is not a convolution layer, this parameter cannot be set to True.")
+
+                    grad_centralization_ = self.grad_centralization
+            else:
+                grad_centralization_ = grad_centralization
+
             for key in group_param.keys():
-                if key not in ('params', 'lr', 'weight_decay'):
+                if key not in ('params', 'lr', 'weight_decay', 'grad_centralization'):
                     logger.warning(f"The optimizer cannot parse '{key}' when setting parameter groups.")
 
             for param in group_param['params']:
@@ -403,13 +463,14 @@ class Optimizer(Cell):
                 params_store.append(param.name)
                 self.group_lr.append(lr)
                 self.group_weight_decay.append(weight_decay_)
+                self.group_grad_centralization.append(grad_centralization_)
 
         if self.is_group_params_ordered:
             self._order_and_adjust_group_params(ordered_parameters)
 
     def _order_and_adjust_group_params(self, ordered_parameters):
         """
-        Order group parameter, learning rate and weight decay in group params.
+        Order group parameter, learning rate, weight decay and grad centralization in group params.
         """
         params_length = len(self.group_params)
         if len(ordered_parameters) != len(self.group_params):
@@ -418,17 +479,21 @@ class Optimizer(Cell):
         ordered_params = [None] * params_length
         ordered_learning_rate = [None] * params_length
         ordered_weight_decay = [None] * params_length
+        ordered_grad_centralization = [None] * params_length
         params_name = [param.name for param in ordered_parameters]
 
-        for param, lr, wd in zip(self.group_params, self.group_lr, self.group_weight_decay):
+        for param, lr, wd, gc in zip(self.group_params, self.group_lr, self.group_weight_decay,
+                                     self.group_grad_centralization):
             index = params_name.index(param.name)
             ordered_params[index] = param
             ordered_learning_rate[index] = lr
             ordered_weight_decay[index] = wd
+            ordered_grad_centralization[index] = gc
 
         self.group_params = ordered_params
         self.group_lr = ordered_learning_rate
         self.group_weight_decay = ordered_weight_decay
+        self.group_grad_centralization = ordered_grad_centralization
 
     def get_lr(self):
         """
@@ -447,7 +512,7 @@ class Optimizer(Cell):
             else:
                 lr = self.learning_rate(self.global_step)
 
-            F.control_depend(lr, self.assignadd(self.global_step, self.global_step_increase_tensor))
+            self.assignadd(self.global_step, self.global_step_increase_tensor)
         return lr
 
     def get_lr_parameter(self, param):
@@ -522,25 +587,27 @@ class Optimizer(Cell):
         new_param_group = []
         for root in range(self.dev_num):
             ops = P.Broadcast(root)
+            if root > 0:
+                param_group[root] = F.depend(param_group[root], new_param_group[root-1])
+            else:
+                param_group[root] = F.depend(param_group[root], optim_result)
             next_params = ops(param_group[root])
             new_param_group.append(next_params)
             for i in range(F.tuple_len(next_params)):
                 F.assign(key_group[root][i], next_params[i])
-        status = F.control_depend(optim_result, new_param_group[0][0])
-        for i in range(self.dev_num - 1):
-            status = F.depend(F.control_depend(new_param_group[i], new_param_group[i+1][0]), status)
-
-        return status
+        return new_param_group
 
     def construct(self, *hyper_params):
         raise NotImplementedError
 
 
 op_add = P.AddN()
-op_gather = P.GatherV2()
+op_gather = P.Gather()
 op_mul = P.Mul()
+op_gc = inner.Centralization()
 
 _apply_decay = C.MultitypeFuncGraph("apply_decay")
+_apply_grad_centralization = C.MultitypeFuncGraph("apply_grad_centralization")
 
 
 @_apply_decay.register("Tensor", "Bool", "Tensor", "RowTensor")
@@ -562,8 +629,28 @@ def _tensor_apply_decay(weight_decay, if_apply, weight, gradient):
     return gradient
 
 
+@_apply_grad_centralization.register("Bool", "RowTensor")
+def _tensor_apply_grad_centralization_with_sparse(if_apply, gradient):
+    """Get grad with grad_centralization."""
+    if if_apply:
+        indices = gradient.indices
+        values = op_gc(gradient.values, -1)
+        shape = gradient.dense_shape
+        return RowTensor(indices, values, shape)
+    return gradient
+
+
+@_apply_grad_centralization.register("Bool", "Tensor")
+def _tensor_apply_grad_centralization(if_apply, gradient):
+    """Get grad with grad_centralization."""
+    if if_apply:
+        return op_gc(gradient, -1)
+    return gradient
+
+
 _grad_scale = C.MultitypeFuncGraph("grad_scale")
 _indices_deduplicate = C.MultitypeFuncGraph("indices_deduplicate")
+
 
 @_grad_scale.register("Number", "Tensor")
 def tensor_grad_scale(scale, grad):
@@ -572,10 +659,12 @@ def tensor_grad_scale(scale, grad):
         return grad
     return op_mul(grad, F.cast(scale, F.dtype(grad)))
 
+
 @_grad_scale.register("Tensor", "Tensor")
 def tensor_grad_scale_with_tensor(scale, grad):
     """Get grad with scale."""
     return op_mul(grad, F.cast(scale, F.dtype(grad)))
+
 
 @_grad_scale.register("Tensor", "RowTensor")
 def tensor_grad_scale_with_sparse(scale, grad):
@@ -625,7 +714,7 @@ class _IteratorLearningRate(LearningRateSchedule):
             raise TypeError("Learning rate should be Tensor.")
 
         self.learning_rate = Parameter(learning_rate, name)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
 
     def construct(self, global_step):
         return self.gather(self.learning_rate, global_step, 0)

@@ -80,6 +80,8 @@ PYBIND11_MODULE(_c_expression, m) {
          py::arg("params"), "Fetch the inputs of Conv or Matmul for quant export.")
     .def("get_parameter_layout", &ExecutorPy::GetParameterLayout, py::arg("phase") = py::str("train"),
          "Get Parameter Tensor Layout Dictionary.")
+    .def("get_parallel_parameter_name_list", &ExecutorPy::GetParallelParameterNameList,
+         py::arg("phase") = py::str("train"), "Get Parallel Parameter Name List.")
     .def("get_strategy", &ExecutorPy::GetCNodeStrategy, py::arg("phase") = py::str("train"),
          "Get CNode Strategy Dictionary.")
     .def("get_num_parallel_ops", &ExecutorPy::GetNumOpsInfo, py::arg("phase") = py::str("train"),
@@ -109,6 +111,7 @@ PYBIND11_MODULE(_c_expression, m) {
   (void)m.def("init_pipeline", &mindspore::pipeline::InitPipeline, "Init Pipeline.");
 
   (void)m.def("export_graph", &mindspore::pipeline::ExportGraph, "Export Graph.");
+  (py::object) m.def("load_mindir", &mindspore::pipeline::LoadMindIR, py::arg("file_name"), "Load model as Graph.");
 
   (void)py::class_<mindspore::MpiConfig, std::shared_ptr<mindspore::MpiConfig>>(m, "MpiConfig")
     .def_static("get_instance", &mindspore::MpiConfig::GetInstance, "Get mpi config instance.")
@@ -157,6 +160,7 @@ PYBIND11_MODULE(_c_expression, m) {
          "Set strategy checkpoint save file.")
     .def("get_strategy_ckpt_load_file", &ParallelContext::strategy_ckpt_load_file, "Get strategy checkpoint load file.")
     .def("get_strategy_ckpt_save_file", &ParallelContext::strategy_ckpt_save_file, "Get strategy checkpoint save file.")
+    .def("set_group_ckpt_save_file", &ParallelContext::set_group_ckpt_save_file, "Set group checkpoint save file.")
     .def("set_pipeline_stage_split_num", &ParallelContext::set_pipeline_stage_split_num,
          "Set pipeline stage split num.")
     .def("get_pipeline_stage_split_num", &ParallelContext::pipeline_stage_split_num, "Get pipeline stage split num.")
@@ -166,6 +170,8 @@ PYBIND11_MODULE(_c_expression, m) {
          "Set enable/disable parallel optimizer.")
     .def("get_enable_parallel_optimizer", &ParallelContext::enable_parallel_optimizer,
          "Get enable/disable parallel optimizer.")
+    .def("set_communi_parallel_mode", &ParallelContext::set_communi_parallel_mode, "Set communication parallel mode.")
+    .def("get_communi_parallel_mode", &ParallelContext::communi_parallel_mode, "Get communication parallel mode.")
     .def("reset", &ParallelContext::Reset, "Reset auto parallel context.");
 
   (void)py::class_<CostModelContext, std::shared_ptr<CostModelContext>>(m, "CostModelContext")
@@ -306,11 +312,11 @@ PYBIND11_MODULE(_c_expression, m) {
   (void)py::class_<PSContext, std::shared_ptr<PSContext>>(m, "PSContext")
     .def_static("get_instance", &PSContext::instance, "Get PS context instance.")
     .def("set_ps_enable", &PSContext::SetPSEnable, "Set PS mode enabled or disabled.")
-    .def("is_ps_enabled", &PSContext::is_ps_enabled, "Get PS mode enable-disable status.")
+    .def("is_ps_mode", &PSContext::is_ps_mode, "Get PS mode enable-disable status.")
     .def("reset", &PSContext::Reset, "Reset PS context attributes.")
-    .def("is_role_worker", &PSContext::is_role_worker, "Get whether the role of this process is Worker.")
-    .def("is_role_pserver", &PSContext::is_role_pserver, "Get whether the role of this process is PServer.")
-    .def("is_role_sched", &PSContext::is_role_sched, "Get whether the role of this process is Scheduler.")
+    .def("is_worker", &PSContext::is_worker, "Get whether the role of this process is Worker.")
+    .def("is_server", &PSContext::is_server, "Get whether the role of this process is PServer.")
+    .def("is_scheduler", &PSContext::is_scheduler, "Get whether the role of this process is Scheduler.")
     .def("ps_rank_id", &PSContext::ps_rank_id, "Get Worker and PServer rank id.")
     .def("insert_hash_table_size", &PSContext::InsertHashTableSize, "Insert hash table size.")
     .def("reinsert_hash_table_size", &PSContext::ReInsertHashTableSize,
@@ -318,7 +324,8 @@ PYBIND11_MODULE(_c_expression, m) {
     .def("insert_weight_init_info", &PSContext::InsertWeightInitInfo, "Insert embedding table initialization seed.")
     .def("insert_accumu_init_info", &PSContext::InsertAccumuInitInfo, "Insert accumulation initialization value.")
     .def("clone_hash_table", &PSContext::CloneHashTable, "Clone a hash table.")
-    .def("set_cache_enable", &PSContext::set_cache_enable, "Set ps mode cache enable or not.");
+    .def("set_cache_enable", &PSContext::set_cache_enable, "Set ps mode cache enable or not.")
+    .def("set_rank_id", &PSContext::set_rank_id, "Set rank id for worker on ps mode.");
 
   (void)py::class_<OpInfoLoaderPy, std::shared_ptr<OpInfoLoaderPy>>(m, "OpInfoLoaderPy")
     .def(py::init())

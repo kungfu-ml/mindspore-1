@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,29 +17,8 @@
 #include <unistd.h>
 
 #include "minddata/dataset/include/text.h"
-#ifndef _WIN32
-#include "minddata/dataset/text/kernels/basic_tokenizer_op.h"
-#include "minddata/dataset/text/kernels/bert_tokenizer_op.h"
-#include "minddata/dataset/text/kernels/case_fold_op.h"
-#endif
-#include "minddata/dataset/text/kernels/jieba_tokenizer_op.h"
-#include "minddata/dataset/text/kernels/lookup_op.h"
-#include "minddata/dataset/text/kernels/ngram_op.h"
-#ifndef _WIN32
-#include "minddata/dataset/text/kernels/normalize_utf8_op.h"
-#include "minddata/dataset/text/kernels/regex_replace_op.h"
-#include "minddata/dataset/text/kernels/regex_tokenizer_op.h"
-#endif
-#include "minddata/dataset/text/kernels/sentence_piece_tokenizer_op.h"
-#include "minddata/dataset/text/kernels/sliding_window_op.h"
-#include "minddata/dataset/text/kernels/to_number_op.h"
-#include "minddata/dataset/text/kernels/truncate_sequence_pair_op.h"
-#include "minddata/dataset/text/kernels/unicode_char_tokenizer_op.h"
-#ifndef _WIN32
-#include "minddata/dataset/text/kernels/unicode_script_tokenizer_op.h"
-#include "minddata/dataset/text/kernels/whitespace_tokenizer_op.h"
-#endif
-#include "minddata/dataset/util/path.h"
+
+#include "minddata/dataset/text/ir/kernels/text_ir.h"
 
 namespace mindspore {
 namespace dataset {
@@ -51,506 +30,312 @@ namespace text {
 // (In alphabetical order)
 
 #ifndef _WIN32
-std::shared_ptr<BasicTokenizerOperation> BasicTokenizer(bool lower_case, bool keep_whitespace,
-                                                        const NormalizeForm normalize_form, bool preserve_unused_token,
-                                                        bool with_offsets) {
-  auto op = std::make_shared<BasicTokenizerOperation>(lower_case, keep_whitespace, normalize_form,
-                                                      preserve_unused_token, with_offsets);
+// BasicTokenizer
+struct BasicTokenizer::Data {
+  Data(bool lower_case, bool keep_whitespace, const NormalizeForm normalize_form, bool preserve_unused_token,
+       bool with_offsets)
+      : lower_case_(lower_case),
+        keep_whitespace_(keep_whitespace),
+        normalize_form_(normalize_form),
+        preserve_unused_token_(preserve_unused_token),
+        with_offsets_(with_offsets) {}
+  bool lower_case_;
+  bool keep_whitespace_;
+  NormalizeForm normalize_form_;
+  bool preserve_unused_token_;
+  bool with_offsets_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
+BasicTokenizer::BasicTokenizer(bool lower_case, bool keep_whitespace, const NormalizeForm normalize_form,
+                               bool preserve_unused_token, bool with_offsets)
+    : data_(std::make_shared<Data>(lower_case, keep_whitespace, normalize_form, preserve_unused_token, with_offsets)) {}
+
+std::shared_ptr<TensorOperation> BasicTokenizer::Parse() {
+  return std::make_shared<BasicTokenizerOperation>(data_->lower_case_, data_->keep_whitespace_, data_->normalize_form_,
+                                                   data_->preserve_unused_token_, data_->with_offsets_);
 }
 
-std::shared_ptr<BertTokenizerOperation> BertTokenizer(const std::shared_ptr<Vocab> &vocab,
-                                                      const std::string &suffix_indicator, int32_t max_bytes_per_token,
-                                                      const std::string &unknown_token, bool lower_case,
-                                                      bool keep_whitespace, const NormalizeForm normalize_form,
-                                                      bool preserve_unused_token, bool with_offsets) {
-  auto op =
-    std::make_shared<BertTokenizerOperation>(vocab, suffix_indicator, max_bytes_per_token, unknown_token, lower_case,
-                                             keep_whitespace, normalize_form, preserve_unused_token, with_offsets);
+// BertTokenizer
+struct BertTokenizer::Data {
+  Data(const std::shared_ptr<Vocab> &vocab, const std::vector<char> &suffix_indicator, int32_t max_bytes_per_token,
+       const std::vector<char> &unknown_token, bool lower_case, bool keep_whitespace,
+       const NormalizeForm normalize_form, bool preserve_unused_token, bool with_offsets)
+      : vocab_(vocab),
+        suffix_indicator_(CharToString(suffix_indicator)),
+        max_bytes_per_token_(max_bytes_per_token),
+        unknown_token_(CharToString(unknown_token)),
+        lower_case_(lower_case),
+        keep_whitespace_(keep_whitespace),
+        normalize_form_(normalize_form),
+        preserve_unused_token_(preserve_unused_token),
+        with_offsets_(with_offsets) {}
+  std::shared_ptr<Vocab> vocab_;
+  std::string suffix_indicator_;
+  int32_t max_bytes_per_token_;
+  std::string unknown_token_;
+  bool lower_case_;
+  bool keep_whitespace_;
+  NormalizeForm normalize_form_;
+  bool preserve_unused_token_;
+  bool with_offsets_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
+BertTokenizer::BertTokenizer(const std::shared_ptr<Vocab> &vocab, const std::vector<char> &suffix_indicator,
+                             int32_t max_bytes_per_token, const std::vector<char> &unknown_token, bool lower_case,
+                             bool keep_whitespace, const NormalizeForm normalize_form, bool preserve_unused_token,
+                             bool with_offsets)
+    : data_(std::make_shared<Data>(vocab, suffix_indicator, max_bytes_per_token, unknown_token, lower_case,
+                                   keep_whitespace, normalize_form, preserve_unused_token, with_offsets)) {}
+
+std::shared_ptr<TensorOperation> BertTokenizer::Parse() {
+  return std::make_shared<BertTokenizerOperation>(
+    data_->vocab_, data_->suffix_indicator_, data_->max_bytes_per_token_, data_->unknown_token_, data_->lower_case_,
+    data_->keep_whitespace_, data_->normalize_form_, data_->preserve_unused_token_, data_->with_offsets_);
 }
 
-std::shared_ptr<CaseFoldOperation> CaseFold() {
-  auto op = std::make_shared<CaseFoldOperation>();
+// CaseFold
+CaseFold::CaseFold() {}
 
-  return op->ValidateParams() ? op : nullptr;
-}
+std::shared_ptr<TensorOperation> CaseFold::Parse() { return std::make_shared<CaseFoldOperation>(); }
 #endif
 
-std::shared_ptr<JiebaTokenizerOperation> JiebaTokenizer(const std::string &hmm_path, const std::string &mp_path,
-                                                        const JiebaMode &mode, bool with_offsets) {
-  auto op = std::make_shared<JiebaTokenizerOperation>(hmm_path, mp_path, mode, with_offsets);
+// JiebaTokenizer
+struct JiebaTokenizer::Data {
+  Data(const std::vector<char> &hmm_path, const std::vector<char> &mp_path, const JiebaMode &mode, bool with_offsets)
+      : hmm_path_(CharToString(hmm_path)),
+        mp_path_(CharToString(mp_path)),
+        mode_(mode),
+        with_offsets_(with_offsets),
+        words_list_({}) {}
+  std::string hmm_path_;
+  std::string mp_path_;
+  JiebaMode mode_;
+  bool with_offsets_;
+  std::vector<std::pair<std::string, int64_t>> words_list_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
+JiebaTokenizer::JiebaTokenizer(const std::vector<char> &hmm_path, const std::vector<char> &mp_path,
+                               const JiebaMode &mode, bool with_offsets)
+    : data_(std::make_shared<Data>(hmm_path, mp_path, mode, with_offsets)) {}
+
+std::shared_ptr<TensorOperation> JiebaTokenizer::Parse() {
+  std::shared_ptr<JiebaTokenizerOperation> jieba_tokenizer =
+    std::make_shared<JiebaTokenizerOperation>(data_->hmm_path_, data_->mp_path_, data_->mode_, data_->with_offsets_);
+  for (auto &word : data_->words_list_) {
+    Status rc = jieba_tokenizer->AddWord(word.first, word.second);
+    if (rc.IsError()) {
+      MS_LOG(ERROR) << rc;
+      return {};
+    }
+  }
+  return jieba_tokenizer;
 }
 
-std::shared_ptr<LookupOperation> Lookup(const std::shared_ptr<Vocab> &vocab, const std::string &unknown_token,
-                                        const DataType &data_type) {
-  auto op = std::make_shared<LookupOperation>(vocab, unknown_token, data_type);
-
-  return op->ValidateParams() ? op : nullptr;
+Status JiebaTokenizer::AddWord(const std::string &word, int64_t freq) {
+  if (word.empty()) {
+    std::string err_msg = "JiebaTokenizer : The parameter word is empty or not provided.";
+    MS_LOG(ERROR) << err_msg;
+    RETURN_STATUS_SYNTAX_ERROR(err_msg);
+  }
+  if (freq < 0) {
+    std::string err_msg = "JiebaTokenizer : The parameter freq must be greater than or equal to 0.";
+    MS_LOG(ERROR) << err_msg;
+    RETURN_STATUS_SYNTAX_ERROR(err_msg);
+  }
+  data_->words_list_.emplace_back(word, freq);
+  return Status::OK();
 }
 
-std::shared_ptr<NgramOperation> Ngram(const std::vector<int32_t> &ngrams,
-                                      const std::pair<std::string, int32_t> &left_pad,
-                                      const std::pair<std::string, int32_t> &right_pad, const std::string &separator) {
-  auto op = std::make_shared<NgramOperation>(ngrams, left_pad, right_pad, separator);
+// Lookup
+struct Lookup::Data {
+  Data(const std::shared_ptr<Vocab> &vocab, const std::optional<std::vector<char>> &unknown_token,
+       const std::vector<char> &data_type)
+      : vocab_(vocab), unknown_token_(OptionalCharToString(unknown_token)), data_type_(CharToString(data_type)) {}
+  std::shared_ptr<Vocab> vocab_;
+  std::optional<std::string> unknown_token_;
+  std::string data_type_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
+Lookup::Lookup(const std::shared_ptr<Vocab> &vocab, const std::optional<std::vector<char>> &unknown_token,
+               const std::vector<char> &data_type)
+    : data_(std::make_shared<Data>(vocab, unknown_token, data_type)) {}
+
+std::shared_ptr<TensorOperation> Lookup::Parse() {
+  return std::make_shared<LookupOperation>(data_->vocab_, data_->unknown_token_, data_->data_type_);
+}
+
+// Ngram
+struct Ngram::Data {
+  Data(const std::vector<int32_t> &ngrams, const std::pair<std::vector<char>, int32_t> &left_pad,
+       const std::pair<std::vector<char>, int32_t> &right_pad, const std::vector<char> &separator)
+      : ngrams_(ngrams),
+        left_pad_(PairCharToString(left_pad)),
+        right_pad_(PairCharToString(right_pad)),
+        separator_(CharToString(separator)) {}
+  std::vector<int32_t> ngrams_;
+  std::pair<std::string, int32_t> left_pad_;
+  std::pair<std::string, int32_t> right_pad_;
+  std::string separator_;
+};
+
+Ngram::Ngram(const std::vector<int32_t> &ngrams, const std::pair<std::vector<char>, int32_t> &left_pad,
+             const std::pair<std::vector<char>, int32_t> &right_pad, const std::vector<char> &separator)
+    : data_(std::make_shared<Data>(ngrams, left_pad, right_pad, separator)) {}
+
+std::shared_ptr<TensorOperation> Ngram::Parse() {
+  return std::make_shared<NgramOperation>(data_->ngrams_, data_->left_pad_, data_->right_pad_, data_->separator_);
 }
 
 #ifndef _WIN32
-std::shared_ptr<NormalizeUTF8Operation> NormalizeUTF8(NormalizeForm normalize_form) {
-  auto op = std::make_shared<NormalizeUTF8Operation>(normalize_form);
+// NormalizeUTF8
+struct NormalizeUTF8::Data {
+  explicit Data(NormalizeForm normalize_form) : normalize_form_(normalize_form) {}
+  NormalizeForm normalize_form_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
+NormalizeUTF8::NormalizeUTF8(NormalizeForm normalize_form) : data_(std::make_shared<Data>(normalize_form)) {}
+
+std::shared_ptr<TensorOperation> NormalizeUTF8::Parse() {
+  return std::make_shared<NormalizeUTF8Operation>(data_->normalize_form_);
 }
 
-std::shared_ptr<RegexReplaceOperation> RegexReplace(std::string pattern, std::string replace, bool replace_all) {
-  auto op = std::make_shared<RegexReplaceOperation>(pattern, replace, replace_all);
+// RegexReplace
+struct RegexReplace::Data {
+  Data(const std::vector<char> &pattern, const std::vector<char> &replace, bool replace_all)
+      : pattern_(CharToString(pattern)), replace_(CharToString(replace)), replace_all_(replace_all) {}
+  std::string pattern_;
+  std::string replace_;
+  bool replace_all_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
+RegexReplace::RegexReplace(const std::vector<char> &pattern, const std::vector<char> &replace, bool replace_all)
+    : data_(std::make_shared<Data>(pattern, replace, replace_all)) {}
+
+std::shared_ptr<TensorOperation> RegexReplace::Parse() {
+  return std::make_shared<RegexReplaceOperation>(data_->pattern_, data_->replace_, data_->replace_all_);
 }
 
-std::shared_ptr<RegexTokenizerOperation> RegexTokenizer(std::string delim_pattern, std::string keep_delim_pattern,
-                                                        bool with_offsets) {
-  auto op = std::make_shared<RegexTokenizerOperation>(delim_pattern, keep_delim_pattern, with_offsets);
+// RegexTokenizer
+struct RegexTokenizer::Data {
+  Data(const std::vector<char> &delim_pattern, const std::vector<char> &keep_delim_pattern, bool with_offsets)
+      : delim_pattern_(CharToString(delim_pattern)),
+        keep_delim_pattern_(CharToString(keep_delim_pattern)),
+        with_offsets_(with_offsets) {}
+  std::string delim_pattern_;
+  std::string keep_delim_pattern_;
+  bool with_offsets_;
+};
 
-  return op->ValidateParams() ? op : nullptr;
-}
-#endif
+RegexTokenizer::RegexTokenizer(const std::vector<char> &delim_pattern, const std::vector<char> &keep_delim_pattern,
+                               bool with_offsets)
+    : data_(std::make_shared<Data>(delim_pattern, keep_delim_pattern, with_offsets)) {}
 
-std::shared_ptr<SentencePieceTokenizerOperation> SentencePieceTokenizer(
-  const std::shared_ptr<SentencePieceVocab> &vocab, SPieceTokenizerOutType out_type) {
-  auto op = std::make_shared<SentencePieceTokenizerOperation>(vocab, out_type);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-std::shared_ptr<SentencePieceTokenizerOperation> SentencePieceTokenizer(const std::string &vocab_path,
-                                                                        SPieceTokenizerOutType out_type) {
-  auto op = std::make_shared<SentencePieceTokenizerOperation>(vocab_path, out_type);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-std::shared_ptr<SlidingWindowOperation> SlidingWindow(const int32_t width, const int32_t axis) {
-  auto op = std::make_shared<SlidingWindowOperation>(width, axis);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-std::shared_ptr<ToNumberOperation> ToNumber(const DataType data_type) {
-  auto op = std::make_shared<ToNumberOperation>(data_type);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-std::shared_ptr<TruncateSequencePairOperation> TruncateSequencePair(int32_t max_length) {
-  auto op = std::make_shared<TruncateSequencePairOperation>(max_length);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-std::shared_ptr<UnicodeCharTokenizerOperation> UnicodeCharTokenizer(bool with_offsets) {
-  auto op = std::make_shared<UnicodeCharTokenizerOperation>(with_offsets);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-#ifndef _WIN32
-std::shared_ptr<UnicodeScriptTokenizerOperation> UnicodeScriptTokenizer(bool keep_whitespace, bool with_offsets) {
-  auto op = std::make_shared<UnicodeScriptTokenizerOperation>(keep_whitespace, with_offsets);
-
-  return op->ValidateParams() ? op : nullptr;
-}
-
-std::shared_ptr<WhitespaceTokenizerOperation> WhitespaceTokenizer(bool with_offsets) {
-  auto op = std::make_shared<WhitespaceTokenizerOperation>(with_offsets);
-
-  return op->ValidateParams() ? op : nullptr;
+std::shared_ptr<TensorOperation> RegexTokenizer::Parse() {
+  return std::make_shared<RegexTokenizerOperation>(data_->delim_pattern_, data_->keep_delim_pattern_,
+                                                   data_->with_offsets_);
 }
 #endif
 
-/* ####################################### Validator Functions ############################################ */
+// SentencePieceTokenizer
+struct SentencePieceTokenizer::Data {
+  Data(const std::shared_ptr<SentencePieceVocab> &vocab, SPieceTokenizerOutType out_type)
+      : vocab_(vocab), out_type_(out_type) {}
+  Data(const std::vector<char> &vocab_path, SPieceTokenizerOutType out_type)
+      : vocab_path_(CharToString(vocab_path)), out_type_(out_type) {}
+  std::shared_ptr<SentencePieceVocab> vocab_;
+  std::string vocab_path_;
+  SPieceTokenizerOutType out_type_;
+};
 
-// Helper function to validate tokenizer directory parameter
-Status ValidateTokenizerDirParam(const std::string &tokenizer_name, const std::string &tokenizer_file) {
-  if (tokenizer_file.empty()) {
-    std::string err_msg = tokenizer_name + ": tokenizer_file is not specified.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
+SentencePieceTokenizer::SentencePieceTokenizer(const std::shared_ptr<SentencePieceVocab> &vocab,
+                                               SPieceTokenizerOutType out_type)
+    : data_(std::make_shared<Data>(vocab, out_type)) {}
 
-  Path file(tokenizer_file);
-  if (!file.Exists()) {
-    std::string err_msg = tokenizer_name + ": tokenizer_file: [" + tokenizer_file + "] is an invalid directory path.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
+SentencePieceTokenizer::SentencePieceTokenizer(const std::vector<char> &vocab_path, SPieceTokenizerOutType out_type)
+    : data_(std::make_shared<Data>(vocab_path, out_type)) {}
 
-  if (access(tokenizer_file.c_str(), R_OK) == -1) {
-    std::string err_msg = tokenizer_name + ": No access to specified tokenizer path: " + tokenizer_file;
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  return Status::OK();
-}
-
-/* ####################################### Derived TensorOperation classes ################################# */
-
-// (In alphabetical order)
-
-#ifndef _WIN32
-// BasicTokenizerOperation
-BasicTokenizerOperation::BasicTokenizerOperation(bool lower_case, bool keep_whitespace,
-                                                 const NormalizeForm normalize_form, bool preserve_unused_token,
-                                                 bool with_offsets)
-    : lower_case_(lower_case),
-      keep_whitespace_(keep_whitespace),
-      normalize_form_(normalize_form),
-      preserve_unused_token_(preserve_unused_token),
-      with_offsets_(with_offsets) {}
-
-Status BasicTokenizerOperation::ValidateParams() { return Status::OK(); }
-
-std::shared_ptr<TensorOp> BasicTokenizerOperation::Build() {
-  std::shared_ptr<BasicTokenizerOp> tensor_op = std::make_shared<BasicTokenizerOp>(
-    lower_case_, keep_whitespace_, normalize_form_, preserve_unused_token_, with_offsets_);
-  return tensor_op;
-}
-
-// BertTokenizerOperation
-BertTokenizerOperation::BertTokenizerOperation(const std::shared_ptr<Vocab> &vocab, const std::string &suffix_indicator,
-                                               int32_t max_bytes_per_token, const std::string &unknown_token,
-                                               bool lower_case, bool keep_whitespace,
-                                               const NormalizeForm normalize_form, bool preserve_unused_token,
-                                               bool with_offsets)
-    : vocab_(vocab),
-      suffix_indicator_(suffix_indicator),
-      max_bytes_per_token_(max_bytes_per_token),
-      unknown_token_(unknown_token),
-      lower_case_(lower_case),
-      keep_whitespace_(keep_whitespace),
-      normalize_form_(normalize_form),
-      preserve_unused_token_(preserve_unused_token),
-      with_offsets_(with_offsets) {}
-
-Status BertTokenizerOperation::ValidateParams() {
-  if (vocab_ == nullptr) {
-    std::string err_msg = "BertTokenizer: vocab object type is incorrect or null.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  if (max_bytes_per_token_ < 0) {
-    std::string err_msg = "BertTokenizer : The parameter max_bytes_per_token must be greater than or equal to 0: " +
-                          std::to_string(max_bytes_per_token_);
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> BertTokenizerOperation::Build() {
-  std::shared_ptr<BertTokenizerOp> tensor_op =
-    std::make_shared<BertTokenizerOp>(vocab_, suffix_indicator_, max_bytes_per_token_, unknown_token_, lower_case_,
-                                      keep_whitespace_, normalize_form_, preserve_unused_token_, with_offsets_);
-  return tensor_op;
-}
-
-// CaseFoldOperation
-Status CaseFoldOperation::ValidateParams() { return Status::OK(); }
-
-std::shared_ptr<TensorOp> CaseFoldOperation::Build() {
-  std::shared_ptr<CaseFoldOp> tensor_op = std::make_shared<CaseFoldOp>();
-  return tensor_op;
-}
-#endif
-
-// JiebaTokenizerOperation
-JiebaTokenizerOperation::JiebaTokenizerOperation(const std::string &hmm_path, const std::string &mp_path,
-                                                 const JiebaMode &mode, bool with_offsets)
-    : hmm_path_(hmm_path), mp_path_(mp_path), mode_(mode), with_offsets_(with_offsets) {}
-
-Status JiebaTokenizerOperation::ValidateParams() {
-  if (hmm_path_.empty()) {
-    std::string err_msg = "JiebaTokenizer: The dict of HMMSegment in cppjieba is not provided.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  if (mp_path_.empty()) {
-    std::string err_msg = "JiebaTokenizer: The dict of MPSegment in cppjieba is not provided.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  RETURN_IF_NOT_OK(ValidateTokenizerDirParam("JiebaTokenizer", hmm_path_));
-  RETURN_IF_NOT_OK(ValidateTokenizerDirParam("JiebaTokenizer", mp_path_));
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> JiebaTokenizerOperation::Build() {
-  std::shared_ptr<JiebaTokenizerOp> tensor_op =
-    std::make_shared<JiebaTokenizerOp>(hmm_path_, mp_path_, mode_, with_offsets_);
-  return tensor_op;
-}
-
-// LookupOperation
-LookupOperation::LookupOperation(const std::shared_ptr<Vocab> &vocab, const std::string &unknown_token,
-                                 const DataType &data_type)
-    : vocab_(vocab), unknown_token_(unknown_token), default_id_(Vocab::kNoTokenExists), data_type_(data_type) {}
-
-Status LookupOperation::ValidateParams() {
-  if (vocab_ == nullptr) {
-    std::string err_msg = "Lookup: vocab object type is incorrect or null.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  default_id_ = vocab_->Lookup(unknown_token_);
-  if (default_id_ == Vocab::kNoTokenExists) {
-    std::string err_msg = "Lookup: \"" + unknown_token_ + "\" doesn't exist in vocab.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  if (!data_type_.IsNumeric()) {
-    std::string err_msg = "Lookup does not support a string to string mapping, data_type can only be numeric.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> LookupOperation::Build() {
-  std::shared_ptr<LookupOp> tensor_op = std::make_shared<LookupOp>(vocab_, default_id_, data_type_);
-  return tensor_op;
-}
-
-// NgramOperation
-NgramOperation::NgramOperation(const std::vector<int32_t> &ngrams, const std::pair<std::string, int32_t> &left_pad,
-                               const std::pair<std::string, int32_t> &right_pad, const std::string &separator)
-    : ngrams_(ngrams), left_pad_(left_pad), right_pad_(right_pad), separator_(separator) {}
-
-Status NgramOperation::ValidateParams() {
-  if (ngrams_.size() == 0) {
-    std::string err_msg = "Ngram : Container cannot be empty.";
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
+std::shared_ptr<TensorOperation> SentencePieceTokenizer::Parse() {
+  if (data_->vocab_ != nullptr) {
+    return std::make_shared<SentencePieceTokenizerOperation>(data_->vocab_, data_->out_type_);
   } else {
-    for (int32_t i = 0; i < ngrams_.size(); ++i) {
-      if (ngrams_[i] <= 0) {
-        std::string err_msg =
-          "Ngram : The value of ngrams vector must be greater than 0: " + std::to_string(ngrams_[i]);
-        MS_LOG(ERROR) << err_msg;
-        RETURN_STATUS_SYNTAX_ERROR(err_msg);
-      }
-    }
+    return std::make_shared<SentencePieceTokenizerOperation>(data_->vocab_path_, data_->out_type_);
   }
-
-  if (left_pad_.second < 0) {
-    std::string err_msg =
-      "Ngram : The second parameter pad_width in left_pad vector must be greater than or equal to 0: " +
-      std::to_string(left_pad_.second);
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  if (right_pad_.second < 0) {
-    std::string err_msg =
-      "Ngram : The second parameter pad_width in right_pad vector must be greater than or equal to 0: " +
-      std::to_string(right_pad_.second);
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-  return Status::OK();
 }
 
-std::shared_ptr<TensorOp> NgramOperation::Build() {
-  int32_t l_len = left_pad_.second;
-  int32_t r_len = right_pad_.second;
-  std::string l_pad = left_pad_.first;
-  std::string r_pad = right_pad_.first;
-  std::shared_ptr<NgramOp> tensor_op = std::make_shared<NgramOp>(ngrams_, l_len, r_len, l_pad, r_pad, separator_);
-  return tensor_op;
+// SlidingWindow
+struct SlidingWindow::Data {
+  Data(const int32_t width, const int32_t axis) : width_(width), axis_(axis) {}
+  int32_t width_;
+  int32_t axis_;
+};
+
+SlidingWindow::SlidingWindow(const int32_t width, const int32_t axis) : data_(std::make_shared<Data>(width, axis)) {}
+
+std::shared_ptr<TensorOperation> SlidingWindow::Parse() {
+  return std::make_shared<SlidingWindowOperation>(data_->width_, data_->axis_);
+}
+
+// ToNumber
+struct ToNumber::Data {
+  explicit Data(const std::vector<char> &data_type) : data_type_(CharToString(data_type)) {}
+  std::string data_type_;
+};
+
+ToNumber::ToNumber(const std::vector<char> &data_type) : data_(std::make_shared<Data>(data_type)) {}
+
+std::shared_ptr<TensorOperation> ToNumber::Parse() { return std::make_shared<ToNumberOperation>(data_->data_type_); }
+
+// TruncateSequencePair
+struct TruncateSequencePair::Data {
+  explicit Data(int32_t max_length) : max_length_(max_length) {}
+  int32_t max_length_;
+};
+
+TruncateSequencePair::TruncateSequencePair(int32_t max_length) : data_(std::make_shared<Data>(max_length)) {}
+
+std::shared_ptr<TensorOperation> TruncateSequencePair::Parse() {
+  return std::make_shared<TruncateSequencePairOperation>(data_->max_length_);
+}
+
+// UnicodeCharTokenizer
+struct UnicodeCharTokenizer::Data {
+  explicit Data(bool with_offsets) : with_offsets_(with_offsets) {}
+  bool with_offsets_;
+};
+
+UnicodeCharTokenizer::UnicodeCharTokenizer(bool with_offsets) : data_(std::make_shared<Data>(with_offsets)) {}
+
+std::shared_ptr<TensorOperation> UnicodeCharTokenizer::Parse() {
+  return std::make_shared<UnicodeCharTokenizerOperation>(data_->with_offsets_);
 }
 
 #ifndef _WIN32
-// NormalizeUTF8Operation
-NormalizeUTF8Operation::NormalizeUTF8Operation(NormalizeForm normalize_form) : normalize_form_(normalize_form) {}
+// UnicodeScriptTokenizer
+struct UnicodeScriptTokenizer::Data {
+  Data(bool keep_whitespace, bool with_offsets) : keep_whitespace_(keep_whitespace), with_offsets_(with_offsets) {}
+  bool keep_whitespace_;
+  bool with_offsets_;
+};
 
-Status NormalizeUTF8Operation::ValidateParams() { return Status::OK(); }
+UnicodeScriptTokenizer::UnicodeScriptTokenizer(bool keep_whitespace, bool with_offsets)
+    : data_(std::make_shared<Data>(keep_whitespace, with_offsets)) {}
 
-std::shared_ptr<TensorOp> NormalizeUTF8Operation::Build() {
-  std::shared_ptr<NormalizeUTF8Op> tensor_op = std::make_shared<NormalizeUTF8Op>(normalize_form_);
-  return tensor_op;
+std::shared_ptr<TensorOperation> UnicodeScriptTokenizer::Parse() {
+  return std::make_shared<UnicodeScriptTokenizerOperation>(data_->keep_whitespace_, data_->with_offsets_);
 }
 
-// RegexReplaceOperation
-RegexReplaceOperation::RegexReplaceOperation(std::string pattern, std::string replace, bool replace_all)
-    : pattern_(pattern), replace_(replace), replace_all_(replace_all) {}
+// WhitespaceTokenizer
+struct WhitespaceTokenizer::Data {
+  explicit Data(bool with_offsets) : with_offsets_(with_offsets) {}
+  bool with_offsets_;
+};
 
-Status RegexReplaceOperation::ValidateParams() { return Status::OK(); }
+WhitespaceTokenizer::WhitespaceTokenizer(bool with_offsets) : data_(std::make_shared<Data>(with_offsets)) {}
 
-std::shared_ptr<TensorOp> RegexReplaceOperation::Build() {
-  std::shared_ptr<RegexReplaceOp> tensor_op = std::make_shared<RegexReplaceOp>(pattern_, replace_, replace_all_);
-  return tensor_op;
-}
-
-// RegexTokenizerOperation
-RegexTokenizerOperation::RegexTokenizerOperation(std::string delim_pattern, std::string keep_delim_pattern,
-                                                 bool with_offsets)
-    : delim_pattern_(delim_pattern), keep_delim_pattern_(keep_delim_pattern), with_offsets_(with_offsets) {}
-
-Status RegexTokenizerOperation::ValidateParams() { return Status::OK(); }
-
-std::shared_ptr<TensorOp> RegexTokenizerOperation::Build() {
-  std::shared_ptr<RegexTokenizerOp> tensor_op =
-    std::make_shared<RegexTokenizerOp>(delim_pattern_, keep_delim_pattern_, with_offsets_);
-  return tensor_op;
+std::shared_ptr<TensorOperation> WhitespaceTokenizer::Parse() {
+  return std::make_shared<WhitespaceTokenizerOperation>(data_->with_offsets_);
 }
 #endif
-
-// SentencePieceTokenizerOperation
-SentencePieceTokenizerOperation::SentencePieceTokenizerOperation(const std::shared_ptr<SentencePieceVocab> &vocab,
-                                                                 SPieceTokenizerOutType out_type)
-    : vocab_(vocab), vocab_path_(std::string()), load_type_(SPieceTokenizerLoadType::kModel), out_type_(out_type) {}
-
-SentencePieceTokenizerOperation::SentencePieceTokenizerOperation(const std::string &vocab_path,
-                                                                 SPieceTokenizerOutType out_type)
-    : vocab_(nullptr), vocab_path_(vocab_path), load_type_(SPieceTokenizerLoadType::kFile), out_type_(out_type) {}
-
-Status SentencePieceTokenizerOperation::ValidateParams() {
-  if (load_type_ == SPieceTokenizerLoadType::kModel) {
-    if (vocab_ == nullptr) {
-      std::string err_msg = "SentencePieceTokenizer: vocab object type is incorrect or null.";
-      MS_LOG(ERROR) << err_msg;
-      RETURN_STATUS_SYNTAX_ERROR(err_msg);
-    }
-  } else {
-    Path vocab_file(vocab_path_);
-    if (!vocab_file.Exists() || vocab_file.IsDirectory()) {
-      std::string err_msg = "SentencePieceTokenizer : vocab file: [" + vocab_path_ + "] is invalid or does not exist.";
-      MS_LOG(ERROR) << err_msg;
-      RETURN_STATUS_SYNTAX_ERROR(err_msg);
-    }
-    if (access(vocab_file.toString().c_str(), R_OK) == -1) {
-      std::string err_msg = "SentencePieceTokenizer : no access to specified dataset file: " + vocab_path_;
-      MS_LOG(ERROR) << err_msg;
-      RETURN_STATUS_SYNTAX_ERROR(err_msg);
-    }
-  }
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> SentencePieceTokenizerOperation::Build() {
-  std::shared_ptr<SentencePieceTokenizerOp> tensor_op;
-  if (load_type_ == SPieceTokenizerLoadType::kModel) {
-    tensor_op = std::make_shared<SentencePieceTokenizerOp>(vocab_, load_type_, out_type_);
-  } else {
-    Path vocab_file(vocab_path_);
-    std::string model_path = vocab_file.ParentPath();
-    std::string model_filename = vocab_file.Basename();
-    tensor_op = std::make_shared<SentencePieceTokenizerOp>(model_path, model_filename, load_type_, out_type_);
-  }
-  return tensor_op;
-}
-
-// SlidingWindowOperation
-SlidingWindowOperation::SlidingWindowOperation(const int32_t width, const int32_t axis) : width_(width), axis_(axis) {}
-
-Status SlidingWindowOperation::ValidateParams() {
-  if (width_ < 1) {
-    std::string err_msg =
-      "SlidingWindow : The parameter width must be greater than or equal to 1: " + std::to_string(width_);
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> SlidingWindowOperation::Build() {
-  std::shared_ptr<SlidingWindowOp> tensor_op = std::make_shared<SlidingWindowOp>(static_cast<uint32_t>(width_), axis_);
-  return tensor_op;
-}
-
-// ToNumberOperation
-ToNumberOperation::ToNumberOperation(DataType data_type) : data_type_(data_type) {}
-
-Status ToNumberOperation::ValidateParams() {
-  if (!data_type_.IsNumeric() || data_type_.IsBool()) {
-    std::string err_msg = "ToNumber : The parameter data_type must be a numeric type, got: " + data_type_.ToString();
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> ToNumberOperation::Build() {
-  std::shared_ptr<ToNumberOp> tensor_op = std::make_shared<ToNumberOp>(data_type_);
-  return tensor_op;
-}
-
-TruncateSequencePairOperation::TruncateSequencePairOperation(int32_t max_length) : max_length_(max_length) {}
-
-Status TruncateSequencePairOperation::ValidateParams() {
-  if (max_length_ < 0) {
-    std::string err_msg = "TruncateSequencePair : The parameter max_length must be greater than or equal to 0: " +
-                          std::to_string(max_length_);
-    MS_LOG(ERROR) << err_msg;
-    RETURN_STATUS_SYNTAX_ERROR(err_msg);
-  }
-
-  return Status::OK();
-}
-
-std::shared_ptr<TensorOp> TruncateSequencePairOperation::Build() {
-  std::shared_ptr<TruncateSequencePairOp> tensor_op = std::make_shared<TruncateSequencePairOp>(max_length_);
-  return tensor_op;
-}
-
-// UnicodeCharTokenizerOperation
-UnicodeCharTokenizerOperation::UnicodeCharTokenizerOperation(bool with_offsets) : with_offsets_(with_offsets) {}
-
-Status UnicodeCharTokenizerOperation::ValidateParams() { return Status::OK(); }
-
-std::shared_ptr<TensorOp> UnicodeCharTokenizerOperation::Build() {
-  std::shared_ptr<UnicodeCharTokenizerOp> tensor_op = std::make_shared<UnicodeCharTokenizerOp>(with_offsets_);
-  return tensor_op;
-}
-
-#ifndef _WIN32
-// UnicodeScriptTokenizerOperation
-UnicodeScriptTokenizerOperation::UnicodeScriptTokenizerOperation(bool keep_whitespace, bool with_offsets)
-    : keep_whitespace_(keep_whitespace), with_offsets_(with_offsets) {}
-
-Status UnicodeScriptTokenizerOperation::ValidateParams() { return Status::OK(); }
-
-std::shared_ptr<TensorOp> UnicodeScriptTokenizerOperation::Build() {
-  std::shared_ptr<UnicodeScriptTokenizerOp> tensor_op =
-    std::make_shared<UnicodeScriptTokenizerOp>(keep_whitespace_, with_offsets_);
-  return tensor_op;
-}
-
-// WhitespaceTokenizerOperation
-WhitespaceTokenizerOperation::WhitespaceTokenizerOperation(bool with_offsets) : with_offsets_(with_offsets) {}
-
-Status WhitespaceTokenizerOperation::ValidateParams() { return Status::OK(); }
-
-std::shared_ptr<TensorOp> WhitespaceTokenizerOperation::Build() {
-  std::shared_ptr<WhitespaceTokenizerOp> tensor_op = std::make_shared<WhitespaceTokenizerOp>(with_offsets_);
-  return tensor_op;
-}
-#endif
-
 }  // namespace text
 }  // namespace dataset
 }  // namespace mindspore

@@ -15,17 +15,12 @@
  */
 
 #include "src/runtime/kernel/arm/fp32/convolution_depthwise_indirect_fp32.h"
-#include "schema/model_generated.h"
-#include "src/kernel_registry.h"
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
 
-using mindspore::kernel::KERNEL_ARCH::kCPU;
-using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_INFER_INVALID;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_DepthwiseConv2D;
 
 namespace mindspore::kernel {
 ConvolutionDepthwiseIndirectCPUKernel::~ConvolutionDepthwiseIndirectCPUKernel() {
@@ -190,6 +185,10 @@ int ConvolutionDepthwiseIndirectCPUKernel::Run() {
     packed_input_ = input_ptr;
   }
 
+  if (IsTrain() && is_trainable()) {
+    PackWeight();
+  }
+
   auto output_tensor = out_tensors_.at(kOutputIndex);
   output_ptr_ = reinterpret_cast<float *>(output_tensor->data_c());
 
@@ -205,4 +204,25 @@ int ConvolutionDepthwiseIndirectCPUKernel::Run() {
   }
   return RET_OK;
 }
+
+void ConvolutionDepthwiseIndirectCPUKernel::PackWeight() {
+  auto weight_tensor = in_tensors_[kWeightIndex];
+  auto origin_weight = reinterpret_cast<float *>(weight_tensor->MutableData());
+#ifdef ENABLE_AVX
+  PackDepthwiseIndirectWeightC8Fp32(origin_weight, packed_weight_, weight_tensor->Height(), weight_tensor->Width(),
+                                    weight_tensor->Batch());
+#else
+  PackDepthwiseIndirectWeightC4Fp32(origin_weight, packed_weight_, weight_tensor->Height(), weight_tensor->Width(),
+                                    weight_tensor->Batch());
+#endif
+}
+
+int ConvolutionDepthwiseIndirectCPUKernel::Eval() {
+  LiteKernel::Eval();
+  if (is_trainable()) {
+    PackWeight();
+  }
+  return RET_OK;
+}
+
 }  // namespace mindspore::kernel

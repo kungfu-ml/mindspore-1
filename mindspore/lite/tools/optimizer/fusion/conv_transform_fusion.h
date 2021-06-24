@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,10 @@
 
 #include <string>
 #include "backend/optimizer/common/optimizer.h"
+#include "tools/converter/converter_flags.h"
+#include "src/param_value_lite.h"
 
+using mindspore::lite::converter::FmkType;
 namespace mindspore::opt {
 class ConvTransformFusion : public PatternProcessPass {
  public:
@@ -30,8 +33,12 @@ class ConvTransformFusion : public PatternProcessPass {
   void GenTransParam(const CNodePtr &, int, float *, float *) const;
   virtual void InitTransParam(const CNodePtr &, int, float *, float *) const = 0;
   void GenNewConvTensor(const FuncGraphPtr &, const CNodePtr &, int, const float *, const float *) const;
-  void CalNewWeightTensor(float *, int, int, const float *) const;
+  void CalNewWeightTensor(const CNodePtr &, const ParamValueLitePtr &, int, const float *) const;
   void CalNewBiasTensor(float *, int, bool, const float *, const float *) const;
+  void SetFmkType(FmkType type) { this->fmk_type_ = type; }
+
+ private:
+  FmkType fmk_type_ = lite::converter::FmkType_TF;
 };
 }  // namespace mindspore::opt
 #endif  // MINDSPORE_LITE_SRC_PASS_FUSION_CONV_TRANSFORM_FUSION_H_

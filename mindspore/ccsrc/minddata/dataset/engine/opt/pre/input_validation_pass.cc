@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,19 @@
  */
 
 #include <string>
-#include <vector>
+#include <nlohmann/json.hpp>
 #include "minddata/dataset/include/datasets.h"
 #include "minddata/dataset/engine/opt/pre/input_validation_pass.h"
 
 namespace mindspore {
 namespace dataset {
 
-Status InputValidationPass::Visit(std::shared_ptr<DatasetNode> node, bool *modified) {
+Status InputValidationPass::Visit(std::shared_ptr<DatasetNode> node, bool *const modified) {
   *modified = false;
   RETURN_IF_NOT_OK(node->ValidateParams());
 
   // A data source node must be a leaf node
-  if ((node->IsMappable() || node->IsNonMappable()) && !node->IsLeaf()) {
+  if ((node->IsMappableDataSource() || node->IsNonMappableDataSource()) && !node->IsLeaf()) {
     std::string err_msg = node->Name() + " is a data source and must be a leaf node.";
     RETURN_STATUS_UNEXPECTED(err_msg);
   }

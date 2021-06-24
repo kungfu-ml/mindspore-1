@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <cmath>
 #include "abstract/infer_functions.h"
 #include "abstract/utils.h"
 #include "abstract/param_validator.h"
@@ -22,6 +23,15 @@
 
 namespace mindspore {
 namespace abstract {
+int64_t GetAndCheckFormat(const ValuePtr &value) {
+  int64_t data_format;
+  bool result = CheckAndConvertUtils::GetDataFormatEnumValue(value, &data_format);
+  if (!result || (data_format != Format::NHWC && data_format != Format::NCHW && data_format != Format::NCDHW)) {
+    MS_LOG(EXCEPTION) << "data format is invalid, only support NCHW, NHWC and NCDHW";
+  }
+  return data_format;
+}
+
 AbstractBasePtr InferImplPooling(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                                  const AbstractBasePtrList &args_spec_list) {
   // Inputs: a tensor.
@@ -58,20 +68,16 @@ AbstractBasePtr InferImplPooling(const AnalysisEnginePtr &, const PrimitivePtr &
     MS_LOG(EXCEPTION) << "Invalid ceil_mode value: " << ceil_mode << ", should be 0";
   }
 
-  std::set<std::string> available_pad_mode{"pad", "same", "valid"};
   auto pad_mode_ptr = primitive->GetAttr("pad_mode");
-  if ((pad_mode_ptr != nullptr) && pad_mode_ptr->isa<StringImm>()) {
-    auto pad_mode = pad_mode_ptr->cast<StringImmPtr>()->value();
-    if (available_pad_mode.find(pad_mode) == available_pad_mode.end()) {
-      MS_LOG(EXCEPTION) << "Unsupported pad mode: " << pad_mode << ". use pad, same, valid";
-    }
-    if (pad_mode == "valid") {
+  if (pad_mode_ptr != nullptr) {
+    int64_t pad_mode;
+    CheckAndConvertUtils::GetPadModEnumValue(pad_mode_ptr, &pad_mode, true);
+    if (pad_mode == PadMode::VALID) {
       padding = 0;
-    } else if (pad_mode == "same") {
+    } else if (pad_mode == PadMode::SAME) {
       padding = (window - 1) / 2;
     }
   }
-
   std::set<std::string> available_mode{"max", "avg"};
   auto mode_ptr = primitive->GetAttr("mode");
   if ((mode_ptr != nullptr) && mode_ptr->isa<StringImm>()) {
@@ -134,108 +140,77 @@ void FusedBatchNormCheckDim(const PrimitivePtr &primitive, const AbstractBasePtr
   }
 }
 
-AbstractBasePtr InferImplFusedBatchNorm(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                        const AbstractBasePtrList &args_spec_list) {
+AbstractBasePtr InferImplSparseSoftmaxCrossEntropyWithLogits(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                                             const AbstractBasePtrList &args_spec_list) {
+  MS_EXCEPTION_IF_NULL(primitive);
+  auto is_grad = GetValue<bool>(primitive->GetAttr("is_grad"));
+  CheckArgsSize(primitive->name(), args_spec_list, 2);
+  std::shared_ptr<BaseShape> shape = std::make_shared<abstract::Shape>(std::vector<int64_t>{});
+  MS_EXCEPTION_IF_NULL(args_spec_list[0]);
+  if (is_grad) {
+    shape = args_spec_list[0]->BuildShape();
+  }
+  auto type = args_spec_list[0]->BuildType();
+  MS_EXCEPTION_IF_NULL(type);
+  auto type_tensor = type->cast<TensorTypePtr>();
+  MS_EXCEPTION_IF_NULL(type_tensor);
+  return std::make_shared<abstract::AbstractTensor>(type_tensor->element(), shape);
+}
+
+AbstractBasePtr InferImplBatchNorm(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                   const AbstractBasePtrList &args_spec_list) {
   // Inputs: five tensors(x, gamma, beta, mean, variance).
   const std::string op_name = primitive->name();
   CheckArgsSize(op_name, args_spec_list, 5);
-  MS_EXCEPTION_IF_NULL(args_spec_list[0]);
-  MS_LOG(DEBUG) << "InferImplFusedBatchNorm args0:" << args_spec_list[0]->ToString()
-                << ", arg1:" << args_spec_list[1]->ToString();
-  FusedBatchNormCheckDim(primitive, args_spec_list);
+  AbstractTensorPtr input_x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  MS_EXCEPTION_IF_NULL(input_x);
+  MS_EXCEPTION_IF_NULL(input_x->shape());
+  ShapeVector x_shape = input_x->shape()->shape();
+  ShapeVector x_min_shape = input_x->shape()->min_shape();
+  ShapeVector x_max_shape = input_x->shape()->max_shape();
+  CheckMinMaxShape(x_shape, &x_min_shape, &x_max_shape);
 
-  auto input = args_spec_list[0];
-  auto input_shape = dyn_cast<Shape>(input->GetShapeTrack());
-  MS_EXCEPTION_IF_NULL(input_shape);
-  const auto &input_shape_list = input_shape->shape();
-  if (input_shape_list.size() < 2) {
-    MS_LOG(EXCEPTION) << "Input shape size should >= 2.";
-  }
-
-  for (size_t i = 1; i < args_spec_list.size(); ++i) {
-    auto arg_shape = dyn_cast<Shape>(args_spec_list[i]->GetShapeTrack());
-    MS_EXCEPTION_IF_NULL(arg_shape);
-    const auto &arg_shape_list = arg_shape->shape();
-    if (arg_shape_list.size() < 1) {
-      MS_LOG(EXCEPTION) << "Arg shape size should >= 1.";
-    }
-    if (arg_shape_list[0] != input_shape_list[1]) {
-      MS_LOG(EXCEPTION) << op_name << " size of tensor param[" << i << "](which is " << arg_shape_list[0]
-                        << ") should match the second dimension of tensor"
-                           " param[0](which is "
-                        << input_shape_list[1] << ").";
-    }
-  }
   auto input_tensor = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
-  (void)CheckTensorDType(input_tensor, {kFloat16, kFloat32}, "param 0 of FusedBatchNorm should be %s");
-
+  (void)CheckTensorDType(input_tensor, {kFloat16, kFloat32}, "param x of BatchNorm should be");
   AbstractTensorPtrList tensorPtrList = std::vector<AbstractTensorPtr>();
   for (size_t i = 1; i < args_spec_list.size(); ++i) {
     auto param = CheckArg<AbstractTensor>(op_name, args_spec_list, i);
     tensorPtrList.push_back(param);
   }
-  (void)CheckTensorsDTypeSame(tensorPtrList, {kFloat16, kFloat32}, "param 1 to 4 of FusedBatchNorm should be %s");
+  (void)CheckTensorsDTypeSame(tensorPtrList, {kFloat16, kFloat32},
+                              "param  gamma, beta, mean, variance of Batchnorm should be");
 
-  // check validity;
-  auto epsilon_value = primitive->GetAttr("epsilon");
-  auto momentum_value = primitive->GetAttr("momentum");
-  MS_EXCEPTION_IF_NULL(epsilon_value);
-  MS_EXCEPTION_IF_NULL(momentum_value);
-  if (!epsilon_value->isa<FP32Imm>() || !momentum_value->isa<FP32Imm>()) {
-    MS_LOG(EXCEPTION) << "expect epsilon and momentum be float, but: epsilon: " << epsilon_value->ToString()
-                      << ", momentum: " << momentum_value->ToString();
+  auto data_format_ptr = primitive->GetAttr("format");
+  MS_EXCEPTION_IF_NULL(data_format_ptr);
+  int64_t data_format = GetAndCheckFormat(data_format_ptr);
+
+  int64_t c_axis = 1;
+  if (data_format == Format::NHWC) {
+    c_axis = 3;
   }
-
-  auto epsilon = epsilon_value->cast<FP32ImmPtr>()->value();
-  auto momentum = momentum_value->cast<FP32ImmPtr>()->value();
-
-  if (epsilon > 1.0f || epsilon <= 0.0f) {
-    MS_LOG(EXCEPTION) << "expect epsilon is greater than 0 and less or equal than 1, but epsilon: " << epsilon;
+  for (size_t i = 1; i < args_spec_list.size(); ++i) {
+    AbstractTensorPtr arg_spec = CheckArg<AbstractTensor>(op_name, args_spec_list, i);
+    MS_EXCEPTION_IF_NULL(arg_spec);
+    MS_EXCEPTION_IF_NULL(arg_spec->shape());
+    ShapeVector arg_shape = arg_spec->shape()->shape();
+    if (arg_shape.size() != 1) {
+      MS_LOG(EXCEPTION) << "Arg " << i << " rank should be 1, but got " << arg_shape.size();
+    }
+    if ((x_shape[c_axis] != Shape::SHP_ANY) && (arg_shape[0] != x_shape[c_axis])) {
+      MS_EXCEPTION(ValueError) << "Arg " << i << " shape[0] should equal to x_shape[" << c_axis
+                               << "]=" << x_shape[c_axis] << ", but got " << arg_shape[0];
+    }
   }
-  if (momentum > 1.0f || momentum < 0.0f) {
-    MS_LOG(EXCEPTION) << "expect momentum is great or equal than 0 and less or equal than 1, but epsilon: " << momentum;
-  }
-
-  // Outputs: y, running_mean, running_variance, save_mean, save_inv_variance.
-  AbstractBasePtr y = input->Broaden();
-  AbstractBasePtr other = args_spec_list[1]->Broaden();
-  MS_LOG(DEBUG) << "output y: " << y->ToString() << ", other: " << other->ToString();
-
-  AbstractBasePtrList elements = {y, other, other, other, other};
-  return std::make_shared<AbstractTuple>(elements);
-}
-
-AbstractBasePtr InferImplFusedBatchNormGrad(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                            const AbstractBasePtrList &args_spec_list) {
-  // Inputs: five tensors(y_backprop, x, scale, save_mean, save_inv_variance).
-  MS_EXCEPTION_IF_NULL(args_spec_list[1]);
-  MS_EXCEPTION_IF_NULL(args_spec_list[2]);
-  MS_EXCEPTION_IF_NULL(args_spec_list[3]);
-
-  CheckArgsSize(primitive->name(), args_spec_list, 5);
-  auto dx = args_spec_list[1]->Broaden();
-  auto dscale = args_spec_list[2]->Broaden();
-  auto dbias = args_spec_list[3]->Broaden();
-
-  AbstractBasePtrList rets = {dx, dscale, dbias};
-  return std::make_shared<AbstractTuple>(rets);
-}
-
-AbstractBasePtr InferImplBatchNormGrad(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                       const AbstractBasePtrList &args_spec_list) {
-  // Inputs: five tensors(y_backprop, x, scale, save_mean, save_inv_variance).
-  MS_EXCEPTION_IF_NULL(args_spec_list[1]);
-  MS_EXCEPTION_IF_NULL(args_spec_list[2]);
-  MS_EXCEPTION_IF_NULL(args_spec_list[3]);
-
-  CheckArgsSize(primitive->name(), args_spec_list, 5);
-  auto dx = args_spec_list[1]->Broaden();
-  auto dscale = args_spec_list[2]->Broaden();
-  auto dbias = args_spec_list[3]->Broaden();
-  auto reserve_1 = args_spec_list[4]->Broaden();
-  auto reserve_2 = args_spec_list[5]->Broaden();
-
-  AbstractBasePtrList rets = {dx, dscale, dbias, reserve_1, reserve_2};
+  AbstractTensorPtr input_gamma = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  ShapeVector gamma_shape = input_gamma->shape()->shape();
+  ShapeVector gamma_min_shape = input_gamma->shape()->min_shape();
+  ShapeVector gamma_max_shape = input_gamma->shape()->max_shape();
+  CheckMinMaxShape(gamma_shape, &gamma_min_shape, &gamma_max_shape);
+  ShapePtr output_shape_ptr = std::make_shared<Shape>(x_shape, x_min_shape, x_max_shape);
+  AbstractTensorPtr output = std::make_shared<AbstractTensor>(input_x->element(), output_shape_ptr);
+  ShapePtr gamma_shape_ptr = std::make_shared<Shape>(gamma_shape, gamma_min_shape, gamma_max_shape);
+  AbstractTensorPtr output_gamma = std::make_shared<AbstractTensor>(input_gamma->element(), gamma_shape_ptr);
+  AbstractBasePtrList rets = {output, output_gamma, output_gamma, output_gamma, output_gamma};
   return std::make_shared<AbstractTuple>(rets);
 }
 
@@ -267,18 +242,165 @@ AbstractBasePtr InferImplFusedSparseAdam(const AnalysisEnginePtr &, const Primit
   return std::make_shared<AbstractTuple>(rets);
 }
 
-AbstractBasePtr InferImplConv2DBackpropInput(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                             const AbstractBasePtrList &args_spec_list) {
-  // Inputs: three tensors(doutput, input, filters).
-  CheckArgsSize(primitive->name(), args_spec_list, 3);
-  return args_spec_list[1]->Broaden();
+void Conv2DPadFunction(std::vector<int64_t> *output_hw, std::vector<int64_t> *pad_list, const int64_t x_h,
+                       const int64_t x_w, const std::vector<int64_t> &kernel, const std::vector<int64_t> &stride,
+                       const std::vector<int64_t> &dilation, const int64_t &pad_mode,
+                       const std::vector<int64_t> &padding) {
+  if (pad_mode == PadMode::VALID) {
+    output_hw->push_back(std::ceil(((x_h * 1.0) - dilation[0] * (kernel[0] - 1)) / stride[0]));
+    output_hw->push_back(std::ceil(((x_w * 1.0) - dilation[1] * (kernel[1] - 1)) / stride[1]));
+    pad_list->insert(pad_list->begin(), 4, 0);
+  } else if (pad_mode == PadMode::SAME) {
+    output_hw->push_back(std::ceil((x_h * 1.0) / stride[0]));
+    output_hw->push_back(std::ceil((x_w * 1.0) / stride[1]));
+    int64_t pad_needed_h = (output_hw->at(0) - 1) * stride[0] + dilation[0] * (kernel[0] - 1) + 1 - x_h;
+    pad_needed_h = std::max((int64_t)0, pad_needed_h);
+    pad_list->push_back(std::floor(pad_needed_h / 2));
+    pad_list->push_back(pad_needed_h - pad_list->at(0));
+    int64_t pad_needed_w = (output_hw->at(1) - 1) * stride[1] + dilation[1] * (kernel[1] - 1) + 1 - x_w;
+    pad_needed_w = std::max((int64_t)0, pad_needed_w);
+    pad_list->push_back(std::floor(pad_needed_w / 2));
+    pad_list->push_back(pad_needed_w - pad_list->at(2));
+  } else if (pad_mode == PadMode::PAD) {
+    pad_list->insert(pad_list->begin(), padding.begin(), padding.end());
+    output_hw->push_back(std::floor(
+      1 +
+      ((x_h * 1.0) + pad_list->at(0) + pad_list->at(1) - kernel[0] - (kernel[0] - 1) * (dilation[0] - 1)) / stride[0]));
+    output_hw->push_back(std::floor(
+      1 +
+      ((x_w * 1.0) + pad_list->at(2) + pad_list->at(3) - kernel[1] - (kernel[1] - 1) * (dilation[1] - 1)) / stride[1]));
+  }
 }
 
-AbstractBasePtr InferImplConv2DBackpropFilter(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                              const AbstractBasePtrList &args_spec_list) {
-  // Inputs: three tensors(inputs, filter, doutput).
-  CheckArgsSize(primitive->name(), args_spec_list, 3);
-  return args_spec_list[2]->Broaden();
+AbstractBasePtr InferImplConv2D(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                const AbstractBasePtrList &args_spec_list) {
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  AbstractTensorPtr input_x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  MS_EXCEPTION_IF_NULL(input_x);
+  MS_EXCEPTION_IF_NULL(input_x->shape());
+  ShapeVector x_shape = input_x->shape()->shape();
+  ShapeVector x_min_shape = input_x->shape()->min_shape();
+  ShapeVector x_max_shape = input_x->shape()->max_shape();
+  CheckMinMaxShape(x_shape, &x_min_shape, &x_max_shape);
+  CheckShapeAnyAndPositive(op_name + " x_shape", x_shape);
+  CheckShapeAllPositive(op_name + " x_min_shape", x_min_shape);
+  CheckShapeAllPositive(op_name + " x_max_shape", x_max_shape);
+  AbstractTensorPtr input_w = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(input_w);
+  MS_EXCEPTION_IF_NULL(input_w->shape());
+  ShapeVector w_shape = input_w->shape()->shape();
+  ShapeVector w_min_shape = input_w->shape()->min_shape();
+  ShapeVector w_max_shape = input_w->shape()->max_shape();
+  CheckMinMaxShape(w_shape, &w_min_shape, &w_max_shape);
+  CheckShapeAnyAndPositive(op_name + " w_shape", w_shape);
+  CheckShapeAllPositive(op_name + " w_min_shape", w_min_shape);
+  CheckShapeAllPositive(op_name + " w_max_shape", w_max_shape);
+  const int64_t n_axis = 0;
+  int64_t c_axis = 1;
+  int64_t h_axis = 2;
+  int64_t w_axis = 3;
+  int64_t data_format = GetAndCheckFormat(primitive->GetAttr("format"));
+  if (data_format == Format::NHWC) {
+    c_axis = 3;
+    h_axis = 1;
+    w_axis = 2;
+  }
+  int64_t group = CheckAttrPositiveInt64(op_name, primitive->GetAttr("group"), "group");
+  if ((x_shape[c_axis] != Shape::SHP_ANY) && (w_shape[c_axis] != Shape::SHP_ANY) &&
+      ((x_shape[c_axis] / group) != w_shape[c_axis])) {
+    MS_LOG(EXCEPTION) << "x_shape[C_in] / group must equal to w_shape[C_in] = " << w_shape[c_axis] << ", but got "
+                      << (x_shape[c_axis] / group);
+  }
+  int64_t out_channel = CheckAttrPositiveInt64(op_name, primitive->GetAttr("out_channel"), "out_channel");
+  if ((w_shape[n_axis] != Shape::SHP_ANY) && (w_shape[n_axis] != out_channel)) {
+    MS_LOG(EXCEPTION) << "w_shape[" << n_axis << "] = " << w_shape[n_axis] << " must equal to = " << out_channel;
+  }
+  std::vector<int64_t> kernel_size = CheckAttrIntOrTuple(op_name, primitive->GetAttr("kernel_size"), 0, 2);
+  if ((w_shape[h_axis] != Shape::SHP_ANY) && (w_shape[h_axis] != kernel_size[0])) {
+    MS_LOG(EXCEPTION) << "weight height = " << w_shape[h_axis] << ", must equal to = " << kernel_size[0];
+  }
+  if ((w_shape[w_axis] != Shape::SHP_ANY) && (w_shape[w_axis] != kernel_size[1])) {
+    MS_LOG(EXCEPTION) << "weight width = " << w_shape[w_axis] << ", must equal to = " << kernel_size[1];
+  }
+  std::vector<int64_t> stride = CheckAttrIntOrTuple(op_name, primitive->GetAttr("stride"), 2, 2);
+  std::vector<int64_t> dilation = CheckAttrIntOrTuple(op_name, primitive->GetAttr("dilation"), 2, 2);
+  std::vector<int64_t> padding = CheckAttrIntOrTuple(op_name, primitive->GetAttr("pad"), 0, 4);
+  int64_t pad_mode;
+  CheckAndConvertUtils::GetPadModEnumValue(primitive->GetAttr("pad_mode"), &pad_mode);
+  std::vector<int64_t> output_hw;
+  std::vector<int64_t> pad_list;
+  std::vector<int64_t> output_hw_min;
+  std::vector<int64_t> pad_list_min;
+  std::vector<int64_t> output_hw_max;
+  std::vector<int64_t> pad_list_max;
+  Conv2DPadFunction(&output_hw, &pad_list, x_shape[h_axis], x_shape[w_axis], kernel_size, stride, dilation, pad_mode,
+                    padding);
+  if (x_shape[h_axis] == Shape::SHP_ANY) {
+    output_hw[0] = Shape::SHP_ANY;
+  }
+  if (x_shape[w_axis] == Shape::SHP_ANY) {
+    output_hw[1] = Shape::SHP_ANY;
+  }
+  Conv2DPadFunction(&output_hw_min, &pad_list_min, x_min_shape[h_axis], x_min_shape[w_axis], kernel_size, stride,
+                    dilation, pad_mode, padding);
+  Conv2DPadFunction(&output_hw_max, &pad_list_max, x_max_shape[h_axis], x_max_shape[w_axis], kernel_size, stride,
+                    dilation, pad_mode, padding);
+  std::vector<ValuePtr> pad_list_val = {MakeValue(pad_list[0]), MakeValue(pad_list[1]), MakeValue(pad_list[2]),
+                                        MakeValue(pad_list[3])};
+  primitive->set_attr("pad_list", MakeValue(pad_list_val));
+  ShapeVector output_shape;
+  ShapeVector output_shape_min;
+  ShapeVector output_shape_max;
+  if (data_format == Format::NHWC) {
+    output_shape = {x_shape[n_axis], output_hw[0], output_hw[1], out_channel};
+    output_shape_min = {x_min_shape[n_axis], output_hw_min[0], output_hw_min[1], out_channel};
+    output_shape_max = {x_max_shape[n_axis], output_hw_max[0], output_hw_max[1], out_channel};
+  } else {
+    output_shape = {x_shape[n_axis], out_channel, output_hw[0], output_hw[1]};
+    output_shape_min = {x_min_shape[n_axis], out_channel, output_hw_min[0], output_hw_min[1]};
+    output_shape_max = {x_max_shape[n_axis], out_channel, output_hw_max[0], output_hw_max[1]};
+  }
+  CheckShapeAnyAndPositive(op_name + " output_shape", output_shape);
+  CheckShapeAllPositive(op_name + " output_shape_min", output_shape_min);
+  CheckShapeAllPositive(op_name + " output_shape_max", output_shape_max);
+  TypePtr x_type = input_x->element()->GetTypeTrack();
+  if (x_type->type_id() == TypeId::kNumberTypeInt8) {
+    x_type = kInt32;
+  }
+  ShapePtr output_shape_ptr = std::make_shared<Shape>(output_shape, output_shape_min, output_shape_max);
+  return std::make_shared<AbstractTensor>(x_type, output_shape_ptr);
+}
+
+AbstractBasePtr InferImplBiasAdd(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                 const AbstractBasePtrList &args_spec_list) {
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  auto x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  auto bias = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(x);
+  MS_EXCEPTION_IF_NULL(x->shape());
+  ShapeVector x_shape = x->shape()->shape();
+  MS_EXCEPTION_IF_NULL(bias);
+  MS_EXCEPTION_IF_NULL(bias->shape());
+  ShapeVector bias_shape = bias->shape()->shape();
+  ShapeVector x_min_shape = x->shape()->min_shape();
+  ShapeVector x_max_shape = x->shape()->max_shape();
+  auto data_format_ptr = primitive->GetAttr("format");
+  int64_t data_format = Format::NCHW;
+  if (data_format_ptr != nullptr) {
+    data_format = GetAndCheckFormat(data_format_ptr);
+  }
+  auto x_channel = data_format == Format::NHWC ? x_shape[x_shape.size() - 1] : x_shape[1];
+  // Additional check for dynamic shape
+  // Last infer will be real shape values
+  bool x_not_dyn = std::all_of(x_shape.begin(), x_shape.end(), [](int64_t value) { return value != Shape::SHP_ANY; });
+  if (x_not_dyn && bias_shape[0] != x_channel) {
+    MS_LOG(EXCEPTION) << "BiasAdd shape error, data format is " << data_format
+                      << ", got bias_shape[0]: " << bias_shape[0] << ", x_channel: " << x_channel << ".";
+  }
+  (void)CheckMinMaxShape(x_shape, &x_min_shape, &x_max_shape);
+  return std::make_shared<AbstractTensor>(x->element(), std::make_shared<Shape>(x_shape, x_min_shape, x_max_shape));
 }
 
 AbstractBasePtr InferImplBiasAddGrad(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
@@ -408,12 +530,29 @@ AbstractBasePtr InferImplLayerNormGrad(const AnalysisEnginePtr &, const Primitiv
   return std::make_shared<AbstractTuple>(args_list);
 }
 
+AbstractBasePtr InferImplDropout(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                 const AbstractBasePtrList &args_spec_list) {
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 1);
+  auto x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  MS_EXCEPTION_IF_NULL(x);
+  MS_EXCEPTION_IF_NULL(x->shape());
+  ShapeVector shape = x->shape()->shape();
+  ShapeVector min_shape = x->shape()->min_shape();
+  ShapeVector max_shape = x->shape()->max_shape();
+  (void)CheckMinMaxShape(shape, &min_shape, &max_shape);
+  auto output_shape =
+    std::make_shared<AbstractTensor>(x->element(), std::make_shared<Shape>(shape, min_shape, max_shape));
+  AbstractBasePtrList ret = {output_shape, output_shape};
+  return std::make_shared<AbstractTuple>(ret);
+}
+
 AbstractBasePtr InferImplDropoutGenMask(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                                         const AbstractBasePtrList &args_spec_list) {
   // Inputs: a tuple and a tensor.
   // Outputs: mask.
   const std::string op_name = primitive->name();
-  CheckArgsSize(op_name, args_spec_list, 2);
+  CheckRequiredArgsSize(op_name, args_spec_list, 2);
   AbstractTuplePtr x_shape = CheckArg<AbstractTuple>(op_name, args_spec_list, 0);
   AbstractTensorPtr keep_prob = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
 
@@ -460,7 +599,7 @@ AbstractBasePtr InferImplDropoutGenMask(const AnalysisEnginePtr &, const Primiti
 
 AbstractBasePtr InferImplSparseApplyFtrl(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                                          const AbstractBasePtrList &args_spec_list) {
-  CheckArgsSize(primitive->name(), args_spec_list, 5);
+  CheckRequiredArgsSize(primitive->name(), args_spec_list, 5);
   AbstractBasePtrList elements;
   for (size_t i = 0; i < 3; ++i) {
     elements.push_back(args_spec_list[i]->Clone()->Broaden());
@@ -470,7 +609,7 @@ AbstractBasePtr InferImplSparseApplyFtrl(const AnalysisEnginePtr &, const Primit
 
 AbstractBasePtr InferImplSparseApplyProximalAdagrad(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                                                     const AbstractBasePtrList &args_spec_list) {
-  CheckArgsSize(primitive->name(), args_spec_list, 7);
+  CheckRequiredArgsSize(primitive->name(), args_spec_list, 7);
   AbstractBasePtrList elements;
   for (size_t i = 0; i < 2; ++i) {
     elements.push_back(args_spec_list[i]->Clone()->Broaden());
@@ -480,9 +619,45 @@ AbstractBasePtr InferImplSparseApplyProximalAdagrad(const AnalysisEnginePtr &, c
 
 AbstractBasePtr InferImplSGD(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                              const AbstractBasePtrList &args_spec_list) {
-  CheckArgsSize(primitive->name(), args_spec_list, 6);
+  CheckRequiredArgsSize(primitive->name(), args_spec_list, 6);
   AbstractBasePtrList elements;
   elements.push_back(args_spec_list[0]->Clone()->Broaden());
+  return std::make_shared<AbstractTuple>(elements);
+}
+
+AbstractBasePtr InferImplCTCGreedyDecoder(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                          const AbstractBasePtrList &args_spec_list) {
+  // inputs: inputs, sequence_length
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  AbstractTensorPtr input = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+
+  auto shape = input->shape();
+  if (shape->shape().size() != 3) {
+    MS_LOG(EXCEPTION) << "Rank of " << op_name << "'s input must be 3.";
+  }
+
+  ShapeVector indices_shape = {Shape::SHP_ANY, 2};
+  ShapeVector min_shape = {1, 2};
+  ShapeVector max_shape = {shape->shape()[0] * shape->shape()[1], 2};
+  auto decoded_indices =
+    std::make_shared<AbstractTensor>(kInt64, std::make_shared<Shape>(indices_shape, min_shape, max_shape));
+
+  ShapeVector values_shape = {Shape::SHP_ANY};
+  ShapeVector values_min_shape = {1};
+  ShapeVector values_max_shape = {shape->shape()[0] * shape->shape()[1]};
+  ShapePtr values_shapes = std::make_shared<Shape>(values_shape, values_min_shape, values_max_shape);
+  auto decoded_values = std::make_shared<AbstractTensor>(kInt64, values_shapes);
+
+  ShapeVector decoded_shape_shape = {2};
+  auto decoded_shape = std::make_shared<AbstractTensor>(kInt64, decoded_shape_shape);
+
+  ShapeVector log_probability_shape = {shape->shape()[1], 1};
+  auto log_probability =
+    std::make_shared<AbstractTensor>(input->element(), std::make_shared<Shape>(log_probability_shape));
+
+  // outputs: decoded_indices, decoded_values, decoded_shape, log_probability
+  AbstractBasePtrList elements = {decoded_indices, decoded_values, decoded_shape, log_probability};
   return std::make_shared<AbstractTuple>(elements);
 }
 

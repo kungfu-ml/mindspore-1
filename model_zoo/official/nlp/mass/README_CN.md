@@ -47,7 +47,7 @@ BERT（Devlin等人，2018年）采用有屏蔽的语料丰富文本预训练Tra
 
 受BERT、GPT及其他语言模型的启发，微软致力于在此基础上研究[掩式序列到序列（MASS）预训练语言生成](https://www.microsoft.com/en-us/research/uploads/prod/2019/06/MASS-paper-updated-002.pdf)。MASS的参数k很重要，用来控制屏蔽后的分片长度。BERT和GPT属于特例，k等于1或者句长。
 
-[MASS介绍 — 序列对序列语言生成任务中性能优于BERT和GPT的预训练方法](https://www.microsoft.com/en-us/research/blog/introduction-mass-a-pre-training-method-thing-forts-bert-and-gpt-in-sequence-to-sequence-language-generate-tasks/)
+[MASS介绍 — 序列对序列语言生成任务中性能优于BERT和GPT的预训练方法](https://www.microsoft.com/en-us/research/blog/introducing-mass-a-pre-training-method-that-outperforms-bert-and-gpt-in-sequence-to-sequence-language-generation-tasks/)
 
 [论文](https://www.microsoft.com/en-us/research/uploads/prod/2019/06/MASS-paper-updated-002.pdf): Song, Kaitao, Xu Tan, Tao Qin, Jianfeng Lu and Tie-Yan Liu.“MASS: Masked Sequence to Sequence Pre-training for Language Generation.”ICML (2019).
 
@@ -487,7 +487,7 @@ python weights_average.py --input_files your_checkpoint_list --output_file model
 ## 平台
 
 - 硬件（Ascend或GPU）
-    - 使用Ascend或GPU处理器准备硬件环境。- 如需试用昇腾处理器，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx)至ascend@huawei.com，申请通过即可获得资源。
+    - 使用Ascend或GPU处理器准备硬件环境。
 - 框架
     - [MindSpore](https://www.mindspore.cn/install)
 - 更多关于Mindspore的信息，请查看以下资源：

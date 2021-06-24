@@ -19,20 +19,26 @@
 #include <vector>
 #include "include/errorcode.h"
 #include "nnacl/batch_to_space.h"
+#include "nnacl/base/batch_to_space_base.h"
 #include "src/lite_kernel.h"
 
 namespace mindspore::kernel {
 class BatchToSpaceCPUKernel : public LiteKernel {
  public:
   BatchToSpaceCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                        const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                        const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                        const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~BatchToSpaceCPUKernel() = default;
 
   int Init() override;
   int ReSize() override;
   int Run() override;
+  int Processinput();
+
+ private:
+  int32_t block_shape_[BATCH_TO_SPACE_BLOCK_SHAPE_SIZE];
+  int32_t crops_[COMM_SHAPE_SIZE];
+  bool no_crop_ = false;
 };
 }  // namespace mindspore::kernel
 

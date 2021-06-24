@@ -19,6 +19,7 @@
 #include <memory>
 
 #include "minddata/dataset/engine/datasetops/dataset_op.h"
+#include "minddata/dataset/engine/ir/datasetops/source/samplers/samplers_ir.h"
 #include "minddata/dataset/util/status.h"
 
 namespace mindspore::dataset {
@@ -28,6 +29,10 @@ class DatasetCache {
   virtual Status Build() = 0;
   virtual Status ValidateParams() = 0;
   virtual Status CreateCacheOp(int num_workers, std::shared_ptr<DatasetOp> *ds_op) = 0;
+  virtual Status to_json(nlohmann::json *out_json) { return Status::OK(); }
+  virtual Status CreateCacheLookupOp(int32_t num_workers, std::shared_ptr<DatasetOp> *ds,
+                                     std::shared_ptr<SamplerObj> sampler) = 0;
+  virtual Status CreateCacheMergeOp(int32_t num_workers, std::shared_ptr<DatasetOp> *ds) = 0;
 };
 }  // namespace mindspore::dataset
 

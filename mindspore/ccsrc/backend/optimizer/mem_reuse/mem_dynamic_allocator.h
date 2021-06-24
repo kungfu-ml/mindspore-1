@@ -22,6 +22,8 @@
 #include <vector>
 #include <algorithm>
 #include <utility>
+#include <thread>
+#include <mutex>
 
 namespace mindspore {
 namespace device {
@@ -33,8 +35,8 @@ enum DynamicMemBufStatus : int { kMemBufIdle, kMemBufUsed };
 // Alloc memory aligned according to 512 bytes.
 static const size_t DYNAMIC_MEM_ALIGN_SIZE = 512;
 
-// The minimum unit size (500M) of memory block used for dynamic extend.
-static const size_t DYNAMIC_MEM_ALLOC_UNIT_SIZE = 500 << 20;
+// The minimum unit size (1G) of memory block used for dynamic extend.
+static const size_t DYNAMIC_MEM_ALLOC_UNIT_SIZE = 1024 << 20;
 
 // The Comparator of device address from small to large.
 struct DeviceAddrCmp {
@@ -87,7 +89,11 @@ class DynamicMemPoolBestFit {
   void ReleaseDeviceRes();
   // Display the information of memory block and memory buf.
   void DumpDynamicMemPoolInfo();
-  SizeMapMemBuf GetIdleMemBufMap() { return global_idle_mem_buf_map_; }
+  // Get the map of global idle mem buf and size.
+  SizeMapMemBuf global_idle_mem_buf_map() {
+    std::lock_guard<std::mutex> locker(mutex_);
+    return global_idle_mem_buf_map_;
+  }
 
   // Get the related memory statistics information.
   size_t total_mem_statistics() const { return total_mem_statistics_; }
@@ -117,7 +123,7 @@ class DynamicMemPoolBestFit {
   bool IsDivide(size_t tensor_size, size_t mem_buf_size) const;
   // Divide the memory buf by alloc size.
   void DivideMemBuf(size_t size, const DynamicMemBufPtr &mem_buf);
-  // Find the memory block by deivce address.
+  // Find the memory block by device address.
   DynamicMemBlockPtr FindMemBlock(const DeviceMemPtr &device_addr);
   // The Comparator of memory block by device address, because memory blocks are arranged in order by device address.
   static bool CmpMemBlock(const DeviceMemPtr &device_addr, const DynamicMemBlockPtr &mem_block);
@@ -136,6 +142,9 @@ class DynamicMemPoolBestFit {
   size_t total_mem_statistics_{0};
   size_t total_used_mem_statistics_{0};
   size_t used_mem_peak_statistics_{0};
+
+  // Support multi-thread.
+  std::mutex mutex_;
 };
 }  // namespace device
 }  // namespace mindspore

@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -132,7 +132,7 @@ class FuncGraphAbstractClosure : public AbstractFuncAtom {
   // To discriminate different usage of same graph by using this tracking_id,
   // so different tracking_id will produce different FuncGraphAbstractClosure,
   // different FuncGraphEvaluator.
-  // Espcecially usefull for recursive func graph call, so it will not mess up
+  // Espcecially useful for recursive func graph call, so it will not mess up
   // the graph_context_ in FuncGraphEvaluator.
   // Notes: Be careful to use nullptr for this variable.
   // store it as weak_ptr to break reference cycle.

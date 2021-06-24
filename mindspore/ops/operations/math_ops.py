@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ from ..._checkparam import Validator as validator
 from ..._checkparam import Rel
 from ...common import dtype as mstype
 from ...common.tensor import Tensor
+from ...common._decorator import deprecated
 from .._utils import get_broadcast_shape
 from ..primitive import PrimitiveWithInfer, PrimitiveWithCheck, prim_attr_register, _run_op
 
@@ -114,8 +115,8 @@ class _BitwiseBinaryOp(_MathBinaryOp):
         return _BitwiseBinaryOp._check_bitwise_op_input_type(x1_type, x2_type, self.name)
 
 
-class TensorAdd(_MathBinaryOp):
-    """
+class Add(_MathBinaryOp):
+    r"""
     Adds two input tensors element-wise.
 
     Inputs of `input_x` and `input_y` comply with the implicit type conversion rules to make the data types consistent.
@@ -124,6 +125,10 @@ class TensorAdd(_MathBinaryOp):
     dtypes of them cannot be both bool, and the shapes of them could be broadcast.
     When the inputs are one tensor and one scalar,
     the scalar could only be a constant.
+
+    .. math::
+
+        out_{i} = x_{i} + y_{i}
 
     Inputs:
         - **input_x** (Union[Tensor, Number, bool]) - The first input is a number, or a bool,
@@ -135,17 +140,41 @@ class TensorAdd(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
-        >>> add = ops.TensorAdd()
+        >>> add = ops.Add()
         >>> input_x = Tensor(np.array([1, 2, 3]).astype(np.float32))
         >>> input_y = Tensor(np.array([4, 5, 6]).astype(np.float32))
         >>> output = add(input_x, input_y)
         >>> print(output)
         [5. 7. 9.]
     """
+
+    def infer_value(self, x, y):
+        if x is not None and y is not None:
+            x = x.asnumpy()
+            y = y.asnumpy()
+            out = x + y
+            out = np.array(out, x.dtype)
+            return Tensor(out)
+        return None
+
+
+class TensorAdd(_MathBinaryOp):
+    """
+    Same as operator Add. TensorAdd will be deprecated in the future.
+    Please use Add instead.
+    """
+
+    @deprecated("1.1", "Add", True)
+    @prim_attr_register
+    def __init__(self):
+        _MathBinaryOp.__init__(self)
 
     def infer_value(self, x, y):
         if x is not None and y is not None:
@@ -173,6 +202,9 @@ class AssignAdd(PrimitiveWithInfer):
         - **value** (Union[numbers.Number, Tensor]) - The value to be added to the `variable`.
           It must have the same shape as `variable` if it is a Tensor.
 
+    Raises:
+        TypeError: If `value` is neither Number nor Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -191,7 +223,7 @@ class AssignAdd(PrimitiveWithInfer):
         >>> value = Tensor(np.ones([1]).astype(np.int64)*100)
         >>> output = net(value)
         >>> print(output)
-        Parameter (name=global_step)
+        Parameter (name=global_step, shape=(1,), dtype=Int64, requires_grad=True)
     """
     __mindspore_signature__ = (
         sig.make_sig('x', sig.sig_rw.RW_WRITE, dtype=sig.sig_dtype.T),
@@ -202,6 +234,7 @@ class AssignAdd(PrimitiveWithInfer):
     def __init__(self):
         """Initialize AssignAdd"""
         self.init_prim_io_names(inputs=['ref', 'value'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
 
     def infer_shape(self, variable, value):
         return value
@@ -228,6 +261,9 @@ class AssignSub(PrimitiveWithInfer):
         - **value** (Union[numbers.Number, Tensor]) - The value to be subtracted from the `variable`.
           It must have the same shape as `variable` if it is a Tensor.
 
+    Raises:
+        TypeError: If `value` is neither Number nor Tensor.
+
     Supported Platforms:
         ``Ascend``
 
@@ -246,7 +282,7 @@ class AssignSub(PrimitiveWithInfer):
         >>> value = Tensor(np.ones([1]).astype(np.int32)*100)
         >>> output = net(value)
         >>> print(output)
-        Parameter (name=global_step)
+        Parameter (name=global_step, shape=(1,), dtype=Int32, requires_grad=True)
     """
 
     __mindspore_signature__ = (
@@ -257,6 +293,8 @@ class AssignSub(PrimitiveWithInfer):
     @prim_attr_register
     def __init__(self):
         """Initialize AssignSub"""
+        self.init_prim_io_names(inputs=['ref', 'value'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
 
     def infer_shape(self, variable, value):
         return value
@@ -286,7 +324,6 @@ class _Reduce(PrimitiveWithInfer):
         """Initialize Reduce"""
         validator.check_value_type('keep_dims', keep_dims, [bool], self.name)
         self.init_prim_io_names(inputs=['input_x', 'axis'], outputs=['y'])
-        self.add_prim_attr("io_format", "ND")
 
     def __call__(self, x, axis=()):
         args = [x, axis]
@@ -339,9 +376,9 @@ class _Reduce(PrimitiveWithInfer):
 
 class ReduceMean(_Reduce):
     """
-     Reduces a dimension of a tensor by averaging all elements in the dimension.
+    Reduces a dimension of a tensor by averaging all elements in the dimension.
 
-     The dtype of the tensor to be reduced is number.
+    The dtype of the tensor to be reduced is number.
 
     Args:
         keep_dims (bool): If true, keep these reduced dimensions and the length is 1.
@@ -361,6 +398,11 @@ class ReduceMean(_Reduce):
           the shape of output is :math:`(x_1, x_3, ..., x_R)`.
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
+
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is not one of the following: int, tuple or list.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -399,6 +441,11 @@ class ReduceSum(_Reduce):
           the shape of output is :math:`(x_1, x_3, ..., x_R)`.
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
+
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is None.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -444,8 +491,13 @@ class ReduceAll(_Reduce):
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
 
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is not one of the following: int, tuple or list.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([[True, False], [True, True]]))
@@ -486,8 +538,13 @@ class ReduceAny(_Reduce):
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
 
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is not one of the following: int, tuple or list.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([[True, False], [True, True]]))
@@ -527,6 +584,11 @@ class ReduceMax(_Reduce):
           the shape of output is :math:`(x_1, x_3, ..., x_R)`.
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
+
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is not one of the following: int, tuple or list.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -576,6 +638,11 @@ class ReduceMin(_Reduce):
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
 
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is not one of the following: int, tuple or list.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -615,6 +682,11 @@ class ReduceProd(_Reduce):
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
 
+    Raises:
+        TypeError: If `keep_dims` is not a bool.
+        TypeError: If `input_x` is not a Tensor.
+        ValueError: If `axis` is not one of the following: int, tuple or list.
+
     Supported Platforms:
         ``Ascend``
 
@@ -643,6 +715,10 @@ class CumProd(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape and dtype as the `input_x`.
+
+    Raises:
+        TypeError: If `exclusive` or `reverse` is not a bool.
+        ValueError: If `axis` is None.
 
     Supported Platforms:
         ``Ascend``
@@ -689,8 +765,8 @@ class CumProd(PrimitiveWithInfer):
             raise ValueError(f"For {self.name}, axis must be const.")
 
 
-class MatMul(PrimitiveWithInfer):
-    """
+class MatMul(PrimitiveWithCheck):
+    r"""
     Multiplies matrix `a` and matrix `b`.
 
     The rank of input tensors must equal to `2`.
@@ -707,6 +783,12 @@ class MatMul(PrimitiveWithInfer):
 
     Outputs:
         Tensor, the shape of the output tensor is :math:`(N, M)`.
+
+    Raises:
+        TypeError: If `transpose_a` or `transpose_b` is not a bool.
+        ValueError: If the column of matrix dimensions of `input_x` is not equal to
+                    the row of matrix dimensions of `input_y`.
+        ValueError: If length of shape of `input_x` or `input_y` is not equal to 2.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -726,14 +808,13 @@ class MatMul(PrimitiveWithInfer):
         cls_name = self.name
         validator.check_value_type("transpose_a", transpose_a, [bool], cls_name)
         validator.check_value_type("transpose_b", transpose_b, [bool], cls_name)
-        self.add_prim_attr("io_format", "ND")
 
     def check_shape_size(self, x1, x2):
         if len(x1) != 2 or len(x2) != 2:
-            raise ValueError('P.MatMul inputs x1, x2 should has the same dimension size and '
+            raise ValueError('P.MatMul inputs x1, x2 should have the same dimension size and '
                              + f'equal to 2, while x1 size is ({len(x1)}) and x2 size is ({len(x2)}).')
 
-    def infer_shape(self, x1, x2):
+    def check_shape(self, x1, x2):
         self.check_shape_size(x1, x2)
         cls_name = self.name
         # expected dimension of x, y, x:[...,a,b] y:[..., c,d], the dim size should be the same except the last two
@@ -747,30 +828,27 @@ class MatMul(PrimitiveWithInfer):
         x2_last = x2[-2:]
         x1_col = x1_last[not self.transpose_a]
         x2_row = x2_last[self.transpose_b]
-        if x1_col != x2_row:
-            raise ValueError(f'For \'{cls_name}\' evaluator shapes of inputs can not do this operator,'
-                             + f' got {x1_col} and {x2_row}, with x1 shape {x1}(transpose_a={self.transpose_a})'
-                             + f', x2 shape {x2}(transpose_b={self.transpose_b}).')
+        if np.all(np.array(x1) != -1) and np.all(np.array(x2) != -1):
+            if x1_col != x2_row:
+                raise ValueError(f'For \'{cls_name}\' evaluator shapes of inputs can not do this operator,'
+                                 + f' got {x1_col} and {x2_row}, with x1 shape {x1}(transpose_a={self.transpose_a})'
+                                 + f', x2 shape {x2}(transpose_b={self.transpose_b}).')
         # set attribute
         self.add_prim_attr('transpose_x1', self.transpose_a)
         self.add_prim_attr('transpose_x2', self.transpose_b)
 
-        ret_dims = x1[: -2] + [x1_last[self.transpose_a], x2_last[not self.transpose_b]]
-        return ret_dims
-
-    def infer_dtype(self, x1, x2):
+    def check_dtype(self, x1, x2):
         args = {"x1": x1, "x2": x2}
         validator.check_tensors_dtypes_same_and_valid(args, mstype.float_type + mstype.int_type, self.name)
-        if x1.element_type() == mstype.int8:
-            return mstype.tensor_type(mstype.int32)
-        return x1
 
 
 class BatchMatMul(MatMul):
-    """
-    Computes matrix multiplication between two tensors by batch
+    r"""
+    Computes matrix multiplication between two tensors by batch.
 
-    `result[..., :, :] = tensor(a[..., :, :]) * tensor(b[..., :, :])`.
+    .. math::
+
+        \text{output}[..., :, :] = \text{matrix}(a[..., :, :]) * \text{matrix}(b[..., :, :])
 
     The two input tensors must have the same rank and the rank must be not less than `3`.
 
@@ -790,6 +868,11 @@ class BatchMatMul(MatMul):
     Outputs:
         Tensor, the shape of the output tensor is :math:`(*B, N, M)`.
 
+    Raises:
+        TypeError: If `transpose_a` or `transpose_b` is not a bool.
+        ValueError: If length of shape of `input_x` is not equal to length of shape of `input_y` or
+                    length of shape of `input_x` is less than 3.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -802,12 +885,11 @@ class BatchMatMul(MatMul):
         [[[[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
-          [[3. 3. 3. 3.]]],
+          [[3. 3. 3. 3.]]]
          [[[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]]]
-        >>>
         >>> input_x = Tensor(np.ones(shape=[2, 4, 3, 1]), mindspore.float32)
         >>> input_y = Tensor(np.ones(shape=[2, 4, 3, 4]), mindspore.float32)
         >>> batmatmul = ops.BatchMatMul(transpose_a=True)
@@ -816,7 +898,7 @@ class BatchMatMul(MatMul):
         [[[[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
-          [[3. 3. 3. 3.]]],
+          [[3. 3. 3. 3.]]]
          [[[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
           [[3. 3. 3. 3.]]
@@ -840,6 +922,10 @@ class CumSum(PrimitiveWithInfer):
     """
     Computes the cumulative sum of input tensor along axis.
 
+    .. math::
+
+        y_i = x_1 + x_2 + x_3 + ... + x_i
+
     Args:
         exclusive (bool): If true, perform exclusive mode. Default: False.
         reverse (bool): If true, perform inverse cumulative sum. Default: False.
@@ -851,6 +937,10 @@ class CumSum(PrimitiveWithInfer):
 
     Outputs:
         Tensor, the shape of the output tensor is consistent with the input tensor's.
+
+    Raises:
+        TypeError: If `exclusive` or `reverse` is not a bool.
+        TypeError: If `axis` is not an int.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -880,7 +970,7 @@ class CumSum(PrimitiveWithInfer):
         if axis['value'] is None:
             raise ValueError(f"For {self.name}, axis must be const.")
         validator.check_value_type('axis', axis['value'], [int], cls_name)
-        valid_dtypes = [mstype.uint8, mstype.int8, mstype.int32, mstype.float16, mstype.float32]
+        valid_dtypes = [mstype.uint8, mstype.int8, mstype.int32, mstype.float16, mstype.float32, mstype.float64]
         validator.check_tensor_dtype_valid('x', x['dtype'], valid_dtypes, cls_name)
         return {'shape': x_shp,
                 'dtype': x['dtype'],
@@ -899,6 +989,9 @@ class AddN(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape and dtype as each entry of the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is neither tuple nor list.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -986,6 +1079,9 @@ class AccumulateNV2(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape and dtype as each entry of the `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is neither tuple nor list.
+
     Supported Platforms:
         ``Ascend``
 
@@ -1048,6 +1144,9 @@ class Neg(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape and dtype as input.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -1095,6 +1194,11 @@ class InplaceAdd(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape and dtype as input_x.
+
+    Raises:
+        TypeError: If `indices` is neither int nor tuple.
+        TypeError: If `indices` is a tuple whose elements are not all int.
+        ValueError: If length of shape of `input_x` is not equal to length of shape of `input_v`.
 
     Supported Platforms:
         ``Ascend``
@@ -1157,6 +1261,11 @@ class InplaceSub(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape and dtype as input_x.
+
+    Raises:
+        TypeError: If `indices` is neither int nor tuple.
+        TypeError: If `indices` is a tuple whose elements are not all int.
+        ValueError: If length of shape of `input_x` is not equal to length of shape of `input_v`.
 
     Supported Platforms:
         ``Ascend``
@@ -1225,6 +1334,9 @@ class Sub(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not a Number or a bool or a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -1258,6 +1370,10 @@ class Mul(_MathBinaryOp):
     When the inputs are one tensor and one scalar,
     the scalar could only be a constant.
 
+    .. math::
+
+        out_{i} = x_{i} * y_{i}
+
     Inputs:
         - **input_x** (Union[Tensor, Number, bool]) - The first input is a number or
           a bool or a tensor whose data type is number or bool.
@@ -1267,6 +1383,10 @@ class Mul(_MathBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
+
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+        ValueError: If `input_x` and `input_y` are not the same shape.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1305,11 +1425,14 @@ class SquaredDifference(_MathBinaryOp):
         - **input_x** (Union[Tensor, Number, bool]) - The first input is a number, or a bool,
           or a tensor whose data type is float16, float32, int32 or bool.
         - **input_y** (Union[Tensor, Number, bool]) - The second input is a number, or a bool when the first input
-          is a tensor or a tensor whose data type isfloat16, float32, int32 or bool.
+          is a tensor or a tensor whose data type is float16, float32, int32 or bool.
 
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
+
+    Raises:
+        TypeError: if `input_x` and `input_y` is not a Number or a bool or a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1337,6 +1460,9 @@ class Square(PrimitiveWithCheck):
 
     Outputs:
         Tensor, has the same shape and dtype as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1376,6 +1502,9 @@ class Rsqrt(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same type and shape as `input_x`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -1420,6 +1549,9 @@ class Sqrt(PrimitiveWithCheck):
     Outputs:
         Tensor, has the same shape as the `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -1457,6 +1589,9 @@ class Reciprocal(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1515,6 +1650,10 @@ class Pow(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+        ValueError: If `input_x` and `input_y` are not the same shape.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -1545,14 +1684,21 @@ class Pow(_MathBinaryOp):
 
 
 class Exp(PrimitiveWithInfer):
-    """
+    r"""
     Returns exponential of a tensor element-wise.
 
+    .. math::
+
+        out_i = e^{x_i}
+
     Inputs:
-        - **input_x** (Tensor) - The input tensor. The data type mast be float16 or float32.
+        - **input_x** (Tensor) - The input tensor.
 
     Outputs:
         Tensor, has the same shape and dtype as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1587,14 +1733,21 @@ class Exp(PrimitiveWithInfer):
 
 
 class Expm1(PrimitiveWithInfer):
-    """
+    r"""
     Returns exponential then minus 1 of a tensor element-wise.
+
+    .. math::
+
+        out_i = e^{x_i} - 1
 
     Inputs:
         - **input_x** (Tensor) - The input tensor. With float16 or float32 data type.
 
     Outputs:
         Tensor, has the same shape as the `input_x`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1637,6 +1790,11 @@ class HistogramFixedWidth(PrimitiveWithInfer):
     Outputs:
         Tensor, the type is int32.
 
+    Raises:
+        TypeError: If `dtype` is not a str or `nbins` is not an int.
+        ValueError: If `nbins` is less than 1.
+        ValueError: If `dtype` is neither 'int32' nor 'int64'.
+
     Supported Platforms:
         ``Ascend``
 
@@ -1672,11 +1830,17 @@ class Log(PrimitiveWithInfer):
     """
     Returns the natural logarithm of a tensor element-wise.
 
+    .. math::
+        y_i = log_e(x_i)
+
     Inputs:
-        - **input_x** (Tensor) - The input tensor. With float16 or float32 data type. The value must be greater than 0.
+        - **input_x** (Tensor) - The input tensor. The value must be greater than 0.
 
     Outputs:
         Tensor, has the same shape as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1719,8 +1883,11 @@ class Log1p(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as the `input_x`.
 
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_x = Tensor(np.array([1.0, 2.0, 4.0]), mindspore.float32)
@@ -1747,11 +1914,18 @@ class Erf(PrimitiveWithInfer):
     r"""
     Computes the Gauss error function of `input_x` element-wise.
 
+    .. math::
+
+        erf(x)=\frac{2} {\sqrt{\pi}} \int\limits_0^{x} e^{-t^{2}} dt
+
     Inputs:
         - **input_x** (Tensor) - The input tensor. The data type must be float16 or float32.
 
     Outputs:
         Tensor, has the same shape and dtype as the `input_x`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
 
     Supported Platforms:
         ``Ascend``
@@ -1781,14 +1955,21 @@ class Erfc(PrimitiveWithInfer):
     r"""
     Computes the complementary error function of `input_x` element-wise.
 
+    .. math::
+
+        erfc(x) = 1 - \frac{2} {\sqrt{\pi}} \int\limits_0^{x} e^{-t^{2}} dt
+
     Inputs:
         - **input_x** (Tensor) - The input tensor. The data type must be float16 or float32.
 
     Outputs:
         Tensor, has the same shape and dtype as the `input_x`.
 
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_x = Tensor(np.array([-1, 0, 1, 2, 3]), mindspore.float32)
@@ -1831,6 +2012,10 @@ class Minimum(_MathBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
+
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+        ValueError: If `input_x` and `input_y` are not the same shape.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -1875,6 +2060,10 @@ class Maximum(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+        ValueError: If `input_x` and `input_y` are not the same shape.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -1918,6 +2107,10 @@ class RealDiv(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+        ValueError: If `input_x` and `input_y` are not the same shape.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -1941,7 +2134,7 @@ class RealDiv(_MathBinaryOp):
 
 
 class Div(_MathBinaryOp):
-    """
+    r"""
     Computes the quotient of dividing the first input tensor by the second input tensor element-wise.
 
     Inputs of `input_x` and `input_y` comply with the implicit type conversion rules to make the data types consistent.
@@ -1950,6 +2143,10 @@ class Div(_MathBinaryOp):
     dtypes of them cannot be both bool, and the shapes of them could be broadcast.
     When the inputs are one tensor and one scalar,
     the scalar could only be a constant.
+
+    .. math::
+
+        out_{i} = \frac{x_i}{y_i}
 
     Inputs:
         - **input_x** (Union[Tensor, Number, bool]) - The first input is a number or
@@ -1961,6 +2158,9 @@ class Div(_MathBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
+
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -2004,6 +2204,9 @@ class DivNoNan(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -2032,6 +2235,61 @@ class DivNoNan(_MathBinaryOp):
         return None
 
 
+class MulNoNan(_MathBinaryOp):
+    r"""
+    Computes `input_x` * `input_y` element-wise. If `input_y` is zero, no matter what `input_x` is, it will return 0.
+
+    Inputs of `input_x` and `input_y` comply with the implicit type conversion rules to make the data types consistent.
+    The inputs must be two tensors or one tensor and one scalar.
+    When the inputs are two tensors, the shapes of them could be broadcasted.
+    When the inputs are one tensor and one scalar, the scalar could only be a constant.
+
+    Note:
+        The shapes of `input_x` and `input_y` should be the same or can be broadcasted.
+
+    Inputs:
+        - **input_x** (Union[Tensor]) - The first input is a tensor whose data type is one of
+          flota16, float32, int32, int64 currently or scalar.
+        - **input_y** (Union[Tensor]) - The second input is a tensor whose data type is one of
+          flota16, float32, int32, int64 currently or scalar.
+
+    Outputs:
+        Tensor, the shape is the same as the shape after broadcasting,
+        and the data type is the one with higher precision among the two inputs.
+
+
+    Supported Platforms:
+        ``Ascend``
+
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a bool Tensor.
+
+    Examples:
+        >>> x = Tensor(np.array([[-1.0, 6.0, np.inf], [np.nan, -7.0, 4.0]]), ms.float32)
+        >>> y = Tensor(np.array([[-1.0, 4.0, 0], [0, -3.0, 1.0]]), ms.float32)
+        >>> mul_no_nan = ops.MulNoNan()
+        >>> output = mul_no_nan(x, y)
+        >>> print(output)
+        [[ 1. 24. 0.]
+        [ 0. 21. 4.]]
+    """
+
+    @prim_attr_register
+    def __init__(self):
+        """Initialize _BinaryOp"""
+        self.init_prim_io_names(inputs=['x', 'y'], outputs=['output'])
+
+    def infer_value(self, x, y):
+        if x is not None and y is not None:
+            x = x.asnumpy()
+            y = y.asnumpy()
+            with np.errstate(divide='ignore', invalid='ignore'):
+                out = np.multiply(x, y)
+                out[y == 0] = 0
+            return out
+        return None
+
+
 class FloorDiv(_MathBinaryOp):
     """
     Divides the first input tensor by the second input tensor element-wise and round down to the closest integer.
@@ -2053,8 +2311,11 @@ class FloorDiv(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([2, 4, -1]), mindspore.int32)
@@ -2087,6 +2348,9 @@ class TruncateDiv(_MathBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
+
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
 
     Supported Platforms:
         ``Ascend``
@@ -2121,6 +2385,9 @@ class TruncateMod(_MathBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
+
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is one of the following: Tensor, Number, bool.
 
     Supported Platforms:
         ``Ascend``
@@ -2178,14 +2445,21 @@ class Mod(_MathBinaryOp):
 
 
 class Floor(PrimitiveWithInfer):
-    """
+    r"""
     Rounds a tensor down to the closest integer element-wise.
+
+    .. math::
+
+        out_i = \lfloor x_i \rfloor
 
     Inputs:
         - **input_x** (Tensor) - The input tensor. Its element data type must be float.
 
     Outputs:
         Tensor, has the same shape as `input_x`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is not float.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -2231,6 +2505,9 @@ class FloorMod(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
         ``Ascend``
 
@@ -2245,14 +2522,21 @@ class FloorMod(_MathBinaryOp):
 
 
 class Ceil(PrimitiveWithInfer):
-    """
+    r"""
     Rounds a tensor up to the closest integer element-wise.
+
+    .. math::
+
+        out_i = \lceil x_i \rceil = \lfloor x_i \rfloor + 1
 
     Inputs:
         - **input_x** (Tensor) - The input tensor. It's element data type must be float16 or float32.
 
     Outputs:
         Tensor, has the same shape as `input_x`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
 
     Supported Platforms:
         ``Ascend``
@@ -2298,6 +2582,9 @@ class Xdivy(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+
     Supported Platforms:
         ``Ascend``
 
@@ -2337,6 +2624,9 @@ class Xlogy(_MathBinaryOp):
         Tensor, the shape is the same as the one after broadcasting,
         and the data type is the one with higher precision or higher digits among the two inputs.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+
     Supported Platforms:
         ``Ascend``
 
@@ -2357,14 +2647,22 @@ class Acosh(PrimitiveWithInfer):
     """
     Computes inverse hyperbolic cosine of the input element-wise.
 
+    .. math::
+
+        out_i = cosh^{-1}(input_i)
+
     Inputs:
-        - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
+        - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`. The data type should be one of
+          the following types: float16, float32.
 
     Outputs:
-        Tensor, has the same shape as `input_x`.
+        Tensor, has the same shape and type as `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> acosh = ops.Acosh()
@@ -2396,8 +2694,11 @@ class Cosh(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``CPU``
 
     Examples:
         >>> cosh = ops.Cosh()
@@ -2420,17 +2721,25 @@ class Cosh(PrimitiveWithInfer):
 
 
 class Asinh(PrimitiveWithInfer):
-    """
+    r"""
     Computes inverse hyperbolic sine of the input element-wise.
 
+    .. math::
+
+        out_i = sinh^{-1}(input_i)
+
     Inputs:
-        - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
+        - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`. The data type should be one of
+          the following types: float16, float32.
 
     Outputs:
-        Tensor, has the same shape as `input_x`.
+        Tensor, has the same shape and type as `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> asinh = ops.Asinh()
@@ -2462,8 +2771,11 @@ class Sinh(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``CPU``
 
     Examples:
         >>> sinh = ops.Sinh()
@@ -2514,9 +2826,13 @@ class Equal(_LogicBinaryOp):
           a tensor whose data type is number.
         - **input_y** (Union[Tensor, Number]) - The second input is a number
           when the first input is a tensor or a tensor whose data type is number.
+          The data type is the same as the first input.
 
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
+
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -2568,6 +2884,9 @@ class ApproximateEqual(_LogicBinaryOp):
     Outputs:
         Tensor, the shape is the same as the shape of 'x1', and the data type is bool.
 
+    Raises:
+        TypeError: If `tolerance` is not a float.
+
     Supported Platforms:
         ``Ascend``
 
@@ -2608,6 +2927,10 @@ class EqualCount(PrimitiveWithInfer):
 
     Outputs:
         Tensor, with the type same as input tensor and size as (1,).
+
+    Raises:
+        TypeError: If `input_x` or `input_y` is not a Tensor.
+        ValueError: If shape of `input_x` is not equal to shape of `input_y`.
 
     Supported Platforms:
         ``GPU`` ``CPU``
@@ -2655,6 +2978,10 @@ class NotEqual(_LogicBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -2695,7 +3022,10 @@ class Greater(_LogicBinaryOp):
           a bool when the first input is a tensor or a tensor whose data type is number or bool.
 
     Outputs:
-        Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
+        Tensor, the shape is the same as the one after broadcasting, and the data type is bool.
+
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -2736,7 +3066,10 @@ class GreaterEqual(_LogicBinaryOp):
           a bool when the first input is a tensor or a tensor whose data type is number or bool.
 
     Outputs:
-        Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
+        Tensor, the shape is the same as the one after broadcasting, and the data type is bool.
+
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -2779,6 +3112,9 @@ class Less(_LogicBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
 
+    Raises:
+        TypeError: If `input_x` and `input_y` is not one of the following: Tensor, Number, bool.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -2820,6 +3156,9 @@ class LessEqual(_LogicBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
 
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -2851,8 +3190,11 @@ class LogicalNot(PrimitiveWithInfer):
     Outputs:
         Tensor, the shape is the same as the `input_x`, and the dtype is bool.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([True, False, True]), mindspore.bool_)
@@ -2871,8 +3213,14 @@ class LogicalNot(PrimitiveWithInfer):
         return x_shape
 
     def infer_dtype(self, x_dtype):
-        validator.check_tensor_dtype_valid("x", x_dtype, [mstype.bool_], self.name)
+        validator.check_tensor_dtype_valid("x", x_dtype, [mstype.bool_], self.name + " or '~' operator")
         return mstype.tensor_type(mstype.bool_)
+
+    def infer_value(self, x):
+        if x is not None:
+            x = x.asnumpy()
+            return Tensor(np.logical_not(x))
+        return None
 
 
 class LogicalAnd(_LogicBinaryOp):
@@ -2894,8 +3242,11 @@ class LogicalAnd(_LogicBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting, and the data type is bool.
 
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([True, False, True]), mindspore.bool_)
@@ -2908,6 +3259,14 @@ class LogicalAnd(_LogicBinaryOp):
 
     def infer_dtype(self, x_dtype, y_dtype):
         return _LogicBinaryOp.do_infer_dtype(x_dtype, y_dtype, (mstype.bool_,), self.name)
+
+    def infer_value(self, x, y):
+        if x is not None and y is not None:
+            x = x.asnumpy()
+            y = y.asnumpy()
+            out = np.array(np.logical_and(x, y))
+            return Tensor(out)
+        return None
 
 
 class LogicalOr(_LogicBinaryOp):
@@ -2929,8 +3288,11 @@ class LogicalOr(_LogicBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,and the data type is bool.
 
+    Raises:
+        TypeError: If neither `input_x` nor `input_y` is a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([True, False, True]), mindspore.bool_)
@@ -2944,6 +3306,14 @@ class LogicalOr(_LogicBinaryOp):
     def infer_dtype(self, x_dtype, y_dtype):
         return _LogicBinaryOp.do_infer_dtype(x_dtype, y_dtype, (mstype.bool_,), self.name)
 
+    def infer_value(self, x, y):
+        if x is not None and y is not None:
+            x = x.asnumpy()
+            y = y.asnumpy()
+            out = np.array(np.logical_or(x, y))
+            return Tensor(out)
+        return None
+
 
 class IsNan(PrimitiveWithInfer):
     """
@@ -2954,6 +3324,9 @@ class IsNan(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape of input, and the dtype is bool.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``GPU``
@@ -2988,6 +3361,9 @@ class IsInf(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape of input, and the dtype is bool.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
         ``GPU``
 
@@ -3013,13 +3389,16 @@ class IsInf(PrimitiveWithInfer):
 
 class IsFinite(PrimitiveWithInfer):
     """
-    Deternubes which elements are finite for each position.
+    Determines which elements are finite for each position.
 
     Inputs:
         - **input_x** (Tensor) - The input tensor.
 
     Outputs:
         Tensor, has the same shape of input, and the dtype is bool.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -3053,8 +3432,10 @@ class FloatStatus(PrimitiveWithInfer):
         - **input_x** (Tensor) - The input tensor. The data type must be float16 or float32.
 
     Outputs:
-        Tensor, has the shape of `(1,)`, and has the same dtype of input `mindspore.dtype.float32` or
-        `mindspore.dtype.float16`.
+        Tensor, has the shape of `(1,)`, and the dtype is `mindspore.dtype.float32`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
 
     Supported Platforms:
         ``GPU``
@@ -3077,7 +3458,7 @@ class FloatStatus(PrimitiveWithInfer):
 
     def infer_dtype(self, x_dtype):
         validator.check_tensor_dtype_valid('x', x_dtype, [mstype.float32, mstype.float16], self.name)
-        return x_dtype
+        return mstype.float32
 
 
 class NPUAllocFloatStatus(PrimitiveWithInfer):
@@ -3129,6 +3510,10 @@ class NPUGetFloatStatus(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`. All the elements in the tensor will be zero.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
+
     Supported Platforms:
         ``Ascend``
 
@@ -3137,6 +3522,8 @@ class NPUGetFloatStatus(PrimitiveWithInfer):
         >>> get_status = ops.NPUGetFloatStatus()
         >>> init = alloc_status()
         >>> get_status(init)
+        Tensor(shape=[8], dtype=Float32, value= [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+          0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00])
         >>> print(init)
         [1. 1. 1. 1. 1. 1. 1. 1.]
     """
@@ -3184,6 +3571,8 @@ class NPUClearFloatStatus(PrimitiveWithInfer):
         >>> init = alloc_status()
         >>> flag = get_status(init)
         >>> clear_status(init)
+        Tensor(shape=[8], dtype=Float32, value= [ 0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00,
+          0.00000000e+00,  0.00000000e+00,  0.00000000e+00,  0.00000000e+00])
         >>> print(init)
         [1. 1. 1. 1. 1. 1. 1. 1.]
     """
@@ -3208,14 +3597,20 @@ class Cos(PrimitiveWithInfer):
     """
     Computes cosine of input element-wise.
 
+    .. math::
+        out_i = cos(x_i)
+
     Inputs:
         - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
 
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> cos = ops.Cos()
@@ -3238,8 +3633,12 @@ class Cos(PrimitiveWithInfer):
 
 
 class ACos(PrimitiveWithInfer):
-    """
+    r"""
     Computes arccosine of input tensors element-wise.
+
+    .. math::
+
+        out_i = cos^{-1}(x_i)
 
     Inputs:
         - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
@@ -3247,8 +3646,11 @@ class ACos(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> acos = ops.ACos()
@@ -3280,8 +3682,11 @@ class Sin(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> sin = ops.Sin()
@@ -3304,8 +3709,12 @@ class Sin(PrimitiveWithInfer):
 
 
 class Asin(PrimitiveWithInfer):
-    """
+    r"""
     Computes arcsine of input tensors element-wise.
+
+    .. math::
+
+        out_i = sin^{-1}(x_i)
 
     Inputs:
         - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
@@ -3313,8 +3722,11 @@ class Asin(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> asin = ops.Asin()
@@ -3337,23 +3749,24 @@ class Asin(PrimitiveWithInfer):
 
 
 class NMSWithMask(PrimitiveWithInfer):
-    """
-    Selects some bounding boxes in descending order of score.
+    r"""
+    When object detection problem is performed in the computer vision field, object detection algorithm generates
+    a plurality of bounding boxes. Selects some bounding boxes in descending order of score. Use the box with the
+    highest score calculate the overlap between other boxes and the current box, and delete the box based on a
+    certain threshold(IOU). The IOU is as follows,
+
+    .. math::
+        \text{IOU} = \frac{\text{Area of Overlap}}{\text{Area of Union}}
 
     Args:
         iou_threshold (float): Specifies the threshold of overlap boxes with respect to
             IOU. Default: 0.5.
 
-    Raises:
-        ValueError: If the iou_threshold is not a float number, or if the first dimension
-            of input Tensor is less than or equal to 0, or if the data type of the input
-            Tensor is not float16 or float32.
-
     Inputs:
         - **bboxes** (Tensor) - The shape of tensor is :math:`(N, 5)`. Input bounding boxes.
           `N` is the number of input bounding boxes. Every bounding box
-          contains 5 values, the first 4 values are the coordinates of bounding
-          box, and the last value is the score of this bounding box.
+          contains 5 values, the first 4 values are the coordinates(x0, y0, x1, y1) of bounding box which
+          represents the point of top-left and bottom-right, and the last value is the score of this bounding box.
           The data type must be float16 or float32.
 
     Outputs:
@@ -3366,19 +3779,25 @@ class NMSWithMask(PrimitiveWithInfer):
         - **selected_mask** (Tensor) - The shape of tensor is :math:`(N,)`. A mask list of
           valid output bounding boxes.
 
+    Raises:
+        ValueError: If the `iou_threshold` is not a float number, or if the first dimension
+            of input Tensor is less than or equal to 0, or if the data type of the input
+            Tensor is not float16 or float32.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
     Examples:
-        >>> bbox = np.array([[0.4, 0.2, 0.4, 0.3, 0.1], [0.4, 0.3, 0.6, 0.8, 0.7]])
+        >>> bbox = np.array([[100.0, 100.0, 50.0, 68.0, 0.63], [150.0, 75.0, 165.0, 115.0, 0.55],
+        ...                  [12.0, 190.0, 288.0, 200.0, 0.9], [28.0, 130.0, 106.0, 172.0, 0.3]])
         >>> bbox[:, 2] += bbox[:, 0]
         >>> bbox[:, 3] += bbox[:, 1]
         >>> inputs = Tensor(bbox, mindspore.float32)
-        >>> nms = ops.NMSWithMask(0.5)
+        >>> nms = ops.NMSWithMask(0.1)
         >>> output_boxes, indices, mask = nms(inputs)
         >>> indices_np = indices.asnumpy()
         >>> print(indices_np[mask.asnumpy()])
-        [0 1]
+        [0 1 2]
     """
 
     @prim_attr_register
@@ -3402,14 +3821,21 @@ class NMSWithMask(PrimitiveWithInfer):
 
 
 class Abs(PrimitiveWithInfer):
-    """
+    r"""
     Returns absolute value of a tensor element-wise.
+
+    .. math::
+
+        out_i = |x_i|
 
     Inputs:
         - **input_x** (Tensor) - The input tensor. The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
 
     Outputs:
         Tensor, has the same shape as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -3446,17 +3872,19 @@ class Sign(PrimitiveWithInfer):
     r"""
     Performs sign on the tensor element-wise.
 
-    Note:
-        .. math::
-            sign(x) = \begin{cases} -1, &if\ x < 0 \cr
-            0, &if\ x = 0 \cr
-            1, &if\ x > 0\end{cases}
+    .. math::
+        sign(x) = \begin{cases} -1, &if\ x < 0 \cr
+        0, &if\ x = 0 \cr
+        1, &if\ x > 0\end{cases}
 
     Inputs:
         - **input_x** (Tensor) - The input tensor.
 
     Outputs:
         Tensor, has the same shape and type as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``CPU``
@@ -3490,6 +3918,9 @@ class Round(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape and type as the `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend``
@@ -3526,8 +3957,12 @@ class Tan(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If dtype of `input_x` is not one of the following: float16, float32, int32.
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``CPU``
 
     Examples:
         >>> tan = ops.Tan()
@@ -3551,26 +3986,31 @@ class Tan(PrimitiveWithInfer):
 
 
 class Atan(PrimitiveWithInfer):
-    """
+    r"""
     Computes the trigonometric inverse tangent of the input element-wise.
 
+    .. math::
+
+        out_i = tan^{-1}(x_i)
+
     Inputs:
-        - **input_x** (Tensor): The input tensor.
+        - **input_x** (Tensor): The input tensor. The data type should be one of the following types: float16, float32.
 
     Outputs:
         A Tensor, has the same type as the input.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
-        >>> input_x = Tensor(np.array([1.047, 0.785]), mindspore.float32)
-        >>> tan = ops.Tan()
-        >>> output_y = tan(input_x)
+        >>> input_x = Tensor(np.array([1.0, 0.0]), mindspore.float32)
         >>> atan = ops.Atan()
-        >>> output = atan(output_y)
+        >>> output = atan(input_x)
         >>> print(output)
-        [1.047     0.7850001]
+        [0.7853982 0.       ]
     """
 
     @prim_attr_register
@@ -3595,8 +4035,11 @@ class Atanh(PrimitiveWithInfer):
     Outputs:
         A Tensor, has the same type as the input.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([1.047, 0.785]), mindspore.float32)
@@ -3637,8 +4080,11 @@ class Atan2(_MathBinaryOp):
     Outputs:
         Tensor, the shape is the same as the one after broadcasting,and the data type is same as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` or `input_y` is not a Tensor.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``CPU``
 
     Examples:
         >>> input_x = Tensor(np.array([0, 1]), mindspore.float32)
@@ -3665,8 +4111,12 @@ class SquareSumAll(PrimitiveWithInfer):
         - **output_y1** (Tensor) - The same type as the `input_x1`.
         - **output_y2** (Tensor) - The same type as the `input_x1`.
 
+    Raises:
+        TypeError: If neither `input_x1` nor `input_x2` is a Tensor.
+        ValueError: If `input_x1` and `input_x2` are not the same shape.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_x1 = Tensor(np.array([0, 0, 2, 0]), mindspore.float32)
@@ -3710,6 +4160,9 @@ class BitwiseAnd(_BitwiseBinaryOp):
     Outputs:
         Tensor, has the same type as the `input_x1`.
 
+    Raises:
+        TypeError: If `input_x1` or `input_x2` is not a Tensor.
+
     Supported Platforms:
         ``Ascend``
 
@@ -3739,6 +4192,9 @@ class BitwiseOr(_BitwiseBinaryOp):
 
     Outputs:
         Tensor, has the same type as the `input_x1`.
+
+    Raises:
+        TypeError: If `input_x1` or `input_x2` is not a Tensor.
 
     Supported Platforms:
         ``Ascend``
@@ -3770,6 +4226,9 @@ class BitwiseXor(_BitwiseBinaryOp):
     Outputs:
         Tensor, has the same type as the `input_x1`.
 
+    Raises:
+        TypeError: If `input_x1` or `input_x2` is not a Tensor.
+
     Supported Platforms:
         ``Ascend``
 
@@ -3793,6 +4252,9 @@ class BesselI0e(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape as `input_x`.
+
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
 
     Supported Platforms:
         ``Ascend``
@@ -3828,6 +4290,9 @@ class BesselI1e(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape as `input_x`.
 
+    Raises:
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
         ``Ascend``
 
@@ -3862,6 +4327,9 @@ class Inv(PrimitiveWithInfer):
     Outputs:
         Tensor, has the same shape and data type as `input_x`.
 
+    Raises:
+        TypeError: If dtype of `input_x` is not one of float16, float32, int32.
+
     Supported Platforms:
         ``Ascend``
 
@@ -3895,6 +4363,9 @@ class Invert(PrimitiveWithInfer):
 
     Outputs:
         Tensor, has the same shape as `input_x`.
+
+    Raises:
+        TypeError: If dtype of `input_x` is neither int16 nor uint16.
 
     Supported Platforms:
         ``Ascend``
@@ -4009,35 +4480,52 @@ class LinSpace(PrimitiveWithInfer):
                'value': None}
         return out
 
+
 class MatrixInverse(PrimitiveWithInfer):
     """
     Returns the inverse of the input matrix. If the matrix is irreversible, an error may be reported or an unknown
-    result may be returned
+    result may be returned.
+
+    Note:
+        The parameter 'adjoint' is only supporting False right now. Because complex number is not supported at present.
 
     Args:
         adjoint (bool) : An optional bool. Default: False.
 
     Inputs:
-        - **x** (Tensor) - A matrix to be calculated.
-          types: float32, double.
+        - **x** (Tensor) - A matrix to be calculated. The matrix must be at least two dimensions, and the last two
+          dimensions must be the same size. types: float32, float64.
 
     Outputs:
         Tensor, has the same type and shape as input `x`.
 
+    Raises:
+        TypeError: If `adjoint` is not a bool.
+        TypeError: If dtype of `x` is neither float32 nor float64.
+        ValueError: If the last two dimensions of `x` is not same size.
+        ValueError: If the dimension of `x` is less than 2.
+
+    Supported Platforms:
+        ``GPU``
+
     Examples:
-        >>> x = Tensor(np.random.uniform(-2, 2, (2, 2, 2)), mstype.float32)
-        >>> matrix_inverse = P.MatrixInverse(adjoint=False)
-        >>> result = matrix_inverse(x)
-        [[[ 0.6804  0.8111]
-          [-2.3257  -1.0616]
-         [[-0.7074  -0.4963]
-          [0.1896  -1.5285]]]
+        >>> x = Tensor(np.array([[[-0.710504  , -1.1207525],
+        ...                       [-1.7651395 , -1.7576632]],
+        ...                      [[ 0.52412605,  1.9070215],
+        ...                       [ 1.3384849 ,  1.4274558]]]), mindspore.float32)
+        >>> matrix_inverse = ops.MatrixInverse(adjoint=False)
+        >>> output = matrix_inverse(x)
+        >>> print(output)
+        [[[ 2.4095483  -1.536419  ]
+          [-2.4197974   0.97401696]]
+         [[-0.79111797  1.0569006 ]
+          [ 0.74180895 -0.2904787 ]]]
     """
 
     @prim_attr_register
     def __init__(self, adjoint=False):
         """Initialize MatrixInverse"""
-        validator.check_value_type("adjoint", adjoint, [bool], self.name)
+        validator.check_type_name("adjoint", adjoint, False, self.name)
         self.adjoint = adjoint
 
     def infer_dtype(self, x_dtype):
@@ -4048,4 +4536,91 @@ class MatrixInverse(PrimitiveWithInfer):
     def infer_shape(self, x_shape):
         validator.check_int(len(x_shape), 2, Rel.GE, self.name, None)
         validator.check_equal_int(x_shape[-1], x_shape[-2], self.name, None)
+        return x_shape
+
+
+class IndexAdd(PrimitiveWithInfer):
+    """
+    Adds tensor y to specified axis and indices of tensor x. The axis should be in the range from 0 to len(x.dim) - 1,
+    and indices should be in the range from 0 to the size of x at the axis dimension.
+
+    Args:
+        axis (int): The dimension along which to index.
+
+    Inputs:
+        - **input_x** (Parameter) - The input tensor to add to, with data type float64, float32, float16, int32, int16,
+          int8, uint8.
+        - **indices** (Tensor) - The index of `input_x` on the `axis` th dimension to add to, with data type int32.
+          The `indices` must be 1D with the same size as the size of the `axis` th dimension of `input_y`. The values
+          of `indices` should be in the range of 0 to the size of the `axis` th dimension of `input_x`.
+        - **input_y** (Tensor) - The input tensor with the value to add. Must have same data type as `input_x`.
+          The shape must be the same as `input_x` except the `axis` th dimension.
+
+    Outputs:
+        Tensor, has the same shape and dtype as input_x.
+
+    Raises:
+        TypeError: If dtype of `input_x` is not one of: float64, float32, float16, int32, int16, int8, uint8.
+        TypeError: If neither `indices` nor `input_y` is a Tensor.
+        TypeError: If shape of `input_y` is not same as the `input_x`.
+        ValueError: If axis is out of `input_x` rank's range.
+        ValueError: If `input_x` rank is not the same as `input_y` rank.
+        ValueError: If size of `indices` is not equal to dimension of y[axis].
+        ValueError: If `input_y`'s shape is not the same as `input_x` except the `axis` th dimension.
+
+    Supported Platforms:
+        ``GPU``
+
+    Examples:
+        >>> class Net(nn.Cell):
+        ...     def __init__(self):
+        ...         super(Net, self).__init__()
+        ...         self.index_add = ops.IndexAdd(axis=1)
+        ...         self.input_x = Parameter(Tensor(np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]]), mindspore.float32))
+        ...         self.indices = Tensor(np.array([0, 2]), mindspore.int32)
+        ...
+        ...     def construct(self, input_y):
+        ...         return self.index_add(self.input_x, self.indices, input_y)
+        ...
+        >>> input_y = Tensor(np.array([[0.5, 1.0], [1.0, 1.5], [2.0, 2.5]]), mindspore.float32)
+        >>> net = Net()
+        >>> output = net(input_y)
+        >>> print(output)
+        [[ 1.5  2.   4. ]
+         [ 5.   5.   7.5]
+         [ 9.   8.  11.5]]
+    """
+    __mindspore_signature__ = (
+        sig.make_sig('input_x', sig.sig_rw.RW_WRITE, dtype=sig.sig_dtype.T),
+        sig.make_sig('indices', dtype=sig.sig_dtype.T1),
+        sig.make_sig('input_y', dtype=sig.sig_dtype.T)
+    )
+
+    @prim_attr_register
+    def __init__(self, axis, use_lock=True, check_index_bound=True):
+        """Initialize InplaceAdd"""
+        self.init_prim_io_names(inputs=['input_x', 'indices', 'input_y'], outputs=['output'])
+        self.axis = axis
+        validator.check_value_type('axis', axis, [int], self.name)
+
+    def infer_dtype(self, x_dtype, idx_type, y_dtype):
+        args = {'input_x': x_dtype, 'input_y': y_dtype}
+        valid_type = [mstype.float64, mstype.float32, mstype.float16, mstype.int32, mstype.int16, mstype.int8,
+                      mstype.uint8]
+        validator.check_tensors_dtypes_same_and_valid(args, valid_type, self.name)
+        valid_idx_type = [mstype.int32]
+        validator.check_tensor_dtype_valid('indices', idx_type, valid_idx_type, self.name)
+        return x_dtype
+
+    def infer_shape(self, x_shape, idx_shape, y_shape):
+        validator.check("x rank", len(x_shape), "y rank", len(y_shape), Rel.EQ, self.name)
+        x_rank = len(x_shape)
+        validator.check_int_range(self.axis, -x_rank - 1, x_rank, Rel.INC_NEITHER, 'axis', self.name)
+        validator.check_equal_int(len(idx_shape), 1, "rank of idx_shape", self.name)
+        validator.check("size of indices", idx_shape[0], "dimension of y[axis]", y_shape[self.axis],
+                        Rel.EQ, self.name)
+        axis = self.axis if self.axis >= 0 else x_rank + self.axis
+        for dim in range(x_rank):
+            if dim != axis:
+                validator.check('x dim %d' % dim, x_shape[dim], "y dim %d" % dim, y_shape[dim], Rel.EQ, self.name)
         return x_shape

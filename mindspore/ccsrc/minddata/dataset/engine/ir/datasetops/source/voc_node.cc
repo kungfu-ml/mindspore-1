@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ VOCNode::VOCNode(const std::string &dataset_dir, const std::string &task, const 
       sampler_(sampler) {}
 
 std::shared_ptr<DatasetNode> VOCNode::Copy() {
-  std::shared_ptr<SamplerObj> sampler = (sampler_ == nullptr) ? nullptr : sampler_->Copy();
+  std::shared_ptr<SamplerObj> sampler = (sampler_ == nullptr) ? nullptr : sampler_->SamplerCopy();
   auto node = std::make_shared<VOCNode>(dataset_dir_, task_, usage_, class_index_, decode_, sampler, cache_);
   return node;
 }
@@ -108,12 +108,14 @@ Status VOCNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops) {
     RETURN_IF_NOT_OK(schema->AddColumn(
       ColDescriptor(std::string(kColumnTruncate), DataType(DataType::DE_UINT32), TensorImpl::kFlexible, 1)));
   }
+  std::shared_ptr<SamplerRT> sampler_rt = nullptr;
+  RETURN_IF_NOT_OK(sampler_->SamplerBuild(&sampler_rt));
 
   std::shared_ptr<VOCOp> voc_op;
   voc_op = std::make_shared<VOCOp>(task_type_, usage_, dataset_dir_, class_index_, num_workers_, rows_per_buffer_,
-                                   connector_que_size_, decode_, std::move(schema), std::move(sampler_->Build()));
-  RETURN_IF_NOT_OK(AddCacheOp(node_ops));
-
+                                   connector_que_size_, decode_, std::move(schema), std::move(sampler_rt));
+  voc_op->set_total_repeats(GetTotalRepeats());
+  voc_op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
   node_ops->push_back(voc_op);
   return Status::OK();
 }
@@ -134,11 +136,34 @@ Status VOCNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_ge
   }
   int64_t num_rows = 0, sample_size;
   RETURN_IF_NOT_OK(VOCOp::CountTotalRows(dataset_dir_, task_, usage_, class_index_, &num_rows));
-  sample_size = sampler_->Build()->CalculateNumSamples(num_rows);
+  std::shared_ptr<SamplerRT> sampler_rt = nullptr;
+  RETURN_IF_NOT_OK(sampler_->SamplerBuild(&sampler_rt));
+  sample_size = sampler_rt->CalculateNumSamples(num_rows);
+  if (sample_size == -1) {
+    RETURN_IF_NOT_OK(size_getter->DryRun(shared_from_this(), &sample_size));
+  }
   *dataset_size = sample_size;
   dataset_size_ = *dataset_size;
   return Status::OK();
 }
 
+Status VOCNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args, sampler_args;
+  RETURN_IF_NOT_OK(sampler_->to_json(&sampler_args));
+  args["sampler"] = sampler_args;
+  args["num_parallel_workers"] = num_workers_;
+  args["dataset_dir"] = dataset_dir_;
+  args["task"] = task_;
+  args["usage"] = usage_;
+  args["class_indexing"] = class_index_;
+  args["decode"] = decode_;
+  if (cache_ != nullptr) {
+    nlohmann::json cache_args;
+    RETURN_IF_NOT_OK(cache_->to_json(&cache_args));
+    args["cache"] = cache_args;
+  }
+  *out_json = args;
+  return Status::OK();
+}
 }  // namespace dataset
 }  // namespace mindspore

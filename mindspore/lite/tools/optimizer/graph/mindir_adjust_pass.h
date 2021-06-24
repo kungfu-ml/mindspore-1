@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,13 +32,16 @@ class MindirAdjustPass : public Pass {
   ~MindirAdjustPass() override = default;
   void SetQuantType(QuantType quant_type) { quant_type_ = quant_type; }
   void SetFmkType(FmkType fmk_type) { fmk_type_ = fmk_type; }
+  int ValueNodeInt64Convert(AnfNodePtr anf_node);
+  void SetTrainFlag(bool train_flag) { train_flag_ = train_flag; }
   int ParameterNodeConvert(AnfNodePtr anf_node);
-  int PrimitiveConvert(AnfNodePtr anf_node);
+  int ComputeQuantParams(AnfNodePtr anf_node);
   bool Run(const FuncGraphPtr &graph) override;
 
  protected:
   QuantType quant_type_ = QuantType::QuantType_QUANT_NONE;
   FmkType fmk_type_ = FmkType::FmkType_MS;
+  bool train_flag_ = false;
 };
 }  // namespace mindspore::opt
 #endif  // MINDSPORE_LITE_TOOLS_OPTIMIZER_GRAPH_MINDIR_ADJUST_PASS_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "backend/optimizer/somas/somas_node.h"
 #include "backend/optimizer/somas/somas_solver_pre.h"
 #include "backend/optimizer/somas/somas_stream.h"
+#include "backend/optimizer/somas/somas_parameter.h"
 #include "backend/session/anf_runtime_algorithm.h"
 #include "backend/session/kernel_graph.h"
 
@@ -48,27 +49,34 @@ class Somas {
   uint8_t *GetNodeOutputPtr(const AnfNodePtr &node, size_t index) const;
   uint8_t *GetNodeWorkSpacePtr(const AnfNodePtr &node, size_t index) const;
 
-  void DumpSomasBasicIR(const string filename);
+  std::string SomasInfo(bool calc_hash = false);
+  std::string SomasMemory();
+  void DumpSomasInfoIR(const string filename);
   void DumpSomasMemoryIR(const string filename);
 
   static bool NodeSort(SomasNodePtr, SomasNodePtr);
-  std::vector<DynamicBitSet> tensor_relation;
+  std::vector<DynamicBitSet> reuse_matrix_;
+  void ConvertToProfilingNode(uint32_t graph_id);
 
  private:
+  // hash id
+  std::string hash_id_;
   // Maps
   std::unordered_map<size_t, SomasTensorPtr> tensors_map_;
   std::map<void *, SomasNodePtr> nodes_map_;
+  std::map<void *, vector<SomasParameterPtr>> parameters_map_;
 
   // Vectors
   std::vector<SomasNodePtr> nodes_list_;
   std::vector<SomasStreamPtr> streams_list_;
   std::vector<SomasTensorPtr> tensors_list_;
+  std::vector<SomasParameterPtr> parameters_list_;
 
   // Stream groups
   std::vector<vector<uint32_t>> streams_groups_;
 
   // Solver
-  std::unordered_map<size_t, SomasSolverTensorDescPtr> solver_tensor_desc_list_;
+  TensorsDescMap solver_tensor_desc_map_;
   SomasSolverPrePtr somas_solver_;
 
   // Contiguous list
@@ -107,20 +115,47 @@ class Somas {
   void IndependentNodeOutputProcess(const session::KernelGraph *graph);
   void SummaryInputProcess(const session::KernelGraph *graph);
   void RefNodeProcess(const session::KernelGraph *graph);
+  void NonTaskSplitProcess(const session::KernelGraph *graph);
   void UnReuseNodeProcess(const session::KernelGraph *graph);
   SomasTensorPtr CreateGapTensor(size_t gap_tensor_id);
   void GenContiguousList(const session::KernelGraph *graph);
 
-  void PreprocessingConflicts();
   void ComputeConflictPairs();
 
   bool Assign(const session::KernelGraph *graph);
 
+  std::string Offline();
   void DumpOfflineIR(const string filename);
-  void DumpSomasMemoryPoolInfoIR(const string filename);
   std::string GetSplitName(const string &scope_name) const;
   size_t CalcLowerBound() const;
-  void GenStatisticInfo();
+  void GenGraphStatisticInfo();
+  SomasParameterPtr GetSomasParameters(AnfNodePtr node, size_t index);
+  SomasParameterPtr CreateSomasParameters(AnfNodePtr node, size_t index);
+  void InitCommonNodeInputs(bool is_all_nop_node, const CNodePtr &kernel);
+  void InitAtomicCleanInputs(bool is_all_nop_node, const CNodePtr &kernel);
+  void ComputeOneTensorConflicts(const std::shared_ptr<SomasTensor> &calc_tensor,
+                                 const std::vector<SomasTensorPtr> &all_tensors_list,
+                                 const vector<DynamicBitSet> &nodes_dependency,
+                                 std::vector<DynamicBitSet> *tensor_relation) const;
+  void ComputeMultiTensorConflicts(const std::vector<SomasTensorPtr> &calc_tensors_list,
+                                   const std::vector<SomasTensorPtr> &all_tensors_list,
+                                   const vector<DynamicBitSet> &nodes_dependency,
+                                   std::vector<DynamicBitSet> *tensor_relation) const;
+  void UpdateTensorDestinations();
+  void UpdateRefTensorsConflict();
+  void UpdateRefOverlapTensorsConflicts();
+  void UpdateRefTensorsOffset();
+  void UpdateContiguousTensorsOffset(const std::map<size_t, size_t> &contiguous_ref_list_map);
+  void DumpParameters(std::ostringstream &oss) const;
+  void DumpTensors(std::ostringstream &oss) const;
+  void DumpNodes(std::ostringstream &oss) const;
+  std::map<size_t, size_t> GetContiguousListContainRefTensor();
+  std::map<size_t, size_t> GetRefTensorsInContiguousList();
+  bool SaveSomasResult(const session::KernelGraph *graph);
+  bool VerifySomasResult(const session::KernelGraph *graph, const nlohmann::json &somas_json) const;
+  bool LoadSomasResult(const session::KernelGraph *graph, const string filename);
+  bool UpdateTensorsOffset(const std::vector<nlohmann::json> &tensors_json);
+  bool CalcSomasModelHash(const session::KernelGraph *graph);
 };
 
 using SomasPtr = std::shared_ptr<Somas>;

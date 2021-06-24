@@ -362,7 +362,8 @@ class IncorporateGetitemSwitch : public AnfVisitor {
     is_in_get_ = false;
 
     auto fg = node->func_graph();
-    if (idx_ == -1 || switch_ == nullptr || fg == nullptr || fg->has_flag(FUNC_GRAPH_FLAG_DEFER_INLINE)) {
+    if (idx_ == -1 || switch_ == nullptr || fg == nullptr ||
+        (fg->has_flag(FUNC_GRAPH_FLAG_DEFER_INLINE) && !ExistEnvNode(fg))) {
       return nullptr;
     }
 
@@ -375,7 +376,7 @@ class IncorporateGetitemSwitch : public AnfVisitor {
     }
     auto tuple_getitem = node->cast<CNodePtr>();
     MS_EXCEPTION_IF_NULL(tuple_getitem);
-    if (MultipleUseOfSwitch(tuple_getitem->input(1), fg)) {
+    if (MultipleUseOfSwitch(tuple_getitem->input(1), fg) && !ExistEnvNode(fg)) {
       return nullptr;
     }
     auto new_g1 = getitem_transform_(g1_, idx_);
@@ -433,17 +434,25 @@ class IncorporateGetitemSwitch : public AnfVisitor {
     MS_EXCEPTION_IF_NULL(switch_call_cnode);
     auto manager = fg->manager();
     MS_EXCEPTION_IF_NULL(manager);
-    auto node_users_map = manager->node_users();
+    auto &node_users_map = manager->node_users();
     auto it = node_users_map.find(switch_call);
     if (it == node_users_map.end()) {
       return false;
     }
-    auto node_users = it->second;
+    auto &node_users = it->second;
     // If switch was used by more than 1 tuple_getitem nodes, this pass shouldn't be execute.s
     auto tuple_getitem_num = std::count_if(node_users.begin(), node_users.end(), [](std::pair<AnfNodePtr, int> &user) {
       return IsPrimitiveCNode(user.first, prim::kPrimTupleGetItem);
     });
     return tuple_getitem_num > 1;
+  }
+
+  static bool inline ExistEnvNode(const FuncGraphPtr &fg) {
+    MS_EXCEPTION_IF_NULL(fg);
+    auto &nodes = fg->value_nodes();
+    return std::any_of(nodes.begin(), nodes.end(), [](const auto &node) {
+      return IsPrimitive(node.first, prim::kPrimEnvSetItem) || IsPrimitive(node.first, prim::kPrimEnvGetItem);
+    });
   }
 
   int64_t idx_{-1};

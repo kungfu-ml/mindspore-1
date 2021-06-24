@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -85,19 +85,19 @@ void ReplaceOutput(const FuncGraphPtr &graph, const AnfNodePtr &bn_grad, const A
   std::vector<AnfNodePtr> bn_add_relu_grad_output;
   CreateMultipleOutputsOfAnfNode(graph, bn_add_relu_grad, kBNAddReluGradOutputNum, &bn_add_relu_grad_output);
   if (bn_add_relu_grad_output.size() != kBNAddReluGradOutputNum) {
-    MS_LOG(EXCEPTION) << "The output size of node " << kFusedBatchNormGradExWithAddAndActivation << " must be "
+    MS_LOG(EXCEPTION) << "The output size of node " << kBatchNormGradWithAddAndActivation << " must be "
                       << kBNAddReluGradOutputNum << ", but it is " << bn_add_relu_grad_output.size();
   }
 
   // Get bn outputs
   std::vector<AnfNodePtr> bn_outputs;
   if (!GetBatchNormOutputs(graph, bn_grad, &bn_outputs)) {
-    MS_LOG(INFO) << "The " << prim::kPrimFusedBatchNormGradEx
+    MS_LOG(INFO) << "The " << prim::kPrimBatchNormGrad
                  << " node should only have output 0, 1 and 2. The node should not be changed";
     return;
   }
 
-  // Replace orignal output
+  // Replace original output
   auto manager = graph->manager();
   MS_EXCEPTION_IF_NULL(manager);
   sort(bn_outputs.begin(), bn_outputs.end(), CompareTupleGetitem);
@@ -114,7 +114,7 @@ void ReplaceOutput(const FuncGraphPtr &graph, const AnfNodePtr &bn_grad, const A
 bool PatternCheck(const FuncGraphPtr &graph, const AnfNodePtr &node) {
   MS_EXCEPTION_IF_NULL(graph);
   MS_EXCEPTION_IF_NULL(node);
-  auto format_attr = AnfAlgo::GetCNodePrimitive(node)->GetAttr("data_format");
+  auto format_attr = AnfAlgo::GetCNodePrimitive(node)->GetAttr("format");
   MS_EXCEPTION_IF_NULL(format_attr);
   auto format = GetValue<std::string>(format_attr);
   if (AnfAlgo::GetInputFormat(node, 0) != kOpFormat_NHWC && format != "NHWC") {
@@ -139,7 +139,7 @@ bool PatternCheck(const FuncGraphPtr &graph, const AnfNodePtr &node) {
     return false;
   }
   auto forward_node = AnfAlgo::GetInputNode(utils::cast<CNodePtr>(tuple_getitem), 0);
-  if (AnfAlgo::GetCNodeName(forward_node) != kFusedBatchNormExWithAddAndActivation) {
+  if (AnfAlgo::GetCNodeName(forward_node) != kBatchNormWithAddAndActivation) {
     return false;
   }
 
@@ -150,7 +150,7 @@ bool PatternCheck(const FuncGraphPtr &graph, const AnfNodePtr &node) {
 const BaseRef BatchNormAddReluGradFusion::DefinePattern() const {
   VectorRef relu_grad = VectorRef({prim::kPrimReluGrad, dy_, y_});
   VectorRef batch_norm_grad =
-    VectorRef({prim::kPrimFusedBatchNormGradEx, relu_grad, x_, scale_, save_mean_, save_var_, reserve_});
+    VectorRef({prim::kPrimBatchNormGrad, relu_grad, x_, scale_, save_mean_, save_var_, reserve_});
   return batch_norm_grad;
 }
 
@@ -183,8 +183,12 @@ const AnfNodePtr BatchNormAddReluGradFusion::Process(const FuncGraphPtr &graph, 
   MS_EXCEPTION_IF_NULL(batch_norm);
   auto bias = AnfAlgo::GetInputNode(utils::cast<CNodePtr>(batch_norm), 2);
   MS_EXCEPTION_IF_NULL(bias);
-
-  auto prim = std::make_shared<Primitive>(kFusedBatchNormGradExWithAddAndActivation);
+  auto is_train = AnfAlgo::GetCNodePrimitive(batch_norm)->GetAttr("is_training");
+  MS_EXCEPTION_IF_NULL(is_train);
+  if (!GetValue<bool>(is_train)) {
+    return nullptr;
+  }
+  auto prim = std::make_shared<Primitive>(kBatchNormGradWithAddAndActivation);
   MS_EXCEPTION_IF_NULL(prim);
   std::vector<AnfNodePtr> inputs = {NewValueNode(prim), dy, x, scale, save_mean, save_var, reserve, bias, y};
   auto fused_batch_norm_add_relu_grad = graph->NewCNode(inputs);

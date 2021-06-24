@@ -16,6 +16,7 @@
 
 #include <unistd.h>
 #include <fstream>
+#include <thread>
 #include "nlohmann/json.hpp"
 #include "securec/include/securec.h"
 #include "utils/log_adapter.h"
@@ -74,7 +75,6 @@ bool KernelPack::ReadFromJsonFileHelper(std::ifstream &kernelbin) {
     return false;
   }
   kernel_->len = binsize;
-  MS_LOG(INFO) << "kernel len:" << kernel_->len;
   (void)kernelbin.seekg(0, std::ios::beg);
   (void)kernelbin.read(kernel_->contents, SizeToLong(kernel_->len));
   return true;
@@ -183,7 +183,6 @@ void KernelPack::ParseKernelJson(const nlohmann::json &js) {
     }
     std::vector<size_t> sizes = js.at("parameters");
     for (auto size : sizes) {
-      MS_LOG(INFO) << "parameter " << size;
       kernel_json_info_.parameters.push_back(size);
     }
   }
@@ -191,7 +190,6 @@ void KernelPack::ParseKernelJson(const nlohmann::json &js) {
     auto workspace = js.at("workspace");
     std::vector<size_t> sizes = workspace.at("size");
     for (auto size : sizes) {
-      MS_LOG(INFO) << "workspace_size_list " << size;
       kernel_json_info_.workspaces.push_back(size);
     }
   }
@@ -215,7 +213,7 @@ bool KernelPack::LoadKernelMeta(const std::string &json_f, const std::string &pr
   } catch (std::exception &e) {
     MS_LOG(WARNING) << "Parse json file error: " << json_f << ", sleep 500ms and retry again.";
     kernel_json.close();
-    usleep(500000);
+    std::this_thread::sleep_for(std::chrono::microseconds(500000));
     std::ifstream retry_tmp(json_f);
     if (!retry_tmp.is_open()) {
       MS_LOG(INFO) << "Open json file: " << json_f << " error, please check kernel_meta.";
@@ -243,7 +241,6 @@ bool KernelPack::LoadKernelMeta(const std::string &json_f, const std::string &pr
     return false;
   }
 
-  MS_LOG(INFO) << "kernelbin_name:" << bin_f;
   if (!ReadFromJsonFileHelper(kernelbin)) {
     return false;
   }

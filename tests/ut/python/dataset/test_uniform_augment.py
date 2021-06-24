@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,25 @@ from mindspore import log as logger
 from util import visualize_list, diff_mse
 
 DATA_DIR = "../data/dataset/testImageNetData/train/"
+
+
+def test_uniform_augment_callable(num_ops=2):
+    """
+    Test UniformAugment is callable
+    """
+    logger.info("test_uniform_augment_callable")
+    img = np.fromfile("../data/dataset/apple.jpg", dtype=np.uint8)
+    logger.info("Image.type: {}, Image.shape: {}".format(type(img), img.shape))
+
+    decode_op = C.Decode()
+    img = decode_op(img)
+    assert img.shape == (2268, 4032, 3)
+
+    transforms_ua = [C.RandomCrop(size=[400, 400], padding=[32, 32, 32, 32]),
+                     C.RandomCrop(size=[400, 400], padding=[32, 32, 32, 32])]
+    uni_aug = C.UniformAugment(transforms=transforms_ua, num_ops=num_ops)
+    img = uni_aug(img)
+    assert img.shape == (2268, 4032, 3) or img.shape == (400, 400, 3)
 
 
 def test_uniform_augment(plot=False, num_ops=2):
@@ -168,9 +187,7 @@ def test_cpp_uniform_augment_exception_pyops(num_ops=2):
         C.UniformAugment(transforms=transforms_ua, num_ops=num_ops)
 
     logger.info("Got an exception in DE: {}".format(str(e)))
-    assert "Argument tensor_ops[5] with value" \
-           " <mindspore.dataset.vision.py_transforms.Invert" in str(e.value)
-    assert "is not of type (<class 'mindspore._c_dataengine.TensorOp'>,)" in str(e.value)
+    assert "Type of Transforms[5] must be c_transform" in str(e.value)
 
 
 def test_cpp_uniform_augment_exception_large_numops(num_ops=6):
@@ -257,10 +274,11 @@ def test_cpp_uniform_augment_random_crop_badinput(num_ops=1):
         for _ in ds1.create_dict_iterator(num_epochs=1, output_numpy=True):
             num_batches += 1
     except Exception as e:
-        assert "Crop size" in str(e)
+        assert "crop size" in str(e)
 
 
 if __name__ == "__main__":
+    test_uniform_augment_callable(num_ops=2)
     test_uniform_augment(num_ops=1, plot=True)
     test_cpp_uniform_augment(num_ops=1, plot=True)
     test_cpp_uniform_augment_exception_pyops(num_ops=1)

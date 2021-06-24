@@ -32,8 +32,6 @@ class TestStepParallel : public UT::Common {
   void TearDown() {}
 };
 
-void TestStepParallel::SetUp() { UT::InitPythonPath(); }
-
 void Init_Device_Manager() {
   RankList dev_list;
 
@@ -50,6 +48,11 @@ void Init_Device_Manager() {
   // create a new g_device_manager
   g_device_manager = std::make_shared<DeviceManager>();
   g_device_manager->Init(dev_list, local_dev, stage_map, "hccl");
+}
+
+void TestStepParallel::SetUp() {
+  UT::InitPythonPath();
+  Init_Device_Manager();
 }
 
 CNodePtr Make_Node(Shape x, Shape y, Shape out, int64_t condition = 0) {
@@ -209,7 +212,7 @@ TEST_F(TestStepParallel, GetPythonPath1) {
 }
 
 TEST_F(TestStepParallel, GetPythonPath2) {
-  OperatorName operator_name = "TensorAdd";
+  OperatorName operator_name = "Add";
   const std::string expect = "mindspore.ops.operations";
   auto temp = parallel::GetOpPythonPath(operator_name);
   ASSERT_EQ(temp, expect);
@@ -345,18 +348,17 @@ TEST_F(TestStepParallel, CreatOpInstance1) {
 }
 
 TEST_F(TestStepParallel, OperatorInstance) {
-  Init_Device_Manager();
-  // creat attrs and prim
+  // create  attrs and prim
   PrimitivePtr prim = NewValueNode(prim::kPrimMatMul)->value()->cast<PrimitivePtr>();
   ValuePtr transpose_a = MakeValue(false);
   ValuePtr transpose_b = MakeValue(false);
   prim->set_attr("transpose_a", transpose_a);
   prim->set_attr("transpose_b", transpose_b);
   auto attrs = prim->attrs();
-  // creat strategy
+  // create  strategy
   Strategys strategy = {{2, 2}, {2, 4}};
   StrategyPtr strategyPtr = parallel::NewStrategy(0, strategy);
-  // creat shape
+  // create  shape
   Shapes inputs_shape = std::vector<Shape>{{64, 32}, {32, 64}};
   Shapes outputs_shape = std::vector<Shape>{{64, 64}};
   std::vector<Shapes> shape = {inputs_shape, outputs_shape};
@@ -369,7 +371,6 @@ TEST_F(TestStepParallel, OperatorInstance) {
 }
 
 TEST_F(TestStepParallel, ExtractInformation) {
-  Init_Device_Manager();
   FuncGraphManagerPtr manager = Make_Manager();
   FuncGraphSet graphs = manager->func_graphs();
   FuncGraphPtr graph = *graphs.begin();
@@ -379,7 +380,6 @@ TEST_F(TestStepParallel, ExtractInformation) {
 }
 
 TEST_F(TestStepParallel, ExtractInformation2) {
-  Init_Device_Manager();
   FuncGraphManagerPtr manager = Make_Manager(2);
   FuncGraphSet graphs = manager->func_graphs();
   FuncGraphPtr graph = *graphs.begin();
@@ -389,7 +389,6 @@ TEST_F(TestStepParallel, ExtractInformation2) {
 }
 
 TEST_F(TestStepParallel, ExtractInformation3) {
-  Init_Device_Manager();
   FuncGraphManagerPtr manager = Make_Manager(3);
   FuncGraphSet graphs = manager->func_graphs();
   FuncGraphPtr graph = *graphs.begin();
@@ -399,7 +398,6 @@ TEST_F(TestStepParallel, ExtractInformation3) {
 }
 
 TEST_F(TestStepParallel, ForwardCommunication1) {
-  Init_Device_Manager();
   ValuePtr attr0_value = MakeValue(REDUCE_OP_SUM);
   ValuePtr attr1_value = MakeValue("0-1-2");
   Attr attr0 = std::make_pair("op", attr0_value);
@@ -435,7 +433,7 @@ TEST_F(TestStepParallel, ForwardCommunication1) {
     }
     auto &inputs = node->cast<CNodePtr>()->inputs();
     PrimitivePtr prim = inputs[0]->cast<ValueNodePtr>()->value()->cast<PrimitivePtr>();
-    if (prim->name() == "return" || prim->name() == "MatMul") {
+    if (prim->name() == "Return" || prim->name() == "MatMul") {
       if (!inputs[1]->isa<Parameter>()) {
         CNodePtr pre_node = inputs[1]->cast<CNodePtr>();
         PrimitivePtr pre_prim = pre_node->input(0)->cast<ValueNodePtr>()->value()->cast<PrimitivePtr>();
@@ -499,8 +497,7 @@ TEST_F(TestStepParallel, ForwardCommunication3) {
 }
 
 TEST_F(TestStepParallel, GetTensorInLayout) {
-  Init_Device_Manager();
-  // creat attrs and prim
+  // create  attrs and prim
   FuncGraphPtr func_graph = std::make_shared<FuncGraph>();
   Shape inputs_x_dims = {64, 32};
   Shape inputs_y_dims = {32, 64};
@@ -514,10 +511,10 @@ TEST_F(TestStepParallel, GetTensorInLayout) {
   prim->set_attr("transpose_a", transpose_a);
   prim->set_attr("transpose_b", transpose_b);
   auto attrs = prim->attrs();
-  // creat strategy
+  // create  strategy
   Strategys strategy = {{2, 2}, {2, 4}};
   StrategyPtr strategyPtr = parallel::NewStrategy(0, strategy);
-  // creat shape
+  // create  shape
   Shapes inputs_shape = std::vector<Shape>{{64, 32}, {32, 64}};
   Shapes outputs_shape = std::vector<Shape>{{64, 64}};
   std::vector<Shapes> shape = {inputs_shape, outputs_shape};

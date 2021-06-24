@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@
 
 namespace mindspore {
 namespace lite {
-
 STATUS SubgraphNodePass::GetSubgraphAllTensorIndices(const std::unique_ptr<SubGraphT> &subgraph,
                                                      schema::MetaGraphT *graph, std::set<uint32_t> *tensors_indices) {
   for (auto &node_idx : subgraph->nodeIndices) {
@@ -132,9 +131,11 @@ STATUS SubgraphNodePass::Run(schema::MetaGraphT *graph) {
           contain_node_output_subgraphs.push_back(subgraph.get());
         }
       }
-      std::set_intersection(contain_node_input_subgraphs.begin(), contain_node_input_subgraphs.end(),
-                            contain_node_output_subgraphs.begin(), contain_node_output_subgraphs.end(),
-                            inserter(contain_subgraphs, contain_subgraphs.begin()));
+      for (auto subgraph : contain_node_input_subgraphs) {
+        if (IsContain(contain_node_output_subgraphs, subgraph)) {
+          contain_subgraphs.emplace_back(subgraph);
+        }
+      }
       if (contain_subgraphs.size() == 1) {
         IncreaseSubgraphNodeIndices(i, graph);
         contain_subgraphs[0]->nodeIndices.push_back(i);

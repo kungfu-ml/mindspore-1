@@ -14,26 +14,28 @@
  * limitations under the License.
 */
 
-#ifdef USE_GLOG
-#include <glog/logging.h>
-#endif
-#include <iostream>
 #include "minddata/dataset/engine/cache/perf/cache_perf_run.h"
+#include <iostream>
+#include "mindspore/core/utils/log_adapter.h"
+namespace ms = mindspore;
 namespace ds = mindspore::dataset;
 
 int main(int argc, char **argv) {
 #ifdef USE_GLOG
+#define google mindspore_private
+  FLAGS_logtostderr = false;
   FLAGS_log_dir = "/tmp";
   google::InitGoogleLogging(argv[0]);
+#undef google
 #endif
   ds::CachePerfRun cachePerfRun;
   if (cachePerfRun.ProcessArgs(argc, argv) == 0) {
     std::cout << cachePerfRun << std::endl;
-    ds::Status rc = cachePerfRun.Run();
+    ms::Status rc = cachePerfRun.Run();
     if (rc.IsError()) {
       std::cerr << rc.ToString() << std::endl;
     }
-    return static_cast<int>(rc.get_code());
+    return static_cast<int>(rc.StatusCode());
   }
   return 0;
 }

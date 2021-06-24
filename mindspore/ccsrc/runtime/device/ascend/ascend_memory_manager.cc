@@ -18,6 +18,12 @@
 #include "runtime/device/ascend/ascend_memory_pool.h"
 #include "utils/ms_context.h"
 #include "runtime/mem.h"
+#include "runtime/device/ascend/profiling/profiling_manager.h"
+#include "profiler/device/common/memory_profiling.h"
+
+using mindspore::device::ascend::ProfilingManager;
+using mindspore::profiler::MemoryProfiling;
+
 namespace mindspore {
 namespace device {
 namespace ascend {
@@ -42,6 +48,11 @@ void AscendMemoryManager::MallocDeviceMemory() {
     }
   }
   AscendMemoryPool::GetInstance().Init(device_mem_base_, device_mem_size_, dynamic_mem_offset_);
+}
+
+uint64_t AscendMemoryManager::GetDeviceMemSize() {
+  auto mem_size = GetDeviceMemSizeFromContext();
+  return mem_size == 0 ? kAscendDeviceMemSize : mem_size;
 }
 
 uint64_t AscendMemoryManager::GetDeviceMemSizeFromContext() {
@@ -88,7 +99,7 @@ void *AscendMemoryManager::MallocMemFromMemPool(size_t size) {
   return AscendMemoryPool::GetInstance().AllocTensorMem(align_size);
 }
 
-uint8_t *AscendMemoryManager::MallocStaticMem(size_t size, bool communication_mem) {
+uint8_t *AscendMemoryManager::MallocStaticMem(size_t size, bool communication_mem, uint32_t graph_id) {
   size_t align_size = 0;
   if (communication_mem) {
     align_size = GetCommunicationAlignSize(size);
@@ -96,10 +107,15 @@ uint8_t *AscendMemoryManager::MallocStaticMem(size_t size, bool communication_me
     align_size = GetCommonAlignSize(size);
   }
 
-  auto device_mem_pool_offset = AscendMemoryPool::GetInstance().device_mem_pool_offset();
-  MS_LOG(INFO) << "Malloc Memory: Static, total[" << device_mem_size_ << "] (dynamic[" << total_dynamic_size_
-               << "] memory pool[" << device_mem_size_ - device_mem_pool_offset << "])"
-               << " malloc [" << align_size << "] communication_mem: " << communication_mem;
+  if (ProfilingManager::GetInstance().IsProfiling() && graph_id != kInvalidGraphId) {
+    auto node = MemoryProfiling::GetInstance().GetGraphMemoryNode(graph_id);
+    if (node == nullptr) {
+      node = MemoryProfiling::GetInstance().AddGraphMemoryNode(graph_id);
+      MS_LOG(INFO) << "Add graph memory node for static memory profiling, graph id is " << graph_id;
+    }
+
+    node->AddStaticMemorySize(align_size);
+  }
 
   if (communication_mem) {
     // create protect area [kMemAlignSize -- data -- kMemAlignSize]
@@ -138,6 +154,21 @@ uint8_t *AscendMemoryManager::MallocDynamicMem(size_t size, bool communication_m
   } else {
     return device_mem_base_ + offset;
   }
+}
+
+void AscendMemoryManager::MallocSomasDynamicMem(const session::KernelGraph *graph) {
+  MemoryManager::MallocSomasDynamicMem(graph);
+  if (ProfilingManager::GetInstance().IsProfiling()) {
+    somas_reuse_util_ptr_->ConvertToProfilingNode(graph->graph_id());
+  }
+}
+
+// communication memory: [512align_size + data + 512align_size]
+// return the pointer to the start of data address.
+uint8_t *AscendMemoryManager::MallocCommunicationMemFromMemPool(size_t size) {
+  auto align_size = GetCommunicationAlignSize(size);
+  uint8_t *base_ptr = reinterpret_cast<uint8_t *>(AscendMemoryPool::GetInstance().AllocTensorMem(align_size));
+  return base_ptr + kMemAlignSize;
 }
 }  // namespace ascend
 }  // namespace device

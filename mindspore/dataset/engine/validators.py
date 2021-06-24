@@ -410,9 +410,7 @@ def check_generatordataset(method):
         if sampler is not None:
             if isinstance(sampler, samplers.PKSampler):
                 raise ValueError("GeneratorDataset doesn't support PKSampler.")
-            if not isinstance(sampler, (samplers.SequentialSampler, samplers.DistributedSampler,
-                                        samplers.RandomSampler, samplers.SubsetRandomSampler,
-                                        samplers.WeightedRandomSampler, samplers.Sampler)):
+            if not isinstance(sampler, samplers.BuiltinSampler):
                 try:
                     iter(sampler)
                 except TypeError:
@@ -660,8 +658,6 @@ def check_filter(method):
         [predicate, input_columns, num_parallel_workers], _ = parse_user_args(method, *args, **kwargs)
         if not callable(predicate):
             raise TypeError("Predicate should be a Python function or a callable Python object.")
-
-        check_num_parallel_workers(num_parallel_workers)
 
         if num_parallel_workers is not None:
             check_num_parallel_workers(num_parallel_workers)
@@ -1114,7 +1110,7 @@ def check_gnn_get_sampled_neighbors(method):
 
     @wraps(method)
     def new_method(self, *args, **kwargs):
-        [node_list, neighbor_nums, neighbor_types], _ = parse_user_args(method, *args, **kwargs)
+        [node_list, neighbor_nums, neighbor_types, _], _ = parse_user_args(method, *args, **kwargs)
 
         check_gnn_list_or_ndarray(node_list, 'node_list')
 
@@ -1323,7 +1319,3 @@ def check_to_device_send(method):
         return method(self, *args, **kwargs)
 
     return new_method
-
-
-def replace_none(value, default):
-    return value if value is not None else default

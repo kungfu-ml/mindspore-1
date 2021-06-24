@@ -18,11 +18,8 @@
 #include <limits>
 #include <algorithm>
 #include <cmath>
-#ifdef ENABLE_ANDROID
-#if defined(__arm__) || defined(__aarch64__) || defined(_M_ARM) || defined(_M_ARM64)
-#define USE_NEON
+#ifdef ENABLE_NEON
 #include <arm_neon.h>
-#endif
 #endif
 
 namespace mindspore {
@@ -39,6 +36,7 @@ LiteMat::LiteMat() {
   size_ = 0;
   data_type_ = LDataType::UINT8;
   ref_count_ = nullptr;
+  setSteps(0, 0, 0);
 }
 
 LiteMat::LiteMat(int width, LDataType data_type) {
@@ -52,6 +50,7 @@ LiteMat::LiteMat(int width, LDataType data_type) {
   data_type_ = LDataType::UINT8;
   ref_count_ = nullptr;
   size_ = 0;
+  setSteps(0, 0, 0);
   Init(width, data_type);
 }
 
@@ -66,6 +65,7 @@ LiteMat::LiteMat(int width, int height, LDataType data_type) {
   data_type_ = LDataType::UINT8;
   ref_count_ = nullptr;
   size_ = 0;
+  setSteps(0, 0, 0);
   Init(width, height, data_type);
 }
 
@@ -80,6 +80,7 @@ LiteMat::LiteMat(int width, int height, void *p_data, LDataType data_type) {
   data_type_ = LDataType::UINT8;
   ref_count_ = nullptr;
   size_ = 0;
+  setSteps(0, 0, 0);
   Init(width, height, p_data, data_type);
 }
 
@@ -94,6 +95,7 @@ LiteMat::LiteMat(int width, int height, int channel, LDataType data_type) {
   data_type_ = LDataType::UINT8;
   ref_count_ = nullptr;
   size_ = 0;
+  setSteps(0, 0, 0);
   Init(width, height, channel, data_type);
 }
 
@@ -108,6 +110,7 @@ LiteMat::LiteMat(int width, int height, int channel, void *p_data, LDataType dat
   data_type_ = LDataType::UINT8;
   ref_count_ = nullptr;
   size_ = 0;
+  setSteps(0, 0, 0);
   Init(width, height, channel, p_data, data_type);
 }
 
@@ -130,9 +133,16 @@ LiteMat::LiteMat(const LiteMat &m) {
   data_type_ = m.data_type_;
   ref_count_ = m.ref_count_;
   size_ = 0;
+  setSteps(m.steps_[0], m.steps_[1], m.steps_[2]);
   if (ref_count_) {
     addRef(ref_count_, 1);
   }
+}
+
+void LiteMat::setSteps(int c0, int c1, int c2) {
+  steps_[0] = c0;
+  steps_[1] = c1;
+  steps_[2] = c2;
 }
 
 LiteMat &LiteMat::operator=(const LiteMat &m) {
@@ -154,7 +164,8 @@ LiteMat &LiteMat::operator=(const LiteMat &m) {
   dims_ = m.dims_;
   data_type_ = m.data_type_;
   ref_count_ = m.ref_count_;
-  size_ = 0;
+  setSteps(m.steps_[0], m.steps_[1], m.steps_[2]);
+  size_ = m.size_;
   return *this;
 }
 
@@ -171,6 +182,7 @@ void LiteMat::Init(int width, LDataType data_type) {
   data_ptr_ = AlignMalloc(size_);
   ref_count_ = new int[1];
   *ref_count_ = 1;
+  steps_[0] = elem_size_;
 }
 
 void LiteMat::Init(int width, int height, LDataType data_type) {
@@ -186,6 +198,8 @@ void LiteMat::Init(int width, int height, LDataType data_type) {
   data_ptr_ = AlignMalloc(size_);
   ref_count_ = new int[1];
   *ref_count_ = 1;
+  steps_[1] = elem_size_;
+  steps_[0] = width_ * steps_[1];
 }
 
 void LiteMat::Init(int width, int height, void *p_data, LDataType data_type) {
@@ -199,6 +213,8 @@ void LiteMat::Init(int width, int height, void *p_data, LDataType data_type) {
   size_ = c_step_ * channel_ * elem_size_;
   data_ptr_ = p_data;
   ref_count_ = nullptr;
+  steps_[1] = elem_size_;
+  steps_[0] = width_ * steps_[1];
 }
 
 void LiteMat::Init(int width, int height, int channel, LDataType data_type) {
@@ -214,6 +230,10 @@ void LiteMat::Init(int width, int height, int channel, LDataType data_type) {
   data_ptr_ = AlignMalloc(size_);
   ref_count_ = new int[1];
   *ref_count_ = 1;
+
+  steps_[2] = elem_size_;
+  steps_[1] = channel * steps_[2];
+  steps_[0] = width_ * steps_[1];
 }
 
 void LiteMat::Init(int width, int height, int channel, void *p_data, LDataType data_type) {
@@ -227,6 +247,9 @@ void LiteMat::Init(int width, int height, int channel, void *p_data, LDataType d
   size_ = c_step_ * channel_ * elem_size_;
   data_ptr_ = p_data;
   ref_count_ = nullptr;
+  steps_[2] = elem_size_;
+  steps_[1] = channel * steps_[2];
+  steps_[0] = width_ * steps_[1];
 }
 
 bool LiteMat::IsEmpty() const { return data_ptr_ == nullptr || c_step_ * channel_ == 0; }
@@ -248,6 +271,7 @@ void LiteMat::Release() {
   c_step_ = 0;
   ref_count_ = 0;
   size_ = 0;
+  setSteps(0, 0, 0);
 }
 
 void *LiteMat::AlignMalloc(unsigned int size) {
@@ -271,6 +295,31 @@ void LiteMat::AlignFree(void *ptr) {
 
 inline void LiteMat::InitElemSize(LDataType data_type) { elem_size_ = data_type.SizeInBytes(); }
 
+bool LiteMat::GetROI(int x, int y, int w, int h, LiteMat &m) {
+  if (x < 0 || y < 0 || x > width_ - w || h > height_ - y || w <= 0 || h <= 0) {
+    return false;
+  }
+  if (!m.IsEmpty()) {
+    m.Release();
+  }
+
+  if (ref_count_) {
+    addRef(ref_count_, 1);
+  }
+
+  m.height_ = h;
+  m.width_ = w;
+  m.dims_ = dims_;
+  m.elem_size_ = elem_size_;
+  m.data_ptr_ = reinterpret_cast<uint8_t *>(data_ptr_) + y * steps_[0] + x * elem_size_ * channel_;
+  m.channel_ = channel_;
+  m.c_step_ = c_step_;
+  m.data_type_ = data_type_;
+  m.ref_count_ = ref_count_;
+  m.setSteps(steps_[0], steps_[1], steps_[2]);
+  return true;
+}
+
 template <typename T>
 inline void SubtractImpl(const T *src0, const T *src1, T *dst, int64_t total_size) {
   for (int64_t i = 0; i < total_size; i++) {
@@ -281,7 +330,7 @@ inline void SubtractImpl(const T *src0, const T *src1, T *dst, int64_t total_siz
 template <>
 inline void SubtractImpl(const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int64_t total_size) {
   int64_t x = 0;
-#ifdef USE_NEON
+#ifdef ENABLE_NEON
   const int64_t step = 32;
   for (; x <= total_size - step; x += step) {
     uint8x16_t v_src00 = vld1q_u8(src0 + x);
@@ -322,12 +371,23 @@ inline void SubtractImpl(const uint32_t *src0, const uint32_t *src1, uint32_t *d
   }
 }
 
-bool Subtract(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+inline bool CheckSubstract(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+  if (dst == NULL) {
+    return false;
+  }
+
   if (src_a.width_ != src_b.width_ || src_a.height_ != src_b.height_ || src_a.channel_ != src_b.channel_) {
     return false;
   }
 
   if (src_a.data_type_ != src_b.data_type_) {
+    return false;
+  }
+  return true;
+}
+
+bool Subtract(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+  if (!CheckSubstract(src_a, src_b, dst)) {
     return false;
   }
 
@@ -369,7 +429,7 @@ bool Subtract(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
   return true;
 }
 
-#ifdef USE_NEON
+#ifdef ENABLE_NEON
 inline float32x4_t reciprocal_simd(float32x4_t val) {
   // get an initial estimate of 1/val
   float32x4_t reciprocal = vrecpeq_f32(val);
@@ -398,7 +458,7 @@ inline void DivideImpl(const T *src0, const T *src1, T *dst, int64_t total_size)
 template <>
 inline void DivideImpl(const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int64_t total_size) {
   int64_t x = 0;
-#ifdef USE_NEON
+#ifdef ENABLE_NEON
   const int64_t step = 16;
   for (; x <= total_size - step; x += step) {
     __builtin_prefetch(reinterpret_cast<const char *>(src0 + x) + 32 * 10);
@@ -478,12 +538,23 @@ inline void DivideImpl(const uint32_t *src0, const uint32_t *src1, uint32_t *dst
   }
 }
 
-bool Divide(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+inline bool CheckDivide(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+  if (dst == NULL) {
+    return false;
+  }
+
   if (src_a.width_ != src_b.width_ || src_a.height_ != src_b.height_ || src_a.channel_ != src_b.channel_) {
     return false;
   }
 
   if (src_a.data_type_ != src_b.data_type_) {
+    return false;
+  }
+  return true;
+}
+
+bool Divide(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+  if (!CheckDivide(src_a, src_b, dst)) {
     return false;
   }
 
@@ -532,7 +603,7 @@ inline void MultiplyImpl(const T *src0, const T *src1, T *dst, int64_t total_siz
 template <>
 inline void MultiplyImpl(const uint8_t *src0, const uint8_t *src1, uint8_t *dst, int64_t total_size) {
   int64_t x = 0;
-#ifdef USE_NEON
+#ifdef ENABLE_NEON
   const int64_t step = 32;
   for (; x <= total_size - step; x += step) {
     uint8x16_t v_src00 = vld1q_u8(src0 + x);
@@ -575,7 +646,11 @@ inline void MultiplyImpl(const uint32_t *src0, const uint32_t *src1, uint32_t *d
   }
 }
 
-bool Multiply(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+inline bool CheckMultiply(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+  if (dst == NULL) {
+    return false;
+  }
+
   if (src_a.width_ != src_b.width_ || src_a.height_ != src_b.height_ || src_a.channel_ != src_b.channel_) {
     return false;
   }
@@ -583,7 +658,13 @@ bool Multiply(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
   if (src_a.data_type_ != src_b.data_type_) {
     return false;
   }
+  return true;
+}
 
+bool Multiply(const LiteMat &src_a, const LiteMat &src_b, LiteMat *dst) {
+  if (!CheckMultiply(src_a, src_b, dst)) {
+    return false;
+  }
   if (dst->IsEmpty()) {
     dst->Init(src_a.width_, src_a.height_, src_a.channel_, src_a.data_type_);
   } else if (src_a.width_ != dst->width_ || src_a.height_ != dst->height_ || src_a.channel_ != dst->channel_) {

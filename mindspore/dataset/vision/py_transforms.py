@@ -33,6 +33,7 @@ from .validators import check_prob, check_crop, check_resize_interpolation, chec
     check_random_perspective, check_random_erasing, check_cutout, check_linear_transform, check_random_affine, \
     check_mix_up, check_positive_degrees, check_uniform_augment_py, check_auto_contrast
 from .utils import Inter, Border
+from .py_transforms_util import is_pil
 
 DE_PY_INTER_MODE = {Inter.NEAREST: Image.NEAREST,
                     Inter.ANTIALIAS: Image.ANTIALIAS,
@@ -43,6 +44,11 @@ DE_PY_BORDER_TYPE = {Border.CONSTANT: 'constant',
                      Border.EDGE: 'edge',
                      Border.REFLECT: 'reflect',
                      Border.SYMMETRIC: 'symmetric'}
+
+
+def not_random(function):
+    function.random = False
+    return function
 
 
 class ToTensor:
@@ -70,6 +76,7 @@ class ToTensor:
 
     def __init__(self, output_type=np.float32):
         self.output_type = output_type
+        self.random = False
 
     def __call__(self, img):
         """
@@ -105,6 +112,7 @@ class ToType:
 
     def __init__(self, output_type):
         self.output_type = output_type
+        self.random = False
 
     def __call__(self, img):
         """
@@ -131,6 +139,9 @@ class HWC2CHW:
         >>> image_folder_dataset = image_folder_dataset.map(operations=transforms_list,
         ...                                                 input_columns="image")
     """
+
+    def __init__(self):
+        self.random = False
 
     def __call__(self, img):
         """
@@ -160,6 +171,9 @@ class ToPIL:
         ...                                                 input_columns="image")
     """
 
+    def __init__(self):
+        self.random = False
+
     def __call__(self, img):
         """
         Call method.
@@ -186,6 +200,9 @@ class Decode:
         >>> image_folder_dataset = image_folder_dataset.map(operations=transforms_list,
         ...                                                 input_columns="image")
     """
+
+    def __init__(self):
+        self.random = False
 
     def __call__(self, img):
         """
@@ -227,6 +244,7 @@ class Normalize:
     def __init__(self, mean, std):
         self.mean = mean
         self.std = std
+        self.random = False
 
     def __call__(self, img):
         """
@@ -271,6 +289,7 @@ class NormalizePad:
         self.mean = mean
         self.std = std
         self.dtype = dtype
+        self.random = False
 
     def __call__(self, img):
         """
@@ -456,6 +475,7 @@ class Resize:
     def __init__(self, size, interpolation=Inter.BILINEAR):
         self.size = size
         self.interpolation = DE_PY_INTER_MODE[interpolation]
+        self.random = False
 
     def __call__(self, img):
         """
@@ -550,6 +570,7 @@ class CenterCrop:
     @check_crop
     def __init__(self, size):
         self.size = size
+        self.random = False
 
     def __call__(self, img):
         """
@@ -700,6 +721,7 @@ class FiveCrop:
     @check_crop
     def __init__(self, size):
         self.size = size
+        self.random = False
 
     def __call__(self, img):
         """
@@ -744,6 +766,7 @@ class TenCrop:
             size = (size, size)
         self.size = size
         self.use_vertical_flip = use_vertical_flip
+        self.random = False
 
     def __call__(self, img):
         """
@@ -781,6 +804,7 @@ class Grayscale:
     @check_num_channels
     def __init__(self, num_output_channels=1):
         self.num_output_channels = num_output_channels
+        self.random = False
 
     def __call__(self, img):
         """
@@ -884,6 +908,7 @@ class Pad:
         self.padding = padding
         self.fill_value = fill_value
         self.padding_mode = DE_PY_BORDER_TYPE[padding_mode]
+        self.random = False
 
     def __call__(self, img):
         """
@@ -940,6 +965,8 @@ class RandomPerspective:
         Returns:
             img (PIL image), Image after being perspectively transformed randomly.
         """
+        if not is_pil(img):
+            raise ValueError("Input image should be a Pillow image.")
         if self.prob > random.random():
             start_points, end_points = util.get_perspective_params(img, self.distortion_scale)
             return util.perspective(img, start_points, end_points, self.interpolation)
@@ -950,7 +977,7 @@ class RandomErasing:
     """
     Erase the pixels, within a selected rectangle region, to the given value.
 
-    Randomly applied on the input NumPy image array with a given probability.
+    Randomly applied on the input NumPy image array of shape (C, H, W) with a given probability.
 
     Zhun Zhong et al. 'Random Erasing Data Augmentation' 2017 See https://arxiv.org/pdf/1708.04896.pdf
 
@@ -1007,7 +1034,7 @@ class RandomErasing:
 
 class Cutout:
     """
-    Randomly cut (mask) out a given number of square patches from the input NumPy image array.
+    Randomly cut (mask) out a given number of square patches from the input NumPy image array of shape (C, H, W).
 
     Terrance DeVries and Graham W. Taylor 'Improved Regularization of Convolutional Neural Networks with Cutout' 2017
     See https://arxiv.org/pdf/1708.04552.pdf
@@ -1030,6 +1057,7 @@ class Cutout:
     def __init__(self, length, num_patches=1):
         self.length = length
         self.num_patches = num_patches
+        self.random = False
 
     def __call__(self, np_img):
         """
@@ -1043,6 +1071,9 @@ class Cutout:
         """
         if not isinstance(np_img, np.ndarray):
             raise TypeError("img should be NumPy array. Got {}.".format(type(np_img)))
+        if np_img.ndim != 3:
+            raise TypeError('img dimension should be 3. Got {}.'.format(np_img.ndim))
+
         _, image_h, image_w = np_img.shape
         scale = (self.length * self.length) / (image_h * image_w)
         bounded = False
@@ -1055,7 +1086,7 @@ class Cutout:
 
 
 class LinearTransformation:
-    """
+    r"""
     Apply linear transformation to the input NumPy image array, given a square transformation matrix and
     a mean vector.
 
@@ -1063,8 +1094,9 @@ class LinearTransformation:
     the dot product with the transformation matrix, and reshapes it back to its original shape.
 
     Args:
-        transformation_matrix (numpy.ndarray): a square transformation matrix of shape (D, D), D = C x H x W.
-        mean_vector (numpy.ndarray): a NumPy ndarray of shape (D,) where D = C x H x W.
+        transformation_matrix (numpy.ndarray): a square transformation matrix of shape (D, D), where
+            :math:`D = C \times H \times W`.
+        mean_vector (numpy.ndarray): a NumPy ndarray of shape (D,) where :math:`D = C \times H \times W`.
 
     Examples:
         >>> from mindspore.dataset.transforms.py_transforms import Compose
@@ -1086,6 +1118,7 @@ class LinearTransformation:
     def __init__(self, transformation_matrix, mean_vector):
         self.transformation_matrix = transformation_matrix
         self.mean_vector = mean_vector
+        self.random = False
 
     def __call__(self, np_img):
         """
@@ -1228,6 +1261,7 @@ class MixUp:
         self.batch_size = batch_size
         self.alpha = alpha
         self.is_single = is_single
+        self.random = False
 
     def __call__(self, image, label):
         """
@@ -1267,6 +1301,7 @@ class RgbToHsv:
 
     def __init__(self, is_hwc=False):
         self.is_hwc = is_hwc
+        self.random = False
 
     def __call__(self, rgb_imgs):
         """
@@ -1303,6 +1338,7 @@ class HsvToRgb:
 
     def __init__(self, is_hwc=False):
         self.is_hwc = is_hwc
+        self.random = False
 
     def __call__(self, hsv_imgs):
         """
@@ -1356,7 +1392,8 @@ class RandomColor:
 
 class RandomSharpness:
     """
-    Adjust the sharpness of the input PIL image by a random degree.
+    Adjust the sharpness of the input PIL image by a fixed or random degree. Degree of 0.0 gives a blurred image,
+    degree of 1.0 gives the original image, and degree of 2.0 gives a sharpened image.
 
     Args:
         degrees (sequence): Range of random sharpness adjustment degrees.
@@ -1395,7 +1432,8 @@ class AutoContrast:
     Automatically maximize the contrast of the input PIL image.
 
     Args:
-        cutoff (float, optional): Percent of pixels to cut off from the histogram (default=0.0).
+        cutoff (float, optional): Percent of pixels to cut off from the histogram,
+            the value must be in the range [0.0, 50.0) (default=0.0).
         ignore (Union[int, sequence], optional): Pixel values to ignore (default=None).
 
     Examples:
@@ -1412,6 +1450,7 @@ class AutoContrast:
     def __init__(self, cutoff=0.0, ignore=None):
         self.cutoff = cutoff
         self.ignore = ignore
+        self.random = False
 
     def __call__(self, img):
         """
@@ -1441,6 +1480,9 @@ class Invert:
         ...                                                 input_columns="image")
     """
 
+    def __init__(self):
+        self.random = False
+
     def __call__(self, img):
         """
         Call method.
@@ -1469,6 +1511,9 @@ class Equalize:
         ...                                                 input_columns="image")
 
     """
+
+    def __init__(self):
+        self.random = False
 
     def __call__(self, img):
         """
@@ -1514,6 +1559,7 @@ class UniformAugment:
     def __init__(self, transforms, num_ops=2):
         self.transforms = transforms
         self.num_ops = num_ops
+        self.random = False
 
     def __call__(self, img):
         """

@@ -17,7 +17,7 @@
 #include <iostream>
 #include <memory>
 #include "common/common_test.h"
-#include "mindspore/lite/nnacl/reverse_sequence.h"
+#include "mindspore/lite/nnacl/fp32/reverse_sequence_fp32.h"
 #include "mindspore/lite/src/kernel_registry.h"
 
 namespace mindspore {
@@ -51,7 +51,7 @@ TEST_F(TestReverseSequenceFp32, BatchLessSeq) {
 
   auto ctx = std::make_shared<lite::InnerContext>();
   ASSERT_EQ(lite::RET_OK, ctx->Init());
-  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc, nullptr);
+  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc);
   EXPECT_NE(kernel, nullptr);
 
   auto ret = kernel->Run();
@@ -95,7 +95,7 @@ TEST_F(TestReverseSequenceFp32, BatchGreaterSeq) {
 
   auto ctx = std::make_shared<lite::InnerContext>();
   ASSERT_EQ(lite::RET_OK, ctx->Init());
-  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc, nullptr);
+  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc);
   EXPECT_NE(kernel, nullptr);
 
   auto ret = kernel->Run();
@@ -139,7 +139,7 @@ TEST_F(TestReverseSequenceFp32, BatchSeqNotAdjacent) {
 
   auto ctx = std::make_shared<lite::InnerContext>();
   ASSERT_EQ(lite::RET_OK, ctx->Init());
-  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc, nullptr);
+  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc);
   EXPECT_NE(kernel, nullptr);
 
   auto ret = kernel->Run();

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ using namespace mindspore::dataset;
 
 using mindspore::dataset::DataType;
 using mindspore::dataset::ShuffleMode;
-using mindspore::dataset::Tensor;
 using mindspore::dataset::TensorShape;
 
 class MindDataTestPipeline : public UT::DatasetOpTesting {
@@ -44,11 +43,12 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetBasic) {
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> random_horizontal_flip_op = vision::RandomHorizontalFlip(0.5);
+  std::shared_ptr<TensorTransform> decode_op = std::make_shared<vision::Decode>();
+  std::shared_ptr<TensorTransform> random_horizontal_flip_op = std::make_shared<vision::RandomHorizontalFlip>(0.5);
   EXPECT_NE(random_horizontal_flip_op, nullptr);
 
   // Create a Map operation on ds
-  ds = ds->Map({random_horizontal_flip_op}, {}, {}, {"image"});
+  ds = ds->Map({decode_op, random_horizontal_flip_op}, {}, {}, {"image"});
   EXPECT_NE(ds, nullptr);
 
   // Create a Batch operation on ds
@@ -62,7 +62,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetBasic) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   // Check column
@@ -73,7 +73,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetBasic) {
   while (row.size() != 0) {
     auto image = row["image"];
 
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
     i++;
   }
@@ -99,7 +99,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetBasicGetters) {
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> random_horizontal_flip_op = vision::RandomHorizontalFlip(0.5);
+  std::shared_ptr<TensorTransform> random_horizontal_flip_op = std::make_shared<vision::RandomHorizontalFlip>(0.5);
   EXPECT_NE(random_horizontal_flip_op, nullptr);
 
   // Create a Map operation on ds
@@ -142,18 +142,27 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetShuffle) {
   EXPECT_NE(iter2, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row1;
+  std::unordered_map<std::string, mindspore::MSTensor> row1;
   iter1->GetNextRow(&row1);
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row2;
+  std::unordered_map<std::string, mindspore::MSTensor> row2;
   iter2->GetNextRow(&row2);
 
   uint64_t i = 0;
   int64_t value1 = 0;
   int64_t value2 = 0;
   while (row1.size() != 0 && row2.size() != 0) {
-    row1["scalars"]->GetItemAt(&value1, {0});
-    row2["scalars"]->GetItemAt(&value2, {0});
+    auto scalars1 = row1["scalars"];
+    std::shared_ptr<Tensor> de_scalars1;
+    ASSERT_OK(Tensor::CreateFromMSTensor(scalars1, &de_scalars1));
+    de_scalars1->GetItemAt(&value1, {0});
+
+    auto scalars2 = row2["scalars"];
+    std::shared_ptr<Tensor> de_scalars2;
+    ASSERT_OK(Tensor::CreateFromMSTensor(scalars2, &de_scalars2));
+    de_scalars2->GetItemAt(&value2, {0});
+
     EXPECT_EQ(value1, value2);
+
     iter1->GetNextRow(&row1);
     iter2->GetNextRow(&row2);
     i++;
@@ -188,7 +197,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetShuffle2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<int> expect = {9, 3, 4, 7, 2, 1, 6, 8, 10, 5};
@@ -196,8 +205,12 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetShuffle2) {
   int64_t value = 0;
   uint64_t i = 0;
   while (row.size() != 0) {
-    row["scalars"]->GetItemAt(&value, {});
+    auto scalars = row["scalars"];
+    std::shared_ptr<Tensor> de_scalars;
+    ASSERT_OK(Tensor::CreateFromMSTensor(scalars, &de_scalars));
+    de_scalars->GetItemAt(&value, {0});
     actual.push_back(value);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -227,7 +240,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetSchemaPath) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   // Check column
@@ -271,7 +284,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetSchemaObj) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   // Check column
@@ -280,23 +293,30 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetSchemaObj) {
   EXPECT_NE(row.find("col_float"), row.end());
   EXPECT_NE(row.find("col_2d"), row.end());
 
+  std::vector<int64_t> expect_num = {1};
+  std::vector<int64_t> expect_2d = {2, 2};
+
   uint64_t i = 0;
   while (row.size() != 0) {
     auto col_sint16 = row["col_sint16"];
     auto col_float = row["col_float"];
     auto col_2d = row["col_2d"];
 
-    EXPECT_EQ(col_sint16->shape(), TensorShape({1}));
-    EXPECT_EQ(col_float->shape(), TensorShape({1}));
-    EXPECT_EQ(col_2d->shape(), TensorShape({2, 2}));
+    // Validate shape
+    ASSERT_EQ(col_sint16.Shape(), expect_num);
+    ASSERT_EQ(col_float.Shape(), expect_num);
+    ASSERT_EQ(col_2d.Shape(), expect_2d);
 
-    EXPECT_EQ(col_sint16->Rank(), 1);
-    EXPECT_EQ(col_float->Rank(), 1);
-    EXPECT_EQ(col_2d->Rank(), 2);
+    // Validate Rank
+    ASSERT_EQ(col_sint16.Shape().size(), 1);
+    ASSERT_EQ(col_float.Shape().size(), 1);
+    ASSERT_EQ(col_2d.Shape().size(), 2);
 
-    EXPECT_EQ(col_sint16->type(), DataType::DE_INT16);
-    EXPECT_EQ(col_float->type(), DataType::DE_FLOAT32);
-    EXPECT_EQ(col_2d->type(), DataType::DE_INT64);
+    // Validate type
+    ASSERT_EQ(col_sint16.DataType(), mindspore::DataType::kNumberTypeInt16);
+    ASSERT_EQ(col_float.DataType(), mindspore::DataType::kNumberTypeFloat32);
+    ASSERT_EQ(col_2d.DataType(), mindspore::DataType::kNumberTypeInt64);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -322,7 +342,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetNoSchema) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   // Check column
@@ -335,8 +355,8 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetNoSchema) {
     auto image = row["image"];
     auto label = row["label"];
 
-    MS_LOG(INFO) << "Shape of column [image]:" << image->shape();
-    MS_LOG(INFO) << "Shape of column [label]:" << label->shape();
+    MS_LOG(INFO) << "Shape of column [image]:" << image.Shape();
+    MS_LOG(INFO) << "Shape of column [label]:" << label.Shape();
     iter->GetNextRow(&row);
     i++;
   }
@@ -362,7 +382,7 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetColName) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   // Check column
@@ -402,9 +422,9 @@ TEST_F(MindDataTestPipeline, TestTFRecordDatasetShard) {
   EXPECT_NE(iter2, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row1;
+  std::unordered_map<std::string, mindspore::MSTensor> row1;
   iter1->GetNextRow(&row1);
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row2;
+  std::unordered_map<std::string, mindspore::MSTensor> row2;
   iter2->GetNextRow(&row2);
 
   uint64_t i = 0;
@@ -487,16 +507,16 @@ TEST_F(MindDataTestPipeline, TestIncorrectTFSchemaObject) {
   EXPECT_NE(ds, nullptr);
   auto itr = ds->CreateIterator();
   EXPECT_NE(itr, nullptr);
-  TensorMap mp;
-  // this will fail due to the incorrect schema used
-  EXPECT_FALSE(itr->GetNextRow(&mp));
+  MSTensorMap mp;
+  // This will fail due to the incorrect schema used
+  EXPECT_ERROR(itr->GetNextRow(&mp));
 }
 
 TEST_F(MindDataTestPipeline, TestIncorrectTFrecordFile) {
   std::string path = datasets_root_path_ + "/test_tf_file_3_images2/datasetSchema.json";
   std::shared_ptr<Dataset> ds = TFRecord({path});
   EXPECT_NE(ds, nullptr);
-  // the tf record file is incorrect, hence validate param will fail
+  // The tf record file is incorrect, hence validate param will fail
   auto itr = ds->CreateIterator();
   EXPECT_EQ(itr, nullptr);
 }

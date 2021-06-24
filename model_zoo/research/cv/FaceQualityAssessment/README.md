@@ -68,12 +68,12 @@ We use about 122K face images as training dataset and 2K as evaluating dataset i
 # [Environment Requirements](#contents)
 
 - Hardware(Ascend)
-    - Prepare hardware environment with Ascend processor. If you want to try Ascend, please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend processor.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below:
-    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/zh-CN/master/index.html)
-    - [MindSpore API](https://www.mindspore.cn/api/zh-CN/master/index.html)
+    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
+    - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
 
 # [Script Description](#contents)
 
@@ -213,7 +213,7 @@ sh run_export.sh [BATCH_SIZE] [USE_DEVICE_ID] [PRETRAINED_BACKBONE]
 | Optimizer                  | Momentum                                                    |
 | Loss Function              | MSELoss, Softmax Cross Entropy                              |
 | outputs                    | probability and point                                       |
-| Speed                      | 1pc: 200~240 ms/step; 8pcs: 35~40 ms/step                   |
+| Speed                      | 1pc: 200-240 ms/step; 8pcs: 35-40 ms/step                   |
 | Total time                 | 1ps: 2.5 hours; 8pcs: 0.5 hours                             |
 | Checkpoint for Fine tuning | 16M (.ckpt file)                                            |
 

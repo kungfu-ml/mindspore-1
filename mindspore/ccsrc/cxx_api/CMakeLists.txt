@@ -5,21 +5,28 @@ set(LOAD_MINDIR_SRC
         )
 file(GLOB_RECURSE API_OPS_SRC ${CMAKE_CURRENT_SOURCE_DIR} "ops/*.cc")
 
-if (ENABLE_ACL)
+if(ENABLE_ACL)
     add_compile_definitions(ENABLE_ACL)
     include_directories(${CMAKE_SOURCE_DIR}/graphengine/ge)
     include_directories(${CMAKE_BINARY_DIR}/proto/ge)
     file(GLOB_RECURSE API_ACL_SRC ${CMAKE_CURRENT_SOURCE_DIR}
-            "python_utils.cc"
+            "akg_kernel_register.cc"
             "model/acl/*.cc"
             "model/model_converter_utils/*.cc"
             "graph/acl/*.cc"
             )
+    list(APPEND API_ACL_SRC $<TARGET_OBJECTS:_mindspore_transform_graph_ir_obj>)
+endif()
 
-endif ()
-if (ENABLE_D)
-    file(GLOB_RECURSE API_MS_INFER_SRC ${CMAKE_CURRENT_SOURCE_DIR} "python_utils.cc" "model/ms/*.cc" "graph/ms/*.cc")
-endif ()
+if(ENABLE_D)
+    file(GLOB_RECURSE API_MS_INFER_SRC ${CMAKE_CURRENT_SOURCE_DIR}
+        "akg_kernel_register.cc" "model/ms/*.cc" "graph/ascend/*.cc")
+endif()
+
+if(ENABLE_GPU)
+    file(GLOB_RECURSE API_MS_INFER_SRC ${CMAKE_CURRENT_SOURCE_DIR}
+        "akg_kernel_register.cc" "model/ms/*.cc" "graph/gpu/*.cc")
+endif()
 
 set(MSLIB_SRC ${CMAKE_CURRENT_SOURCE_DIR}/types.cc
               ${CMAKE_CURRENT_SOURCE_DIR}/context.cc
@@ -36,32 +43,37 @@ set(MSLIB_SRC ${CMAKE_CURRENT_SOURCE_DIR}/types.cc
 add_library(mindspore_shared_lib SHARED ${MSLIB_SRC})
 set_target_properties(mindspore_shared_lib PROPERTIES OUTPUT_NAME mindspore)
 
-if (CMAKE_SYSTEM_NAME MATCHES "Darwin")
+if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
     target_link_libraries(mindspore_shared_lib PRIVATE ${PYTHON_LIBRARIES} ${SECUREC_LIBRARY}
             -Wl,-force_load mindspore -Wl,-noall_load proto_input mindspore_gvar mindspore::protobuf)
-else ()
-    target_link_libraries(mindspore_shared_lib PRIVATE ${PYTHON_LIBRARIES} ${SECUREC_LIBRARY}
+else()
+    if(ENABLE_D OR ENABLE_GPU)
+        target_link_libraries(mindspore_shared_lib PRIVATE ${PYTHON_LIBRARIES} ${SECUREC_LIBRARY}
             -Wl,--whole-archive mindspore -Wl,--no-whole-archive proto_input mindspore_gvar mindspore::protobuf)
-endif ()
+    else()
+        target_link_libraries(mindspore_shared_lib PRIVATE ${PYTHON_LIBRARIES} ${SECUREC_LIBRARY}
+          mindspore proto_input mindspore_gvar mindspore::protobuf)
+    endif()
+endif()
 
-if (ENABLE_CPU)
+if(ENABLE_CPU)
     target_link_libraries(mindspore_shared_lib PRIVATE mindspore::dnnl mindspore::mkldnn)
-endif ()
+endif()
 
-if (USE_GLOG)
+if(USE_GLOG)
     target_link_libraries(mindspore_shared_lib PRIVATE mindspore::glog)
-endif ()
+endif()
 
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+if(CMAKE_SYSTEM_NAME MATCHES "Linux")
     target_link_options(mindspore_shared_lib PRIVATE -Wl,-init,common_log_init)
-endif ()
+endif()
 
-if (ENABLE_ACL)
-    if (DEFINED ENV{ASCEND_CUSTOM_PATH})
+if(ENABLE_ACL)
+    if(DEFINED ENV{ASCEND_CUSTOM_PATH})
         set(ASCEND_PATH $ENV{ASCEND_CUSTOM_PATH})
-    else ()
+    else()
         set(ASCEND_PATH /usr/local/Ascend)
-    endif ()
+    endif()
     set(ACL_LIB_DIR ${ASCEND_PATH}/acllib/)
     set(ATLAS_ACL_LIB_DIR ${ASCEND_PATH}/ascend-toolkit/latest/acllib)
     set(ATC_DIR ${ASCEND_PATH}/atc/)
@@ -89,18 +101,28 @@ if (ENABLE_ACL)
             ${acl_retr} ${acl_cblas} ${acl_dvpp} ${acl_runtime} ${libplatform} ${libcompress} ${libopskernel}
             ${libaicore_utils} ${libaicpu_engine_common} ${acl})
     add_dependencies(mindspore_shared_lib graph)
-endif ()
+endif()
 
 
 # Before build inference
-if (ENABLE_D)
+if(ENABLE_D)
     find_library(adump_server libadump_server.a ${ASCEND_RUNTIME_PATH} ${ASCEND_TOOLKIT_RUNTIME_PATH})
     target_link_libraries(mindspore_shared_lib PRIVATE ${adump_server})
-endif ()
+endif()
 
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+if(ENABLE_GPU)
+    target_link_libraries(mindspore_shared_lib PRIVATE  gpu_cuda_lib gpu_queue cublas
+                          ${CUDA_PATH}/lib64/libcurand.so
+                          ${CUDNN_LIBRARY_PATH}
+                          ${CUDA_PATH}/lib64/libcudart.so
+                          ${CUDA_PATH}/lib64/stubs/libcuda.so
+                          ${CUDA_PATH}/lib64/libcusolver.so
+                          ${CUDA_PATH}/lib64/libcufft.so)
+endif()
+
+if(CMAKE_SYSTEM_NAME MATCHES "Linux")
     set(MINDSPORE_RPATH $ORIGIN)
-    if (ENABLE_D)
+    if(ENABLE_D)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/nnae/latest/fwkacllib/lib64)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/fwkacllib/lib64)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/fwkacllib/lib64)
@@ -110,8 +132,9 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/add-ons)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/opp/op_impl/built-in/ai_core/tbe/op_tiling)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/nnae/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-        set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-    elseif (ENABLE_ACL)
+        set(MINDSPORE_RPATH
+            ${MINDSPORE_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
+    elseif(ENABLE_ACL)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/nnae/latest/atc/lib64)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/atc/lib64)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/atc/lib64)
@@ -121,8 +144,9 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/add-ons)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/opp/op_impl/built-in/ai_core/tbe/op_tiling)
         set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/nnae/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-        set(MINDSPORE_RPATH ${MINDSPORE_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-    endif ()
+        set(MINDSPORE_RPATH
+            ${MINDSPORE_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
+    endif()
 
     set_target_properties(mindspore_shared_lib PROPERTIES INSTALL_RPATH ${MINDSPORE_RPATH})
-endif ()
+endif()

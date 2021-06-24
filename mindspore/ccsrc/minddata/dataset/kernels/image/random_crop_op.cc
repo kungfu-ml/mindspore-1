@@ -15,6 +15,7 @@
  */
 #include "minddata/dataset/kernels/image/random_crop_op.h"
 #include <random>
+#include <tuple>
 #include "minddata/dataset/kernels/image/image_utils.h"
 #include "minddata/dataset/util/random.h"
 #include "minddata/dataset/util/status.h"
@@ -59,11 +60,11 @@ Status RandomCropOp::ImagePadding(const std::shared_ptr<Tensor> &input, std::sha
 
   CHECK_FAIL_RETURN_UNEXPECTED(pad_top_ < input->shape()[0] * 3 && pad_bottom_ < input->shape()[0] * 3 &&
                                  pad_left_ < input->shape()[1] * 3 && pad_right_ < input->shape()[1] * 3,
-                               "RandomCropBBoxOp padding size is too big, it's more than 3 times the original size.");
+                               "Pad: padding size is three times bigger than the image size.");
 
   RETURN_IF_NOT_OK(
     Pad(input, pad_image, pad_top_, pad_bottom_, pad_left_, pad_right_, border_type_, fill_r_, fill_g_, fill_b_));
-  CHECK_FAIL_RETURN_UNEXPECTED((*pad_image)->shape().Size() >= 2, "Abnormal shape");
+  CHECK_FAIL_RETURN_UNEXPECTED((*pad_image)->shape().Size() >= 2, "RandomCrop: invalid shape of image after pad.");
 
   *padded_image_h = (*pad_image)->shape()[0];
   *padded_image_w = (*pad_image)->shape()[1];
@@ -92,9 +93,13 @@ Status RandomCropOp::ImagePadding(const std::shared_ptr<Tensor> &input, std::sha
     *padded_image_w = (*pad_image)->shape()[1];
   }
 
+  if (crop_height_ == 0 || crop_width_ == 0) {
+    return Status(StatusCode::kMDShapeMisMatch, __LINE__, __FILE__,
+                  "RandomCrop: invalid crop size, crop dimension is not allowed to be zero.");
+  }
   if (*padded_image_h < crop_height_ || *padded_image_w < crop_width_ || crop_height_ == 0 || crop_width_ == 0) {
-    return Status(StatusCode::kShapeMisMatch, __LINE__, __FILE__,
-                  "Crop size is greater than the image dimensions or is zero.");
+    return Status(StatusCode::kMDShapeMisMatch, __LINE__, __FILE__,
+                  "RandomCrop: invalid crop size, crop size is bigger than the image dimensions.");
   }
   return Status::OK();
 }
@@ -107,6 +112,10 @@ void RandomCropOp::GenRandomXY(int *x, int *y, const int32_t &padded_image_w, co
 
 Status RandomCropOp::Compute(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *output) {
   IO_CHECK(input, output);
+
+  if (input->Rank() != 3 && input->Rank() != 2) {
+    RETURN_STATUS_UNEXPECTED("RandomCrop: image shape is not <H,W,C> or <H,W>.");
+  }
 
   // Apply padding first then crop
   std::shared_ptr<Tensor> pad_image;
@@ -135,7 +144,7 @@ Status RandomCropOp::OutputShape(const std::vector<TensorShape> &inputs, std::ve
   if (inputs[0].Rank() == 2) outputs.emplace_back(out);
   if (inputs[0].Rank() == 3) outputs.emplace_back(out.AppendDim(inputs[0][2]));
   if (!outputs.empty()) return Status::OK();
-  return Status(StatusCode::kUnexpectedError, "Input has a wrong shape");
+  return Status(StatusCode::kMDUnexpectedError, "RandomCrop: invalid input shape.");
 }
 }  // namespace dataset
 }  // namespace mindspore

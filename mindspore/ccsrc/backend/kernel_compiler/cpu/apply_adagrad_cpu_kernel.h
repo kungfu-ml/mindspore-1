@@ -36,9 +36,9 @@ class ApplyAdagradCPUKernel : public CPUKernel {
  private:
   static void CheckParam(const std::vector<AddressPtr> &inputs, const std::vector<AddressPtr> &outputs);
   template <typename T>
-  void LaunchKernel(const std::vector<AddressPtr> &inputs);
+  void LaunchKernel(const std::vector<AddressPtr> &inputs, const std::vector<AddressPtr> &outputs);
   template <typename T>
-  void LaunchApplyAdagrad(T var, T accum, T lr, T gradient, size_t start, size_t end);
+  void LaunchApplyAdagrad(T const var, T const accum, const T lr, const T gradient, size_t start, size_t end);
   bool update_slots_{true};
   TypeId dtype_{kTypeUnknown};
 };

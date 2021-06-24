@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef MINDSPORE_CCSRC_KERNEL_GPU_CUDA_IMPL_SLICEIMPL_H_
-#define MINDSPORE_CCSRC_KERNEL_GPU_CUDA_IMPL_SLICEIMPL_H_
+#ifndef MINDSPORE_CCSRC_BACKEND_KERNEL_COMPILER_GPU_CUDA_IMPL_SLICE_IMPL_CUH_
+#define MINDSPORE_CCSRC_BACKEND_KERNEL_COMPILER_GPU_CUDA_IMPL_SLICE_IMPL_CUH_
 
 #include <cuda_runtime.h>
 #include <vector>
@@ -27,15 +27,16 @@ void Slice4DKernel(const size_t s1, const size_t s2, const size_t s3, const size
                    const T *input, T *output, cudaStream_t stream);
 template <typename T>
 void CalSliceGrad(const size_t input_size, const T *input, const std::vector<size_t> in_shape,
-                  const std::vector<int> begin, const std::vector<int> size, T *output, cudaStream_t cuda_stream);
-template <typename T>
-void StridedSlice(const std::vector<size_t> &input_shape, const std::vector<int> &begin,
-                  const std::vector<int> &strides, const std::vector<size_t> &output_shape, const T *input, T *output,
+                  const std::vector<int64_t> begin, const std::vector<int64_t> size, T *output,
                   cudaStream_t cuda_stream);
 template <typename T>
-void StridedSliceGrad(const std::vector<size_t> &dy_shape, const std::vector<int> &begin,
-                      const std::vector<int> &strides, const std::vector<size_t> &dx_shape, const T *dy, T *dx,
+void StridedSlice(const std::vector<size_t> &input_shape, const std::vector<int64_t> &begin,
+                  const std::vector<int64_t> &strides, const std::vector<size_t> &output_shape, const T *input,
+                  T *output, cudaStream_t cuda_stream);
+template <typename T>
+void StridedSliceGrad(const std::vector<size_t> &dy_shape, const std::vector<int64_t> &begin,
+                      const std::vector<int64_t> &strides, const std::vector<size_t> &dx_shape, const T *dy, T *dx,
                       cudaStream_t cuda_stream);
 template <typename T>
 void FillDeviceArray(const size_t input_size, T *addr, const float value, cudaStream_t cuda_stream);
-#endif  // MINDSPORE_CCSRC_KERNEL_GPU_CUDA_IMPL_SLICEIMPL_H_
+#endif  // MINDSPORE_CCSRC_BACKEND_KERNEL_COMPILER_GPU_CUDA_IMPL_SLICE_IMPL_CUH_

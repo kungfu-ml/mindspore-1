@@ -27,10 +27,37 @@ using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_INFER_INVALID;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_Adder;
+using mindspore::schema::PrimitiveType_AdderFusion;
 using mindspore::schema::Format::Format_NHWC;
 
 namespace mindspore::kernel {
+int AdderCPUKernel::Init() {
+  auto ret = InitWeightBias();
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "Init weight bias failed.";
+    return RET_ERROR;
+  }
+  if (!InferShapeDone()) {
+    return RET_OK;
+  }
+  return ReSize();
+}
+
+int AdderCPUKernel::ReSize() {
+  auto ret = ConvolutionBaseCPUKernel::CheckResizeValid();
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "Resize is invalid.";
+    return ret;
+  }
+
+  ret = ConvolutionBaseCPUKernel::Init();
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "ConvolutionBase init failed.";
+    return ret;
+  }
+  return RET_OK;
+}
+
 int AdderCPUKernel::InitWeightBias() {
   auto filter_tensor = in_tensors_.at(kWeightIndex);
   int kernel_h = filter_tensor->Height();
@@ -105,5 +132,5 @@ int AdderCPUKernel::Run() {
   return RET_OK;
 }
 
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Adder, LiteKernelCreator<AdderCPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_AdderFusion, LiteKernelCreator<AdderCPUKernel>)
 }  // namespace mindspore::kernel

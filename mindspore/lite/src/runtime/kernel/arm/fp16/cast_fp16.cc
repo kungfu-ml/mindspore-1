@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 #include "src/runtime/kernel/arm/fp16/cast_fp16.h"
-#include <vector>
 #include "schema/model_generated.h"
 #include "src/kernel_registry.h"
-#include "nnacl/fp16/cast_fp16.h"
-#include "nnacl/op_base.h"
 #include "src/runtime/runtime_api.h"
 #include "include/errorcode.h"
 
@@ -114,6 +111,27 @@ int CastFp16CPUKernel::DoCast(int thread_id) {
         MS_LOG(ERROR) << "Unsupported output data type " << output_data_type;
         return RET_ERROR;
     }
+  } else if (input_data_type == kNumberTypeInt32) {
+    switch (output_data_type) {
+      case kNumberTypeFloat32:
+        Int32ToFloat32(static_cast<int32_t *>(input->data_c()) + offset, static_cast<float *>(output_data) + offset,
+                       data_num);
+        break;
+      default:
+        MS_LOG(ERROR) << "Unsupported output data type " << output_data_type;
+        return RET_ERROR;
+    }
+  } else if (input_data_type == kNumberTypeInt64) {
+    switch (output_data_type) {
+      case kNumberTypeFloat16:
+        Int64ToFloat32(reinterpret_cast<int64_t *>(input->MutableData()) + offset,
+                       reinterpret_cast<float *>(output_data) + offset, data_num);
+        break;
+      default:
+        MS_LOG(ERROR) << "Unsupported output data type " << output_data_type;
+        return RET_ERROR;
+    }
+
   } else {
     MS_LOG(ERROR) << "Unsupported input data type " << input_data_type;
     return RET_ERROR;
@@ -129,4 +147,5 @@ int CastFp16CPUKernel::Run() {
 }
 
 REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Cast, LiteKernelCreator<CastFp16CPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeInt64, PrimitiveType_Cast, LiteKernelCreator<CastFp16CPUKernel>)
 }  // namespace mindspore::kernel

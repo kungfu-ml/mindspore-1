@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -103,8 +103,62 @@ static bool isTraversable(const AnfNodePtr &node) {
   return false;
 }
 
-bool SubstitutionList::ApplyTransform(const OptimizerPtr &optimizer, const AnfNodePtr &root_node,
-                                      const SubstitutionPtr &transform) const {
+static AnfNodePtr DoTransform(const OptimizerPtr &optimizer, const AnfNodePtr &node,
+                              const SubstitutionPtr &substitution) {
+  auto manager = optimizer->manager();
+  bool is_match = substitution->predicate_(node);
+  if (is_match) {
+    TraceGuard trace_guard(std::make_shared<TraceOpt>(node->debug_info()));
+    auto res = (*substitution)(optimizer, node);
+    if (res != nullptr && res != node) {
+#ifdef ENABLE_PROFILE
+      double t = GetTime();
+#endif
+      MS_LOG(DEBUG) << "Replace " << node->DebugString() << " with " << res->DebugString() << ", by "
+                    << substitution->name_;
+      (void)manager->Replace(node, res);
+#ifdef ENABLE_PROFILE
+      MsProfile::StatTime("replace." + substitution->name_, GetTime() - t);
+#endif
+      return res;
+    }
+  }
+  return nullptr;
+}
+
+static void UpdateTransformingList(const OptimizerPtr &optimizer, const AnfNodePtr &node, std::deque<AnfNodePtr> *todo,
+                                   bool change, size_t seen) {
+  if (IsValueNode<FuncGraph>(node)) {
+    (*todo).emplace_back(GetValueNode<FuncGraphPtr>(node)->output());
+  }
+  if (node->isa<CNode>()) {
+    auto &inputs = node->cast<CNodePtr>()->inputs();
+    (void)std::copy(inputs.begin(), inputs.end(), std::back_inserter(*todo));
+  }
+
+  if (!change) {
+    return;
+  }
+  auto manager = optimizer->manager();
+  auto &node_users = manager->node_users();
+  auto users_iterator = node_users.find(node);
+  if (users_iterator == node_users.end()) {
+    return;
+  }
+  auto users = users_iterator->second;
+  for (auto &use : users) {
+    auto use_node = use.first;
+    if (use_node == nullptr) {
+      continue;
+    }
+    (*todo).emplace_back(use_node);
+    if (use_node->seen_ == seen) {
+      use_node->seen_--;
+    }
+  }
+}
+
+bool SubstitutionList::ApplyIRToSubstitutions(const OptimizerPtr &optimizer, const FuncGraphPtr &func_graph) const {
 #ifdef ENABLE_PROFILE
   double start = GetTime();
 #endif
@@ -113,7 +167,7 @@ bool SubstitutionList::ApplyTransform(const OptimizerPtr &optimizer, const AnfNo
   // 1024 is for the initial capacity of deque
   std::deque<AnfNodePtr> todo(1024);
   todo.clear();
-  todo.push_back(root_node);
+  todo.emplace_back(func_graph->output());
   bool changes = false;
 
   auto &all_nodes = manager->all_nodes();
@@ -121,57 +175,61 @@ bool SubstitutionList::ApplyTransform(const OptimizerPtr &optimizer, const AnfNo
     AnfNodePtr node = todo.front();
     todo.pop_front();
 
-    // check whether this node has been matched.
     if (node == nullptr || node->seen_ == seen || !isTraversable(node) || !all_nodes.contains(node)) {
       continue;
     }
     node->seen_ = seen;
 
-    // select nodes that this transform can be applied.
-    bool is_match = transform->predicate_(node);
-
-    // apply transform on this node
     bool change = false;
-    if (is_match) {
-      TraceGuard trace_guard(std::make_shared<TraceOpt>(node->debug_info()));
-      auto ret = (*transform)(optimizer, node);
-      if (ret != nullptr && ret != node) {
+    for (auto &substitution : list_) {
+      auto res = DoTransform(optimizer, node, substitution);
+      if (res != nullptr) {
         change = true;
         changes = true;
-#ifdef ENABLE_PROFILE
-        double t = GetTime();
-#endif
-        (void)manager->Replace(node, ret);
-#ifdef ENABLE_PROFILE
-        MsProfile::StatTime("replace." + transform->name_, GetTime() - t);
-#endif
-        node = ret;
+        node = res;
+        todo.emplace_back(res);
+        break;
       }
     }
+    UpdateTransformingList(optimizer, node, &todo, change, seen);
+  }
+#ifdef ENABLE_PROFILE
+  MsProfile::StatTime("opt.transforms." + optimizer->name(), GetTime() - start);
+#endif
+  return changes;
+}
 
-    // find success, and add them to todo list
-    if (IsValueNode<FuncGraph>(node)) {
-      todo.push_back(GetValueNode<FuncGraphPtr>(node)->output());
-    }
+bool SubstitutionList::ApplySubstitutionToIR(const OptimizerPtr &optimizer, const AnfNodePtr &root_node,
+                                             const SubstitutionPtr &substitution) const {
+#ifdef ENABLE_PROFILE
+  double start = GetTime();
+#endif
+  FuncGraphManagerPtr manager = optimizer->manager();
+  auto seen = NewSeenGeneration();
+  // 1024 is for the initial capacity of deque
+  std::deque<AnfNodePtr> todo(1024);
+  todo.clear();
+  todo.emplace_back(root_node);
+  bool changes = false;
 
-    if (node->isa<CNode>()) {
-      auto &inputs = node->cast<CNodePtr>()->inputs();
-      (void)std::copy(inputs.begin(), inputs.end(), std::back_inserter(todo));
-    }
+  auto &all_nodes = manager->all_nodes();
+  while (!todo.empty()) {
+    AnfNodePtr node = todo.front();
+    todo.pop_front();
 
-    auto &node_users = manager->node_users();
-    if (change && node_users.find(node) != node_users.end()) {
-      for (auto &use : node_users[node]) {
-        auto use_node = use.first;
-        if (use_node == nullptr) {
-          continue;
-        }
-        todo.push_back(use_node);
-        if (use_node->seen_ == seen) {
-          use_node->seen_--;
-        }
-      }
+    if (node == nullptr || node->seen_ == seen || !isTraversable(node) || !all_nodes.contains(node)) {
+      continue;
     }
+    node->seen_ = seen;
+
+    bool change = false;
+    auto res = DoTransform(optimizer, node, substitution);
+    if (res != nullptr) {
+      change = true;
+      changes = true;
+      node = res;
+    }
+    UpdateTransformingList(optimizer, node, &todo, change, seen);
   }
 
 #ifdef ENABLE_PROFILE
@@ -180,13 +238,25 @@ bool SubstitutionList::ApplyTransform(const OptimizerPtr &optimizer, const AnfNo
   return changes;
 }
 
-bool SubstitutionList::operator()(const FuncGraphPtr &func_graph, const OptimizerPtr &optimizer) const {
-  MS_EXCEPTION_IF_NULL(optimizer);
-  MS_EXCEPTION_IF_NULL(func_graph);
-  FuncGraphManagerPtr manager = optimizer->manager();
-  manager->AddFuncGraph(func_graph);
+void SubstitutionList::DisplayStatusOfSubstitution(const std::unordered_map<std::string, std::vector<bool>> &status,
+                                                   const OptimizerPtr &optimizer, size_t space) const {
+  std::stringstream ss;
+  ss << std::endl
+     << "Pass: " << optimizer->name() << "(" << optimizer->CurPass_.counter << ")_" << optimizer->CurPass_.name
+     << std::endl;
+  for (size_t i = 0; i < list_.size(); i++) {
+    auto name = list_[i]->name_;
+    ss << std::left << std::setw(space + 4) << name << "\t";
+    for (auto change : status.at(name + std::to_string(i))) {
+      ss << change << " ";
+    }
+    ss << std::endl;
+  }
+  MS_LOG(DEBUG) << ss.str();
+}
 
-  // for transform status counting
+bool SubstitutionList::ApplySubstitutionsToIR(const OptimizerPtr &optimizer, const FuncGraphPtr &func_graph) const {
+  // Add for substitution status counting
   size_t space = 0;
   std::unordered_map<std::string, std::vector<bool>> status;
   if (optimizer->is_on_debug_) {
@@ -195,45 +265,65 @@ bool SubstitutionList::operator()(const FuncGraphPtr &func_graph, const Optimize
     }
   }
 
-  bool loop = false;
   bool changes = false;
-
-  do {
+  bool loop = true;
+  while (loop) {
     loop = false;
     for (size_t i = 0; i < list_.size(); i++) {
-      auto change = ApplyTransform(optimizer, func_graph->output(), list_[i]);
+      const auto &substitution = list_[i];
+      bool change = ApplySubstitutionToIR(optimizer, func_graph->output(), substitution);
       changes = changes || change;
       loop = loop || change;
 
-      // record the status of each transform
+      static const auto enable_dump_pass_ir = (common::GetEnv("ENV_DUMP_PASS_IR") == "1");
+      if (enable_dump_pass_ir && MsContext::GetInstance()->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG)) {
+        auto fg_name = optimizer->name() + "_r" + std::to_string(optimizer->CurPass_.counter) + "_" +
+                       optimizer->CurPass_.name + "_" + substitution->name_;
+        DumpIR(fg_name + ".ir", func_graph);
+        if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) != kPynativeMode) {
+          func_graph->DumpFuncGraph(fg_name);
+          ExportIR(fg_name + ".dat", "", func_graph);
+        }
+      }
+
+      // Record the status of each substitution
       if (optimizer->is_on_debug_) {
-        status[list_[i]->name_ + std::to_string(i)].push_back(change);
-        space = std::max(list_[i]->name_.size(), space);
+        status[substitution->name_ + std::to_string(i)].push_back(change);
+        space = std::max(substitution->name_.size(), space);
       }
     }
-
     if (is_once_) {
       break;
     }
-  } while (loop);
-
-  // display the status of each transform
-  if (optimizer->is_on_debug_) {
-    std::stringstream ss;
-    ss << std::endl
-       << "Pass: " << optimizer->name() << "(" << optimizer->CurPass_.counter << ")_" << optimizer->CurPass_.name
-       << std::endl;
-    for (size_t i = 0; i < list_.size(); i++) {
-      auto name = list_[i]->name_;
-      ss << std::left << std::setw(space + 4) << name << "\t";
-      for (auto change : status[name + std::to_string(i)]) {
-        ss << change << " ";
-      }
-      ss << std::endl;
-    }
-    MS_LOG(DEBUG) << ss.str();
   }
 
+  // Display the status of each substitution
+  if (optimizer->is_on_debug_) {
+    DisplayStatusOfSubstitution(status, optimizer, space);
+  }
+  return changes;
+}
+
+bool SubstitutionList::operator()(const FuncGraphPtr &func_graph, const OptimizerPtr &optimizer) const {
+  MS_EXCEPTION_IF_NULL(optimizer);
+  MS_EXCEPTION_IF_NULL(func_graph);
+  FuncGraphManagerPtr manager = optimizer->manager();
+  manager->AddFuncGraph(func_graph);
+  bool changes = false;
+  static const auto traverse_mode =
+    (common::GetEnv("ENV_TRAVERSE_SUBSTITUTIONS_MODE") != "1" ? kOptTraverseFromIRToSubstitutions
+                                                              : kOptTraverseFromSubstitutionsToIR);
+  if (traverse_mode == kOptTraverseFromIRToSubstitutions &&
+      MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) != kPynativeMode &&
+      optimizer->traverse_nodes_first() && !is_once_ && !global_sensitive_) {
+    MS_LOG(DEBUG) << "IR >> SUB, " << optimizer->name() << "(r" << optimizer->CurPass_.counter << ")_"
+                  << optimizer->CurPass_.name;
+    changes = ApplyIRToSubstitutions(optimizer, func_graph);
+  } else {
+    MS_LOG(DEBUG) << "SUB >> IR, " << optimizer->name() << "(r" << optimizer->CurPass_.counter << ")_"
+                  << optimizer->CurPass_.name;
+    changes = ApplySubstitutionsToIR(optimizer, func_graph);
+  }
   return changes;
 }
 }  // namespace opt

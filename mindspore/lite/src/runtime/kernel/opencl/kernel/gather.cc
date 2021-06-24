@@ -21,6 +21,7 @@
 #include "src/kernel_registry.h"
 #include "src/runtime/kernel/opencl/kernel/gather.h"
 #include "src/runtime/kernel/opencl/cl/gather.cl.inc"
+#include "src/runtime/kernel/opencl/utils.h"
 
 using mindspore::kernel::KERNEL_ARCH::kGPU;
 using mindspore::lite::KernelRegistrar;
@@ -50,7 +51,7 @@ int GatherOpenCLKernel::CheckSpecs() {
     return RET_ERROR;
   }
   int indices_ndim = in_tensors_.at(1)->shape().size();
-  if (indices_ndim != 1) {
+  if (indices_ndim > 1) {
     MS_LOG(ERROR) << "GatherOpenCLKernel only supports 1D indices Tensor but get " << indices_ndim << "D.";
     return RET_ERROR;
   }
@@ -62,8 +63,10 @@ int GatherOpenCLKernel::CheckSpecs() {
     return RET_ERROR;
   }
 
-  auto *param = reinterpret_cast<GatherParameter *>(this->op_parameter_);
-  axis_ = param->axis_;
+  if (CheckParamLikeTensor("Gather", "axis", in_tensors_.at(2), kNumberTypeInt32, {1}) != RET_OK) {
+    return RET_ERROR;
+  }
+  axis_ = *reinterpret_cast<int32_t *>(in_tensors_.at(2)->data_c());
   if (axis_ < 0) {
     axis_ += input_ndim;
   }
@@ -99,24 +102,23 @@ void GatherOpenCLKernel::SetGlobalLocal() {
 
 int GatherOpenCLKernel::Prepare() {
   std::string kernel_name = "gather";
+  if (in_tensors_.at(0)->shape().size() == 1 && axis_ == 0) {
+    axis_ = 3;
+  }
 #ifdef PROGRAM_WITH_IL
   kernel_ = ocl_runtime_->GetKernelFromBinary(kernel_name);
 #else
   std::string program_name = "gather";
   ocl_runtime_->LoadSource(program_name, gather_source);
-  ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name);
+  ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name, {}, out_tensors_[0]->data_type());
 #endif
-  if (!in_tensors_.at(1)->IsConst()) {
-    intensor1_is_tensor = true;
-  }
-
-  if (!intensor1_is_tensor) {
+  if (in_tensors_.at(1)->IsConst()) {
+    intensor1_is_tensor = false;
     int ret = InitWeights();
     if (ret != RET_OK) {
       return ret;
     }
   }
-
   SetGlobalLocal();
   SetConstArgs();
   MS_LOG(DEBUG) << kernel_name << " Init Done!";
@@ -125,7 +127,6 @@ int GatherOpenCLKernel::Prepare() {
 
 int GatherOpenCLKernel::ConvertTensorToweight() {
   auto allocator = ocl_runtime_->GetAllocator();
-  GpuTensorInfo img_info(in_tensors_[1]);
   auto indices_tensor = in_tensors_.at(1);
   auto indices_num = indices_tensor->ElementsNum();
   indices_data_ = reinterpret_cast<int32_t *>(allocator->Malloc(sizeof(int32_t) * indices_num));

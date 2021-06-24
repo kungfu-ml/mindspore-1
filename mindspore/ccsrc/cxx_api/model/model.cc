@@ -19,54 +19,141 @@
 #include "cxx_api/factory.h"
 #include "utils/utils.h"
 
-namespace mindspore::api {
-Status Model::Build(const std::map<std::string, std::string> &options) {
-  MS_EXCEPTION_IF_NULL(impl_);
-  return impl_->Build(options);
+namespace mindspore {
+namespace {
+const std::map<enum DeviceType, std::set<ModelType>> kSupportedModelMap = {
+  {kAscend310, {kOM, kMindIR}},
+  {kAscend910, {kMindIR}},
+  {kNvidiaGPU, {kMindIR}},
+};
+
+std::string GetDeviceTypeString(enum DeviceType type) {
+  static const std::map<enum DeviceType, std::string> kDeviceTypeStrs = {
+    {kCPU, "CPU"},           {kMaliGPU, "MaliGPU"},     {kNvidiaGPU, "GPU"},
+    {kKirinNPU, "KirinGPU"}, {kAscend910, "Ascend910"}, {kAscend310, "Ascend310"},
+  };
+  auto iter = kDeviceTypeStrs.find(type);
+  if (iter != kDeviceTypeStrs.end()) {
+    return iter->second;
+  }
+
+  return "InvalidDeviceType" + std::to_string(type);
+}
+}  // namespace
+Status Model::Build(GraphCell graph_cell, const std::shared_ptr<Context> &model_context) {
+  if (graph_cell.GetGraph() == nullptr) {
+    MS_LOG(ERROR) << "Invalid graph input.";
+    return kMCInvalidInput;
+  }
+
+  if (model_context == nullptr) {
+    MS_LOG(ERROR) << "Invalid model context.";
+    return kMCInvalidInput;
+  }
+  auto &device_info = model_context->MutableDeviceInfo();
+  if (device_info.size() != 1) {
+    MS_LOG(ERROR) << "Invalid model context, only single device info is supported.";
+    return kMCInvalidInput;
+  }
+
+  std::string device_target = GetDeviceTypeString(device_info[0]->GetDeviceType());
+  impl_ = Factory<ModelImpl>::Instance().Create(device_target);
+  if (impl_ == nullptr) {
+    MS_LOG(ERROR) << "Create session type " << device_target << " failed";
+    return kMEFailed;
+  }
+
+  g_device_target = device_target;
+
+  impl_->SetGraph(std::make_shared<Graph>(*graph_cell.GetGraph()));
+  impl_->SetContext(model_context);
+
+  return impl_->Build();
 }
 
-Status Model::Train(const DataSet &dataset, bool data_sink, std::map<std::string, Buffer> *outputs) {
-  MS_EXCEPTION_IF_NULL(impl_);
-  return impl_->Train(dataset, outputs);
+Status Model::Resize(const std::vector<MSTensor> &inputs, const std::vector<std::vector<int64_t>> &dims) {
+  if (impl_ == nullptr) {
+    MS_LOG(ERROR) << "Failed because this model has not been built.";
+    return kMCFailed;
+  }
+  return impl_->Resize(inputs, dims);
 }
 
-Status Model::Eval(const DataSet &dataset, bool data_sink, std::map<std::string, Buffer> *outputs) {
-  MS_EXCEPTION_IF_NULL(impl_);
-  return impl_->Eval(dataset, outputs);
-}
-
-Status Model::Predict(const std::vector<Buffer> &inputs, std::vector<Buffer> *outputs) {
-  MS_EXCEPTION_IF_NULL(impl_);
+Status Model::Predict(const std::vector<MSTensor> &inputs, std::vector<MSTensor> *outputs) {
+  if (impl_ == nullptr) {
+    MS_LOG(ERROR) << "Failed because this model has not been built.";
+    return kMCFailed;
+  }
   return impl_->Predict(inputs, outputs);
 }
 
-Status Model::GetInputsInfo(std::vector<std::string> *names, std::vector<std::vector<int64_t>> *shapes,
-                            std::vector<DataType> *data_types, std::vector<size_t> *mem_sizes) const {
-  MS_EXCEPTION_IF_NULL(impl_);
-  return impl_->GetInputsInfo(names, shapes, data_types, mem_sizes);
-}
-
-Status Model::GetOutputsInfo(std::vector<std::string> *names, std::vector<std::vector<int64_t>> *shapes,
-                             std::vector<DataType> *data_types, std::vector<size_t> *mem_sizes) const {
-  MS_EXCEPTION_IF_NULL(impl_);
-  return impl_->GetOutputsInfo(names, shapes, data_types, mem_sizes);
-}
-
-Model::Model(const GraphCell &graph_cell)
-    : impl_(Factory<ModelImpl>::Instance().Create(Context::Instance().GetDeviceTarget())) {
+std::vector<MSTensor> Model::GetInputs() {
   if (impl_ == nullptr) {
-    MS_LOG(EXCEPTION) << "Create session type " << Context::Instance().GetDeviceTarget() << " failed";
+    MS_LOG(ERROR) << "Failed because this model has not been built.";
+    return {};
   }
-  MS_EXCEPTION_IF_NULL(graph_cell.GetGraph());
-  impl_->SetGraph(std::make_shared<Graph>(*graph_cell.GetGraph()));
+  return impl_->GetInputs();
 }
 
-Model::Model(const std::vector<Output> &network) { MS_LOG(EXCEPTION) << "Unsupported feature."; }
+std::vector<MSTensor> Model::GetOutputs() {
+  if (impl_ == nullptr) {
+    MS_LOG(ERROR) << "Failed because this model has not been built.";
+    return {};
+  }
+  return impl_->GetOutputs();
+}
 
+MSTensor Model::GetInputByTensorName(const std::vector<char> &tensor_name) {
+  std::string tensor_name_str = CharToString(tensor_name);
+  auto inputs = GetInputs();
+  for (auto in : inputs) {
+    if (in.Name() == tensor_name_str) {
+      return in;
+    }
+  }
+
+  return MSTensor(nullptr);
+}
+
+std::vector<std::vector<char>> Model::GetOutputTensorNamesChar() {
+  std::vector<std::vector<char>> ret;
+  auto outputs = GetOutputs();
+  std::transform(outputs.begin(), outputs.end(), std::back_inserter(ret),
+                 [](MSTensor item) -> std::vector<char> { return StringToChar(item.Name()); });
+  return ret;
+}
+
+MSTensor Model::GetOutputByTensorName(const std::vector<char> &tensor_name) {
+  std::string tensor_name_str = CharToString(tensor_name);
+  auto outputs = GetOutputs();
+  for (auto out : outputs) {
+    if (out.Name() == tensor_name_str) {
+      return out;
+    }
+  }
+
+  return MSTensor(nullptr);
+}
+
+Model::Model() : impl_(nullptr) {}
 Model::~Model() {}
 
-bool Model::CheckModelSupport(const std::string &device_type, ModelType) {
-  return Factory<ModelImpl>::Instance().CheckModelSupport(device_type);
-}
+bool Model::CheckModelSupport(enum DeviceType device_type, ModelType model_type) {
+  std::string device_type_str = GetDeviceTypeString(device_type);
+  if (!Factory<ModelImpl>::Instance().CheckModelSupport(device_type_str)) {
+    return false;
+  }
 
-}  // namespace mindspore::api
+  auto first_iter = kSupportedModelMap.find(device_type);
+  if (first_iter == kSupportedModelMap.end()) {
+    return false;
+  }
+
+  auto secend_iter = first_iter->second.find(model_type);
+  if (secend_iter == first_iter->second.end()) {
+    return false;
+  }
+
+  return true;
+}
+}  // namespace mindspore

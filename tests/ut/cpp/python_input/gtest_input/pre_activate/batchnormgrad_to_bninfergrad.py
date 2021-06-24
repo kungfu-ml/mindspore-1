@@ -15,11 +15,12 @@
 
 from mindspore.ops import Primitive
 from mindspore.ops.operations import _grad_ops as G
+from mindspore.ops import _constants as Constants
 
 batch_norm_grad = G.BatchNormGrad(is_training=False)
 bn_infer_grad = Primitive('BNInferGrad')
-make_tuple = Primitive('make_tuple')
-tuple_getitem = Primitive('tuple_getitem')
+make_tuple = Primitive('MakeTuple')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
 
 
 class FnDict:
@@ -37,19 +38,19 @@ def test_batchnormgrad_to_bninfergrad(tag):
     fns = FnDict()
 
     @fns
-    def before(input0, input1, input2, input3, input4):
-        res = batch_norm_grad(input0, input1, input2, input3, input4)
+    def before(input0, input1, input2, input3, input4, input5):
+        res = batch_norm_grad(input0, input1, input2, input3, input4, input5)
         res = tuple_getitem(res, 0)
         return res
 
     @fns
-    def after(input0, input1, input2, input3, input4):
+    def after(input0, input1, input2, input3, input4, input5):
         res = bn_infer_grad(input0, input2, input4)
         return make_tuple(res)
 
     @fns
-    def no_fusion(input0, input1, input2, input3, input4):
-        res = batch_norm_grad(input0, input1, input2, input3, input4)
+    def no_fusion(input0, input1, input2, input3, input4, input5):
+        res = batch_norm_grad(input0, input1, input2, input3, input4, input5)
         item0 = tuple_getitem(res, 0)
         item1 = tuple_getitem(res, 1)
         item2 = tuple_getitem(res, 2)

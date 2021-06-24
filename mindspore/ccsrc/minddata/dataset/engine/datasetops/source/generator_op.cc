@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,9 @@
 #include "minddata/dataset/engine/datasetops/source/generator_op.h"
 #include <iomanip>
 #include "minddata/dataset/core/global_context.h"
-#include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/data_buffer.h"
 #include "minddata/dataset/engine/execution_tree.h"
 #include "minddata/dataset/util/task_manager.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
@@ -43,22 +41,21 @@ Status GeneratorOp::Builder::SanityCheck() {
 Status GeneratorOp::Builder::Build(std::shared_ptr<GeneratorOp> *ptr) {
   RETURN_IF_NOT_OK(SanityCheck());
   *ptr = std::make_shared<GeneratorOp>(build_generator_function_, build_column_names_, build_column_types_,
-                                       build_prefetch_size_, build_buffer_size_, build_op_connector_size_);
+                                       build_prefetch_size_, build_buffer_size_, build_op_connector_size_, nullptr);
   return (*ptr)->Init();
 }
 
 GeneratorOp::GeneratorOp(py::function generator_function, std::vector<std::string> column_names,
                          std::vector<DataType> column_types, int32_t prefetch_size, int32_t buffer_size,
-                         int32_t connector_size)
-    : PipelineOp(connector_size),
+                         int32_t connector_size, std::shared_ptr<SamplerRT> sampler)
+    : PipelineOp(connector_size, std::move(sampler)),
       generator_function_(generator_function),
       column_names_(column_names),
       column_types_(column_types),
       prefetch_size_(prefetch_size),
       buffer_size_(buffer_size),
-      buffer_id_(0) {}
-
-GeneratorOp::~GeneratorOp() { this->Dealloc(); }
+      buffer_id_(0),
+      generator_counter_(0) {}
 
 void GeneratorOp::Print(std::ostream &out, bool show_all) const {
   if (!show_all) {
@@ -77,68 +74,75 @@ void GeneratorOp::Print(std::ostream &out, bool show_all) const {
     out << "\n\n";
   }
 }
-
-void GeneratorOp::Dealloc() noexcept {
-  // Setup GIL state
-  PyGILState_STATE gstate;
-  gstate = PyGILState_Ensure();
-  // GC the generator object within GIL
-  if (generator_function_.ref_count() == 1) generator_function_.dec_ref();
-  if (generator_.ref_count() == 1) (void)generator_.dec_ref();
-  // Release GIL
-  PyGILState_Release(gstate);
+// hand shake with Sampler, allow Sampler to call RandomAccessOp's functions to get NumRows
+Status GeneratorOp::InitSampler() {
+  if (sampler_ != nullptr) return sampler_->HandshakeRandomAccessOp(this);
+  return Status::OK();
 }
 
-// Reentrant init method.
-Status GeneratorOp::Init() {
-  // Reset BufferID
-  buffer_id_ = 0;
+// Invoke the generatorFunction to get generator object
+Status GeneratorOp::CreateGeneratorObject() {
   Status ret;
   {
     // Acquire Python GIL
     py::gil_scoped_acquire gil_acquire;
     if (Py_IsInitialized() == 0) {
-      return Status(StatusCode::kPythonInterpreterFailure, "Python Interpreter is finalized");
+      return Status(StatusCode::kMDPythonInterpreterFailure, "Python Interpreter is finalized");
     }
-    // Invoke the generatorFunction to get generator object
     try {
-      generator_ = generator_function_();
+      py::array sample_ids;
+      if (sampler_ != nullptr) {
+        // Sampler is not null which means the source is RandomAccessible
+        // get all samples and pass it to the Generator function
+        RETURN_IF_NOT_OK(sampler_->GetAllIdsThenReset(&sample_ids));
+        // If sampler is a user-defined python sampler, sample_ids will flow from python to c++ and back to python
+        generator_ = generator_function_(sample_ids);
+      } else {
+        generator_ = generator_function_();
+      }
     } catch (const py::error_already_set &e) {
-      ret = Status(StatusCode::kPyFuncException, e.what());
+      ret = Status(StatusCode::kMDPyFuncException, e.what());
     }
   }
   return ret;
 }
 
+// Reentrant init method.
+Status GeneratorOp::Init() {
+  buffer_id_ = 0;
+  RETURN_IF_NOT_OK(InitSampler());
+  return CreateGeneratorObject();
+}
+
 Status GeneratorOp::PyRowToTensorRow(py::object py_data, TensorRow *tensor_row) {
   if (!py::isinstance<py::tuple>(py_data)) {
-    return Status(StatusCode::kPyFuncException, __LINE__, __FILE__,
+    return Status(StatusCode::kMDPyFuncException, __LINE__, __FILE__,
                   "Invalid parameter, Generator should return a tuple of numpy arrays.");
   }
   py::tuple py_row = py_data.cast<py::tuple>();
   // Check if returned number of columns matches with column names
   if (py_row.size() != column_names_.size()) {
     return Status(
-      StatusCode::kPyFuncException, __LINE__, __FILE__,
+      StatusCode::kMDPyFuncException, __LINE__, __FILE__,
       "Invalid parameter, Generator should return same number of numpy arrays as specified in column names.");
   }
   // Iterate over two containers simultaneously for memory copy
   for (int i = 0; i < py_row.size(); ++i) {
     py::object ret_py_ele = py_row[i];
     if (!py::isinstance<py::array>(ret_py_ele)) {
-      return Status(StatusCode::kPyFuncException, __LINE__, __FILE__,
+      return Status(StatusCode::kMDPyFuncException, __LINE__, __FILE__,
                     "Invalid parameter, Generator should return a tuple of numpy arrays.");
     }
     std::shared_ptr<Tensor> tensor;
     RETURN_IF_NOT_OK(Tensor::CreateFromNpArray(ret_py_ele.cast<py::array>(), &tensor));
     if ((!column_types_.empty()) && (column_types_[i] != DataType::DE_UNKNOWN) &&
         (column_types_[i] != tensor->type())) {
-      return Status(StatusCode::kPyFuncException, __LINE__, __FILE__,
+      return Status(StatusCode::kMDPyFuncException, __LINE__, __FILE__,
                     "Invalid parameter, input column type is not same with output tensor type.");
     }
     tensor_row->push_back(tensor);
   }
-  return Status(StatusCode::kOK, "");
+  return Status(StatusCode::kSuccess, "");
 }
 
 Status GeneratorOp::FillBuffer(TensorQTable *tt) {
@@ -146,6 +150,7 @@ Status GeneratorOp::FillBuffer(TensorQTable *tt) {
     TensorRow row;
     RETURN_IF_NOT_OK(PyRowToTensorRow(generator_.attr("__next__")(), &row));
     tt->push_back(std::move(row));
+    generator_counter_++;
   }
   return Status::OK();
 }
@@ -188,6 +193,9 @@ Status GeneratorOp::operator()() {
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(wp_.Register(tree_->AllTasks()));
   std::unique_ptr<DataBuffer> fetched_buffer;
+  int64_t num_rows_sampled = sampler_ ? sampler_->CalculateNumSamples(num_rows_) : num_rows_;
+  RETURN_IF_NOT_OK(Init());
+
   bool eof = false;
   while (!eof) {
     // Create new buffer each iteration
@@ -197,7 +205,7 @@ Status GeneratorOp::operator()() {
     {
       py::gil_scoped_acquire gil_acquire;
       if (Py_IsInitialized() == 0) {
-        return Status(StatusCode::kPythonInterpreterFailure, "Python Interpreter is finalized");
+        return Status(StatusCode::kMDPythonInterpreterFailure, "Python Interpreter is finalized");
       }
       try {
         RETURN_IF_NOT_OK(FillBuffer(fetched_table.get()));
@@ -207,7 +215,14 @@ Status GeneratorOp::operator()() {
         e.restore();
         // Pop up non StopIteration Python Exception
         if (!eoe) {
-          return Status(StatusCode::kPyFuncException, __LINE__, __FILE__, e.what());
+          return Status(StatusCode::kMDPyFuncException, __LINE__, __FILE__, e.what());
+        }
+        if (num_rows_sampled != -1 && num_rows_sampled != generator_counter_) {
+          std::stringstream ss;
+          ss << "The actual amount of data read from generator " << generator_counter_
+             << " is different from generator.len " << num_rows_sampled
+             << ", you should adjust generator.len to make them match.";
+          return Status(StatusCode::kMDPyFuncException, __LINE__, __FILE__, ss.str());
         }
       }
     }
@@ -249,18 +264,16 @@ Status GeneratorOp::operator()() {
 Status GeneratorOp::Reset() {
   // Reset Op state
   MS_LOG(DEBUG) << Name() << " performing a self-reset.";
-  RETURN_IF_NOT_OK(this->Init());
+  // Reset BufferID
+  buffer_id_ = 0;
+  // Create new generator object
+  RETURN_IF_NOT_OK(CreateGeneratorObject());
   if (this->op_total_repeats() < 0) {
     // Wake up master thread
     wp_.Set();
   }
-  return Status(StatusCode::kOK, "GeneratorOp Reset Succeed");
-}
-
-// Visitor accept method for NodePass
-Status GeneratorOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<GeneratorOp>(), modified);
+  generator_counter_ = 0;
+  return Status(StatusCode::kSuccess, "GeneratorOp Reset Succeed");
 }
 
 Status GeneratorOp::ComputeColMap() {

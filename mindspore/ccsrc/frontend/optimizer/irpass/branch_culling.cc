@@ -62,7 +62,7 @@ bool InConvertWhiteList(const AnfNodePtr &node, size_t index) {
                                                                         {prim::kPrimCast, {2}},
                                                                         {prim::kPrimTranspose, {2}},
                                                                         {prim::kPrimOneHot, {2}},
-                                                                        {prim::kPrimGatherV2, {3}},
+                                                                        {prim::kPrimGather, {3}},
                                                                         {prim::kPrimReshape, {2}},
                                                                         {prim::kPrimAssign, {1}},
                                                                         {prim::kPrimAssignAdd, {1}},
@@ -84,7 +84,7 @@ bool InConvertWhiteList(const AnfNodePtr &node, size_t index) {
     }
   }
 
-  std::vector<PrimitivePtr> adapter_convert_ops = {prim::kPrimDepend, prim::kPrimControlDepend};
+  std::vector<PrimitivePtr> adapter_convert_ops = {prim::kPrimDepend, prim::kPrimControlDepend, prim::kPrimLoad};
   for (auto &item : adapter_convert_ops) {
     if (IsPrimitiveCNode(node, item)) {
       return true;
@@ -149,6 +149,10 @@ FuncGraphPtr TransformGraphCondBranchNodes(
     // if the apply input does not belong to graph, insert a switch node
     for (size_t index = 0; index < inputs.size(); index++) {
       auto input_node = inputs[index];
+      if (HasAbstractMonad(input_node)) {
+        // Do not guard with switch for monad inputs.
+        continue;
+      }
       MS_EXCEPTION_IF_NULL(input_node);
       // for some ops input should not guard it with switch
       if (InConvertWhiteList(node, index)) {
@@ -508,7 +512,7 @@ bool GraphOutputCompatible(const AbstractBasePtr &true_branch_abs, const Abstrac
     abstract::AbstractTuplePtr false_branch_tuple = false_branch_abs->cast<abstract::AbstractTuplePtr>();
     if (true_branch_tuple->elements().size() != false_branch_tuple->elements().size()) {
       MS_LOG(ERROR) << "true branch size:" << true_branch_tuple->elements().size()
-                    << ", not equal to false banch size:" << false_branch_tuple->elements().size() << " ";
+                    << ", not equal to false branch size:" << false_branch_tuple->elements().size() << " ";
       return false;
     }
     bool all_compatible = true;

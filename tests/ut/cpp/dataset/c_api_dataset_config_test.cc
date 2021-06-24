@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,7 +42,7 @@ TEST_F(MindDataTestPipeline, TestConfigSetting) {
   EXPECT_EQ(load_status, true);
 
   // Test configuration loaded
-  EXPECT_EQ(config::get_num_parallel_workers(), 4);
+  EXPECT_EQ(config::get_num_parallel_workers(), 8);
   EXPECT_EQ(config::get_prefetch_size(), 16);
   EXPECT_EQ(config::get_seed(), 5489);
   EXPECT_EQ(config::get_monitor_sampling_interval(), 15);
@@ -128,7 +128,7 @@ TEST_F(MindDataTestPipeline, TestShuffleWithSeed) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
   EXPECT_NE(row.find("text"), row.end());
 
@@ -137,12 +137,16 @@ TEST_F(MindDataTestPipeline, TestShuffleWithSeed) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
+
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -189,7 +193,7 @@ TEST_F(MindDataTestPipeline, TestCallShuffleTwice) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
   EXPECT_NE(row.find("text"), row.end());
 
@@ -199,16 +203,20 @@ TEST_F(MindDataTestPipeline, TestCallShuffleTwice) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
+
     // The first three samples are the first copy and the rest are the second
     if (i < 3) {
       first_copy.push_back(ss);
     } else {
       second_copy.push_back(ss);
     }
+
     i++;
     iter->GetNextRow(&row);
   }

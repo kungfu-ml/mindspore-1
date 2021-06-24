@@ -16,7 +16,6 @@
 
 #include <iostream>
 #include <memory>
-#include "src/ops/primitive_c.h"
 #include "mindspore/lite/include/context.h"
 #include "src/common/log_adapter.h"
 #include "common/common_test.h"
@@ -79,15 +78,18 @@ TEST_F(TestPoolingGradFp32, AvgPoolingGradFp32) {
 
   auto output_data = new float[output_data_size];
   ASSERT_NE(output_data, nullptr);
+
   // warm up loop
   for (int i = 0; i < 3; i++) {
-    AvgPoolingGrad(input_data, output_data, pooling_param, 1);
+    std::fill(output_data, output_data + output_data_size, 0.f);
+    AvgPoolingGrad(input_data, output_data, pooling_param->output_batch_, pooling_param);
   }
 
   int loop_count = 100;
   auto time_start = mindspore::lite::GetTimeUs();
   for (int i = 0; i < loop_count; i++) {
-    AvgPoolingGrad(input_data, output_data, pooling_param, 1);
+    std::fill(output_data, output_data + output_data_size, 0.f);
+    AvgPoolingGrad(input_data, output_data, pooling_param->output_batch_, pooling_param);
   }
   auto time_end = mindspore::lite::GetTimeUs();
   auto cost = time_end - time_start;
@@ -152,10 +154,10 @@ TEST_F(TestPoolingGradFp32, AvgPoolingKernelGradFp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_AvgPoolGrad};
   auto creator = lite::KernelRegistry::GetInstance()->GetCreator(desc);
   ASSERT_NE(creator, nullptr);
-  auto kernel_obj = creator(inputs, outputs, reinterpret_cast<OpParameter *>(pooling_param), &context, desc, nullptr);
+  auto kernel_obj = creator(inputs, outputs, reinterpret_cast<OpParameter *>(pooling_param), &context, desc);
   ASSERT_NE(kernel_obj, nullptr);
 
   kernel_obj->Run();
@@ -221,10 +223,10 @@ TEST_F(TestPoolingGradFp32, AvgPoolingBatchGradFp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_AvgPoolGrad};
   auto creator = lite::KernelRegistry::GetInstance()->GetCreator(desc);
   ASSERT_NE(creator, nullptr);
-  auto kernel_obj = creator(inputs, outputs, reinterpret_cast<OpParameter *>(pooling_param), &context, desc, nullptr);
+  auto kernel_obj = creator(inputs, outputs, reinterpret_cast<OpParameter *>(pooling_param), &context, desc);
   ASSERT_NE(kernel_obj, nullptr);
 
   kernel_obj->Run();
@@ -289,10 +291,10 @@ TEST_F(TestPoolingGradFp32, AvgPoolGradStride2Fp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey pool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey pool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_AvgPoolGrad};
   auto pool_creator = lite::KernelRegistry::GetInstance()->GetCreator(pool_desc);
   ASSERT_NE(pool_creator, nullptr);
-  auto kernel = pool_creator(inputs, outputs, reinterpret_cast<OpParameter *>(pool), &context, pool_desc, nullptr);
+  auto kernel = pool_creator(inputs, outputs, reinterpret_cast<OpParameter *>(pool), &context, pool_desc);
   ASSERT_NE(kernel, nullptr);
 
   kernel->Init();
@@ -356,10 +358,10 @@ TEST_F(TestPoolingGradFp32, AvgPoolGradStride3Fp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey pool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey pool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_AvgPoolGrad};
   auto pool_creator = lite::KernelRegistry::GetInstance()->GetCreator(pool_desc);
   ASSERT_NE(pool_creator, nullptr);
-  auto kernel = pool_creator(inputs, outputs, reinterpret_cast<OpParameter *>(pool), &context, pool_desc, nullptr);
+  auto kernel = pool_creator(inputs, outputs, reinterpret_cast<OpParameter *>(pool), &context, pool_desc);
   ASSERT_NE(kernel, nullptr);
 
   kernel->Init();
@@ -407,18 +409,21 @@ TEST_F(TestPoolingGradFp32, MaxPoolingGradFp32) {
   std::string dx_path = "./test_data/pooling/maxpoolgradfp32_1_dx_1_28_28_3.bin";
   auto dx_data = reinterpret_cast<float *>(mindspore::lite::ReadFile(dx_path.c_str(), &input_size));
   ASSERT_NE(dx_data, nullptr);
-
+  int in_batch_size =
+    pooling_param->input_h_ * pooling_param->input_w_ * pooling_param->input_channel_ * pooling_param->input_batch_;
   auto output_data = new float[output_data_size];
   ASSERT_NE(output_data, nullptr);
   // warm up loop
   for (int i = 0; i < 3; i++) {
-    MaxPoolingGrad(in_data, dx_data, dy_data, output_data, pooling_param, 1);
+    std::fill(output_data, output_data + in_batch_size, 0.f);
+    MaxPoolingGrad(in_data, dy_data, output_data, pooling_param->output_batch_, pooling_param);
   }
 
   int loop_count = 100;
   auto time_start = mindspore::lite::GetTimeUs();
   for (int i = 0; i < loop_count; i++) {
-    MaxPoolingGrad(in_data, dx_data, dy_data, output_data, pooling_param, 1);
+    std::fill(output_data, output_data + in_batch_size, 0.f);
+    MaxPoolingGrad(in_data, dy_data, output_data, pooling_param->output_batch_, pooling_param);
   }
   auto time_end = mindspore::lite::GetTimeUs();
   auto cost = time_end - time_start;
@@ -486,11 +491,11 @@ TEST_F(TestPoolingGradFp32, MaxPoolGradBatchFp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey maxpool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey maxpool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_MaxPoolGrad};
   auto maxpool_creator = lite::KernelRegistry::GetInstance()->GetCreator(maxpool_desc);
   ASSERT_NE(maxpool_creator, nullptr);
-  auto kernel = maxpool_creator(maxpool_inputs, maxpool_outputs, reinterpret_cast<OpParameter *>(maxpool), &context,
-                                maxpool_desc, nullptr);
+  auto kernel =
+    maxpool_creator(maxpool_inputs, maxpool_outputs, reinterpret_cast<OpParameter *>(maxpool), &context, maxpool_desc);
   ASSERT_NE(kernel, nullptr);
 
   kernel->Init();
@@ -564,11 +569,11 @@ TEST_F(TestPoolingGradFp32, MaxPoolGradStride2Fp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey maxpool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey maxpool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_MaxPoolGrad};
   auto maxpool_creator = lite::KernelRegistry::GetInstance()->GetCreator(maxpool_desc);
   ASSERT_NE(maxpool_creator, nullptr);
-  auto kernel = maxpool_creator(maxpool_inputs, maxpool_outputs, reinterpret_cast<OpParameter *>(maxpool), &context,
-                                maxpool_desc, nullptr);
+  auto kernel =
+    maxpool_creator(maxpool_inputs, maxpool_outputs, reinterpret_cast<OpParameter *>(maxpool), &context, maxpool_desc);
   ASSERT_NE(kernel, nullptr);
 
   kernel->Init();
@@ -642,11 +647,11 @@ TEST_F(TestPoolingGradFp32, MaxPoolGradStride3Fp32) {
   context.thread_num_ = 1;
   ASSERT_EQ(lite::RET_OK, context.Init());
 
-  kernel::KernelKey maxpool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_PoolingGrad};
+  kernel::KernelKey maxpool_desc = {kernel::kCPU, TypeId::kNumberTypeFloat32, schema::PrimitiveType_MaxPoolGrad};
   auto maxpool_creator = lite::KernelRegistry::GetInstance()->GetCreator(maxpool_desc);
   ASSERT_NE(maxpool_creator, nullptr);
-  auto kernel = maxpool_creator(maxpool_inputs, maxpool_outputs, reinterpret_cast<OpParameter *>(maxpool), &context,
-                                maxpool_desc, nullptr);
+  auto kernel =
+    maxpool_creator(maxpool_inputs, maxpool_outputs, reinterpret_cast<OpParameter *>(maxpool), &context, maxpool_desc);
   ASSERT_NE(kernel, nullptr);
 
   kernel->Init();

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -102,9 +102,11 @@ Status BatchNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops)
     node_ops->push_back(project_op);
   }
 
-  node_ops->push_back(std::make_shared<BatchOp>(batch_size_, drop_remainder_, pad_, connector_que_size_, num_workers_,
-                                                in_col_names_, out_col_names_, batch_size_func_, batch_map_func_,
-                                                pad_map_));
+  auto op = std::make_shared<BatchOp>(batch_size_, drop_remainder_, pad_, connector_que_size_, num_workers_,
+                                      in_col_names_, out_col_names_, batch_size_func_, batch_map_func_, pad_map_);
+  op->set_total_repeats(GetTotalRepeats());
+  op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
+  node_ops->push_back(op);
 #else
   node_ops->push_back(std::make_shared<BatchOp>(batch_size_, drop_remainder_, pad_, connector_que_size_, num_workers_,
                                                 in_col_names_, pad_map_));
@@ -142,15 +144,30 @@ Status BatchNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_
 }
 
 // Visitor accepting method for IRNodePass
-Status BatchNode::Accept(IRNodePass *p, bool *modified) {
+Status BatchNode::Accept(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->Visit(shared_from_base<BatchNode>(), modified);
 }
 
 // Visitor accepting method for IRNodePass
-Status BatchNode::AcceptAfter(IRNodePass *p, bool *modified) {
+Status BatchNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->VisitAfter(shared_from_base<BatchNode>(), modified);
+}
+
+Status BatchNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["num_parallel_workers"] = num_workers_;
+  args["batch_size"] = batch_size_;
+  args["drop_remainder"] = drop_remainder_;
+#ifdef ENABLE_PYTHON
+  args["input_columns"] = in_col_names_;
+  args["output_columns"] = out_col_names_;
+  args["column_order"] = col_order_;
+  if (batch_map_func_ != nullptr) args["per_batch_map"] = "pyfunc";
+#endif
+  *out_json = args;
+  return Status::OK();
 }
 }  // namespace dataset
 }  // namespace mindspore

@@ -14,14 +14,15 @@
 # ============================================================================
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
+from mindspore.ops import _constants as Constants
 
 Sub = P.Sub()
 Mul = P.Mul()
 RealDiv = P.RealDiv()
 Select = P.Select()
 Greater = P.Greater()
-make_tuple = Primitive('make_tuple')
-tuple_getitem = Primitive('tuple_getitem')
+make_tuple = Primitive('MakeTuple')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
 LambUpdateWithLrV2 = Primitive('LambUpdateWithLrV2')
 
 

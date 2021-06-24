@@ -16,11 +16,9 @@
 
 #include "tools/optimizer/fusion/conv_transform_fusion.h"
 #include <memory>
-#include "src/ops/primitive_c.h"
-#include "src/ops/conv2d.h"
-#include "src/ops/depthwise_conv2d.h"
+#include "ops/fusion/conv2d_fusion.h"
+#include "ops/fusion/conv2d_transpose_fusion.h"
 #include "src/param_value_lite.h"
-#include "schema/inner/model_generated.h"
 #include "tools/optimizer/common/gllo_utils.h"
 #include "securec/include/securec.h"
 
@@ -30,31 +28,79 @@ constexpr size_t kConvWeightIndex = 2;
 constexpr size_t kConvBiasIndex = 3;
 constexpr size_t kConvNoBiasLen = 3;
 constexpr size_t kConvWithBiasLen = 4;
-
-int Get_Kenrnel_nums(const CNodePtr &conv_node) {
+int GetOutChannels(const CNodePtr &conv_node) {
   MS_ASSERT(conv_node != nullptr);
-  auto value_primitive = conv_node->input(0);
-  auto value_node = value_primitive->cast<ValueNodePtr>();
+  auto value_node = conv_node->input(0);
   MS_ASSERT(value_node != nullptr);
-  auto value = value_node->value();
-  MS_ASSERT(value != nullptr);
-  auto primitive = value->cast<PrimitiveCPtr>();
-  MS_ASSERT(primitive != nullptr);
-  auto type = (schema::PrimitiveType)primitive->Type();
+  if (CheckPrimitiveType(conv_node, prim::kPrimConv2DFusion)) {
+    auto conv_prim = GetValueNode<std::shared_ptr<ops::Conv2DFusion>>(value_node);
+    MS_ASSERT(conv_prim != nullptr);
+    if (conv_prim->GetAttr(ops::kOutChannel) == nullptr) {
+      return 0;
+    }
+    return conv_prim->get_out_channel();
+  } else if (CheckPrimitiveType(conv_node, prim::kPrimConv2dTransposeFusion)) {
+    auto conv_prim = GetValueNode<std::shared_ptr<ops::Conv2dTransposeFusion>>(value_node);
+    MS_ASSERT(conv_prim != nullptr);
+    if (conv_prim->GetAttr(ops::kOutChannel) == nullptr) {
+      return 0;
+    }
+    return conv_prim->get_out_channel();
+  }
+  return 0;
+}
 
-  if (type == schema::PrimitiveType_Conv2D) {
-    MS_ASSERT(utils::isa<std::shared_ptr<mindspore::lite::Conv2D>>(primitive));
-    auto primc = utils::cast<std::shared_ptr<mindspore::lite::Conv2D>>(primitive);
-    MS_ASSERT(primc != nullptr);
-    return primc->GetChannelOut();
-  } else if (type == schema::PrimitiveType_DepthwiseConv2D) {
-    MS_ASSERT(utils::isa<std::shared_ptr<mindspore::lite::DepthwiseConv2D>>(primitive));
-    auto primc = utils::cast<std::shared_ptr<mindspore::lite::DepthwiseConv2D>>(primitive);
-    MS_ASSERT(primc != nullptr);
-    return primc->GetChannelMultiplier() * primc->GetChannelIn();
+void GenerateNewWeightConv2D(float *dst_weight, const float *conv_weight, const float *scale_weight, FmkType fmk,
+                             int weight_shape_size, int kernel_num) {
+  if (dst_weight == nullptr || conv_weight == nullptr || scale_weight == nullptr) {
+    return;
+  }
+  if (fmk == lite::converter::FmkType_TF) {
+    for (int i = 0; i < weight_shape_size; i++) {
+      dst_weight[i] = conv_weight[i] * scale_weight[i % kernel_num];
+    }
   } else {
-    MS_LOG(ERROR) << "Unsupported opType, " << type;
-    return 0;
+    MS_ASSERT(kernel_num > 0);
+    auto kernel_size = weight_shape_size / kernel_num;
+    for (int i = 0; i < kernel_num; i++) {
+      for (int j = 0; j < kernel_size; j++) {
+        dst_weight[i * kernel_size + j] = conv_weight[i * kernel_size + j] * scale_weight[i];
+      }
+    }
+  }
+}
+
+void GenerateNewWeightConv2DTranspose(float *dst_weight, const float *scale_weight,
+                                      const ParamValueLitePtr &weight_tensor, FmkType fmk, int group, int kernel_num) {
+  if (dst_weight == nullptr || scale_weight == nullptr || weight_tensor == nullptr) {
+    return;
+  }
+  auto weight_data = reinterpret_cast<float *>(weight_tensor->tensor_addr());
+  if (fmk == lite::converter::FmkType_TF) {
+    auto cin_group = weight_tensor->tensor_shape()[3] / group;
+    int area_size = weight_tensor->tensor_shape()[0] * weight_tensor->tensor_shape()[1];
+    for (int j = 0; j < area_size; j++) {
+      for (int i = 0; i < kernel_num; ++i) {
+        for (int k = 0; k < cin_group; ++k) {
+          dst_weight[k + i * cin_group + j * kernel_num * cin_group] =
+            weight_data[k + i * cin_group + j * kernel_num * cin_group] * scale_weight[i];
+        }
+      }
+    }
+  } else {
+    MS_ASSERT(group > 0);
+    auto cin_group = weight_tensor->tensor_shape()[0] / group;
+    int area_size = weight_tensor->tensor_shape()[2] * weight_tensor->tensor_shape()[3];
+    int cout_size = kernel_num * area_size;
+    for (int k = 0; k < cin_group; ++k) {
+      for (int i = 0; i < kernel_num; ++i) {
+        auto row_addr = weight_data + k * cout_size + i * area_size;
+        auto new_row_addr = dst_weight + k * cout_size + i * area_size;
+        for (int j = 0; j < area_size; j++) {
+          new_row_addr[j] = row_addr[j] * scale_weight[i];
+        }
+      }
+    }
   }
 }
 }  // namespace
@@ -78,7 +124,7 @@ const AnfNodePtr ConvTransformFusion::Process(const FuncGraphPtr &func_graph, co
   }
 
   auto abstr = transform_node->abstract();
-  int kernel_nums = Get_Kenrnel_nums(conv_node);
+  int kernel_nums = GetOutChannels(conv_node);
   if (kernel_nums <= 0) {
     MS_LOG(INFO) << "Unsupported conv node, " << conv_node->DebugString();
     return node;
@@ -143,26 +189,47 @@ void ConvTransformFusion::GenNewConvTensor(const FuncGraphPtr &func_graph, const
     return;
   }
   if (!conv_weight_node->isa<Parameter>()) {
-    MS_LOG(ERROR) << "scale weight node not paramter node";
+    MS_LOG(ERROR) << "scale weight node not parameter node";
     lite::ReturnCode::GetSingleReturnCode()->UpdateReturnCode(lite::RET_INVALID_OP_ATTR);
     return;
   }
   if (conv_bias_node != nullptr && !conv_bias_node->isa<Parameter>()) {
-    MS_LOG(ERROR) << "scale bias node not paramter node";
+    MS_LOG(ERROR) << "scale bias node not parameter node";
     lite::ReturnCode::GetSingleReturnCode()->UpdateReturnCode(lite::RET_INVALID_OP_ATTR);
     return;
   }
-
   auto conv_weight_param = conv_weight_node->cast<ParameterPtr>()->default_param();
   auto weight_tensor = std::dynamic_pointer_cast<ParamValueLite>(conv_weight_param);
-  auto weight_data = reinterpret_cast<float *>(weight_tensor->tensor_addr());
   if (kernel_num <= 0) {
     MS_LOG(ERROR) << "kernel num less than 0";
     lite::ReturnCode::GetSingleReturnCode()->UpdateReturnCode(lite::RET_INVALID_OP_ATTR);
     return;
   }
-  auto kernel_size = weight_tensor->tensor_shape_size() / kernel_num;
-  CalNewWeightTensor(weight_data, kernel_num, kernel_size, trans_scale);
+  auto temp_weight_data = new (std::nothrow) float[weight_tensor->tensor_shape_size()];
+  if (temp_weight_data == nullptr) {
+    MS_LOG(ERROR) << "new ParamValueLite failed";
+    lite::ReturnCode::GetSingleReturnCode()->UpdateReturnCode(lite::RET_ERROR);
+    return;
+  }
+  auto new_weight_tensor = std::make_shared<ParamValueLite>();
+  if (new_weight_tensor == nullptr) {
+    delete temp_weight_data;
+    MS_LOG(ERROR) << "new ParamValueLite failed";
+    return;
+  }
+  new_weight_tensor->set_tensor_size(weight_tensor->tensor_size());
+  new_weight_tensor->set_tensor_shape(weight_tensor->tensor_shape());
+  new_weight_tensor->set_tensor_type(weight_tensor->tensor_type());
+  new_weight_tensor->set_format(weight_tensor->format());
+  auto ret = memcpy_s(temp_weight_data, weight_tensor->tensor_shape_size() * sizeof(float),
+                      weight_tensor->tensor_addr(), weight_tensor->tensor_shape_size() * sizeof(float));
+  if (ret != EOK) {
+    delete temp_weight_data;
+    MS_LOG(ERROR) << "memcpy_s error:" << ret;
+    return;
+  }
+  new_weight_tensor->SetTensorData(temp_weight_data, new_weight_tensor->tensor_size());
+  CalNewWeightTensor(conv_node, new_weight_tensor, kernel_num, trans_scale);
   float *bias_data = nullptr;
   // conv has bias,bias_flag true
   bool bias_flag = false;
@@ -175,6 +242,7 @@ void ConvTransformFusion::GenNewConvTensor(const FuncGraphPtr &func_graph, const
     bias_data = new (std::nothrow) float[kernel_num];
     if (bias_data == nullptr) {
       MS_LOG(ERROR) << "tensor_data is nullptr";
+      delete temp_weight_data;
       return;
     }
   }
@@ -184,31 +252,53 @@ void ConvTransformFusion::GenNewConvTensor(const FuncGraphPtr &func_graph, const
     bias_node->set_name(conv_node->fullname_with_scope() + "_bias");
     conv_node->add_input(bias_node);
   }
+  auto new_weight_paramter = func_graph->add_parameter();
+  if (new_weight_paramter == nullptr) {
+    MS_LOG(ERROR) << "new_weight_paramter is nullptr";
+    delete temp_weight_data;
+    return;
+  }
+  new_weight_paramter->set_default_param(new_weight_tensor);
+  new_weight_paramter->set_abstract(conv_weight_node->abstract());
+  new_weight_paramter->set_name(conv_node->fullname_with_scope() + conv_weight_node->fullname_with_scope());
+  conv_node->set_input(kConvWeightIndex, new_weight_paramter);
 }
-void ConvTransformFusion::CalNewWeightTensor(float *weight_data, int kernel_num, int kernel_size,
-                                             const float *trans_scale) const {
+
+void ConvTransformFusion::CalNewWeightTensor(const CNodePtr &conv_node, const ParamValueLitePtr &weight_tensor,
+                                             int kernel_num, const float *trans_scale) const {
   MS_ASSERT(weight_data != nullptr);
   MS_ASSERT(trans_scale != nullptr);
-  auto tmp_weight_data = new (std::nothrow) float[kernel_num * kernel_size];
+  if (weight_tensor->tensor_shape().size() != 4) {
+    MS_LOG(ERROR) << "weight tensor shape error";
+    return;
+  }
+  auto weight_shape_size = weight_tensor->tensor_shape_size();
+  auto tmp_weight_data = new (std::nothrow) float[weight_shape_size];
   if (tmp_weight_data == nullptr) {
     lite::ReturnCode::GetSingleReturnCode()->UpdateReturnCode(lite::RET_MEMORY_FAILED);
     return;
   }
   MS_ASSERT(new_weight_data != nullptr);
-  auto data_size = kernel_num * kernel_size * sizeof(float);
+  auto data_size = weight_shape_size * sizeof(float);
   if (0 != memset_s(tmp_weight_data, data_size, 0, data_size)) {
     MS_LOG(ERROR) << "memset newWeightData failed";
     delete[] tmp_weight_data;
     lite::ReturnCode::GetSingleReturnCode()->UpdateReturnCode(lite::RET_MEMORY_FAILED);
     return;
   }
-
-  for (int i = 0; i < kernel_num; i++) {
-    for (int j = 0; j < kernel_size; j++) {
-      tmp_weight_data[i * kernel_size + j] = weight_data[i * kernel_size + j] * trans_scale[i];
-    }
+  auto weight_data = reinterpret_cast<float *>(weight_tensor->tensor_addr());
+  auto conv_prim = GetValueNode<PrimitivePtr>(conv_node->input(0));
+  MS_ASSERT(conv_prim != nullptr);
+  bool is_depth_wise =
+    conv_prim->GetAttr(ops::kIsDepthWise) != nullptr && GetValue<bool>(conv_prim->GetAttr(ops::kIsDepthWise));
+  if (CheckPrimitiveType(conv_node, prim::kPrimConv2DFusion)) {
+    GenerateNewWeightConv2D(tmp_weight_data, weight_data, trans_scale, fmk_type_, weight_shape_size, kernel_num);
+  } else if (CheckPrimitiveType(conv_node, prim::kPrimConv2dTransposeFusion) && !is_depth_wise) {
+    auto conv_primc = conv_prim->cast<std::shared_ptr<ops::Conv2dTransposeFusion>>();
+    MS_ASSERT(conv_primc != nullptr);
+    auto group = conv_primc->GetAttr(ops::kGroup) == nullptr ? 1 : conv_primc->get_group();
+    GenerateNewWeightConv2DTranspose(tmp_weight_data, trans_scale, weight_tensor, fmk_type_, group, kernel_num);
   }
-
   auto ret = memcpy_s(weight_data, data_size, tmp_weight_data, data_size);
   if (ret != EOK) {
     MS_LOG(ERROR) << "memcpy error: " << ret;

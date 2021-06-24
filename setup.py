@@ -23,7 +23,7 @@ from setuptools import setup, find_packages
 from setuptools.command.egg_info import egg_info
 from setuptools.command.build_py import build_py
 
-version = '1.1.0'
+version = '1.2.0'
 
 backend_policy = os.getenv('BACKEND_POLICY')
 device_target = os.getenv('BACKEND_TARGET')
@@ -40,7 +40,6 @@ def _read_file(filename):
 
 
 readme = _read_file('README.md')
-release = _read_file('RELEASE.md')
 
 
 def _write_version(file):
@@ -109,19 +108,20 @@ def build_dependencies():
 build_dependencies()
 
 required_package = [
-    'numpy >= 1.17.0, <= 1.17.5',
+    'numpy >= 1.17.0',
     'protobuf >= 3.8.0',
     'asttokens >= 1.1.13',
     'pillow >= 6.2.0',
-    'scipy >= 1.5.3',
+    'scipy >= 1.5.2',
     'easydict >= 1.9',
     'sympy >= 1.4',
-    'cffi >= 1.13.2',
+    'cffi >= 1.12.3',
     'wheel >= 0.32.0',
     'decorator >= 4.4.0',
     'setuptools >= 40.8.0',
     'astunparse >= 1.6.3',
-    'packaging >= 20.0'
+    'packaging >= 20.0',
+    'psutil >= 5.6.1'
 ]
 
 package_data = {
@@ -129,6 +129,7 @@ package_data = {
         '*.so*',
         '*.pyd',
         '*.dll',
+        'bin/*',
         'lib/*.so*',
         'lib/*.a',
         'lib/*.dylib*',
@@ -161,24 +162,6 @@ def update_permissions(path):
             file_fullpath = os.path.join(dirpath, filename)
             os.chmod(file_fullpath, stat.S_IREAD)
 
-def bin_files():
-    """
-    Gets the binary files to be installed.
-    """
-    data_files = []
-    binary_files = []
-
-    cache_server_bin = os.path.join('mindspore', 'bin', 'cache_server')
-    if not os.path.exists(cache_server_bin):
-        return data_files
-    binary_files.append(cache_server_bin)
-    cache_admin_bin = os.path.join('mindspore', 'bin', 'cache_admin')
-    if not os.path.exists(cache_admin_bin):
-        return data_files
-    binary_files.append(cache_admin_bin)
-    data_files.append(('bin', binary_files))
-    return data_files
-
 
 class EggInfo(egg_info):
     """Egg info."""
@@ -196,7 +179,7 @@ class BuildPy(build_py):
         super().run()
         mindspore_dir = os.path.join(pkg_dir, 'build', 'lib', 'mindspore')
         update_permissions(mindspore_dir)
-        mindspore_dir = os.path.join(pkg_dir, 'build', 'lib', 'akg')
+        mindspore_dir = os.path.join(pkg_dir, 'build', 'lib', 'mindspore', '_akg')
         update_permissions(mindspore_dir)
 
 
@@ -206,22 +189,26 @@ setup(
     author='The MindSpore Authors',
     author_email='contact@mindspore.cn',
     url='https://www.mindspore.cn',
-    download_url='https://gitee.com/mindspore/mindspore/tags',
+    download_url='https://github.com/mindspore-ai/mindspore/tags',
     project_urls={
-        'Sources': 'https://gitee.com/mindspore/mindspore',
-        'Issue Tracker': 'https://gitee.com/mindspore/mindspore/issues',
+        'Sources': 'https://github.com/mindspore-ai/mindspore',
+        'Issue Tracker': 'https://github.com/mindspore-ai/mindspore/issues',
     },
     description='MindSpore is a new open source deep learning training/inference '
     'framework that could be used for mobile, edge and cloud scenarios.',
-    long_description="\n\n".join([readme, release]),
+    long_description=readme,
     long_description_content_type="text/markdown",
-    data_files=bin_files(),
     packages=find_packages(),
     package_data=package_data,
     include_package_data=True,
     cmdclass={
         'egg_info': EggInfo,
         'build_py': BuildPy,
+    },
+    entry_points={
+        'console_scripts': [
+            'cache_admin=mindspore.dataset.engine.cache_admin:main',
+        ],
     },
     python_requires='>=3.7',
     install_requires=required_package,

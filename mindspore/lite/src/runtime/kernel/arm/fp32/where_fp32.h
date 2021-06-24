@@ -20,7 +20,7 @@
 #include "src/lite_kernel.h"
 
 #include "include/context.h"
-#include "nnacl/where.h"
+#include "mindspore/lite/nnacl/fp32/where_fp32.h"
 #include "src/runtime/kernel/arm/base/layout_transform.h"
 
 using mindspore::lite::InnerContext;
@@ -29,16 +29,18 @@ namespace mindspore::kernel {
 class WhereCPUKernel : public LiteKernel {
  public:
   WhereCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                 const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                 const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive), ctx_(ctx), thread_count_(ctx->thread_num_) {
+                 const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx), ctx_(ctx), thread_count_(ctx->thread_num_) {
     where_param_ = reinterpret_cast<WhereParameter *>(op_parameter_);
   }
   ~WhereCPUKernel() = default;
 
   int Init() override;
+  int PreProcess() override;
   int ReSize() override { return 0; }
   int Run() override;
+  int RunWithSingleInput();
+  int RunWithTripleInputs();
   int DoExcute(int task_id);
 
  protected:
@@ -47,10 +49,10 @@ class WhereCPUKernel : public LiteKernel {
   WhereParameter *where_param_;
 
  private:
-  bool *input_data;
-  float *input_data1;
-  float *input_data2;
-  float *output_data;
+  bool *condition_;
+  float *x_;
+  float *y_;
+  float *output_data_;
 };
 }  // namespace mindspore::kernel
 #endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_WHERE_H_

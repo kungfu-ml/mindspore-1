@@ -55,7 +55,7 @@ Tiny-DarkNet是Joseph Chet Redmon等人提出的一个16层的针对于经典的
 
 <!-- # [Features](#contents)
 
-## [Distrubuted](#contents)
+## [Distributed](#contents)
 
 <!-- 不同的机器有同一个模型的多个副本，每个机器分配到不同的数据，然后将所有机器的计算结果按照某种方式合并 -->
 
@@ -64,7 +64,7 @@ Tiny-DarkNet是Joseph Chet Redmon等人提出的一个16层的针对于经典的
 # [环境要求](#目录)
 
 - 硬件（Ascend）
-    - 请准备具有Ascend处理器的硬件环境.如果想使用Ascend资源，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) 至ascend@huawei.com. 当收到许可即可使用Ascend资源.
+    - 请准备具有Ascend处理器的硬件环境.
 - 框架
     - [MindSpore](https://www.mindspore.cn/install/en)
 - 更多的信息请访问以下链接：
@@ -79,7 +79,7 @@ Tiny-DarkNet是Joseph Chet Redmon等人提出的一个16层的针对于经典的
 
   ```python
   # 单卡训练
-  bash ./scripts/run_standalone_train.sh
+  bash ./scripts/run_standalone_train.sh 0
 
   # 分布式训练
   bash ./scripts/run_distribute_train.sh rank_table.json
@@ -172,7 +172,7 @@ Tiny-DarkNet是Joseph Chet Redmon等人提出的一个16层的针对于经典的
 - 在Ascend资源上运行：
 
   ```python
-  bash ./scripts/run_standalone_train.sh
+  bash ./scripts/run_standalone_train.sh 0
   ```
 
   上述的命令将运行在后台中，可以通过 `train.log` 文件查看运行结果.

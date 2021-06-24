@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,14 +15,24 @@
 
 """debug_ops"""
 from types import FunctionType, MethodType
+
+from mindspore import context
 from ..._checkparam import Validator as validator
 from ..._checkparam import Rel
 from ...common import dtype as mstype
 from ..primitive import prim_attr_register, PrimitiveWithInfer
 
 
+def _check_mode(class_name):
+    """Check for PyNative mode."""
+    mode = context.get_context('mode')
+    if mode == context.PYNATIVE_MODE:
+        raise RuntimeError(f'{class_name} operator does not support PyNative mode.')
+
+
 def _check_summary_param(name, value, class_name):
     """Checks the name and value is valid for summary."""
+    _check_mode(class_name)
     n_type = name['dtype']
     n_value = name['value']
     validator.check_value_type('name', n_type, [type(mstype.string)], class_name)
@@ -48,15 +58,23 @@ class ScalarSummary(PrimitiveWithInfer):
         - **name** (str) - The name of the input variable, it must not be an empty string.
         - **value** (Tensor) - The value of scalar, and the shape of value must be [] or [1].
 
+    Raises:
+        TypeError: If `name` is not a str.
+        TypeError: If `value` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
+        >>> import mindspore.nn as nn
+        >>> import mindspore.ops as ops
+        >>>
+        >>>
         >>> class SummaryDemo(nn.Cell):
         ...     def __init__(self,):
         ...         super(SummaryDemo, self).__init__()
         ...         self.summary = ops.ScalarSummary()
-        ...         self.add = ops.TensorAdd()
+        ...         self.add = ops.Add()
         ...
         ...     def construct(self, x, y):
         ...         name = "x"
@@ -69,6 +87,7 @@ class ScalarSummary(PrimitiveWithInfer):
     @prim_attr_register
     def __init__(self):
         """init"""
+        self.add_prim_attr("side_effect_io", True)
 
     def __infer__(self, name, value):
         _check_summary_param(name, value, self.__class__.__name__)
@@ -90,10 +109,19 @@ class ImageSummary(PrimitiveWithInfer):
         - **name** (str) - The name of the input variable, it must not be an empty string.
         - **value** (Tensor) - The value of image, the rank of tensor must be 4.
 
+    Raises:
+        TypeError: If `name` is not a str.
+        TypeError: If `value` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
+
+        >>> import mindspore.nn as nn
+        >>> import mindspore.ops as ops
+        >>>
+        >>>
         >>> class Net(nn.Cell):
         ...     def __init__(self):
         ...         super(Net, self).__init__()
@@ -109,6 +137,7 @@ class ImageSummary(PrimitiveWithInfer):
     @prim_attr_register
     def __init__(self):
         """init"""
+        self.add_prim_attr("side_effect_io", True)
 
     def __infer__(self, name, value):
         _check_summary_param(name, value, self.__class__.__name__)
@@ -131,15 +160,23 @@ class TensorSummary(PrimitiveWithInfer):
         - **name** (str) - The name of the input variable.
         - **value** (Tensor) - The value of tensor, and the rank of tensor must be greater than 0.
 
+    Raises:
+        TypeError: If `name` is not a str.
+        TypeError: If `value` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
+        >>> import mindspore.nn as nn
+        >>> import mindspore.ops as ops
+        >>>
+        >>>
         >>> class SummaryDemo(nn.Cell):
         ...     def __init__(self,):
         ...         super(SummaryDemo, self).__init__()
         ...         self.summary = ops.TensorSummary()
-        ...         self.add = ops.TensorAdd()
+        ...         self.add = ops.Add()
         ...
         ...     def construct(self, x, y):
         ...         x = self.add(x, y)
@@ -152,6 +189,7 @@ class TensorSummary(PrimitiveWithInfer):
     @prim_attr_register
     def __init__(self):
         """init"""
+        self.add_prim_attr("side_effect_io", True)
 
     def __infer__(self, name, value):
         _check_summary_param(name, value, self.__class__.__name__)
@@ -173,15 +211,23 @@ class HistogramSummary(PrimitiveWithInfer):
         - **name** (str) - The name of the input variable.
         - **value** (Tensor) - The value of tensor, and the rank of tensor must be greater than 0.
 
+    Raises:
+        TypeError: If `name` is not a str.
+        TypeError: If `value` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
+        >>> import mindspore.nn as nn
+        >>> import mindspore.ops as ops
+        >>>
+        >>>
         >>> class SummaryDemo(nn.Cell):
         ...     def __init__(self,):
         ...         super(SummaryDemo, self).__init__()
         ...         self.summary = ops.HistogramSummary()
-        ...         self.add = ops.TensorAdd()
+        ...         self.add = ops.Add()
         ...
         ...     def construct(self, x, y):
         ...         x = self.add(x, y)
@@ -194,6 +240,7 @@ class HistogramSummary(PrimitiveWithInfer):
     @prim_attr_register
     def __init__(self):
         """init"""
+        self.add_prim_attr("side_effect_io", True)
 
     def __infer__(self, name, value):
         _check_summary_param(name, value, self.__class__.__name__)
@@ -219,6 +266,9 @@ class InsertGradientOf(PrimitiveWithInfer):
 
     Outputs:
         Tensor, returns `input_x` directly. `InsertGradientOf` does not affect the forward result.
+
+    Raises:
+        TypeError: If `f` is not a function of mindspore.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -257,6 +307,7 @@ class InsertGradientOf(PrimitiveWithInfer):
 
     @prim_attr_register
     def __init__(self, f):
+        self.add_prim_attr('side_effect_backprop', True)
         self.f = f
 
     def infer_shape(self, x_shape):
@@ -283,6 +334,10 @@ class HookBackward(PrimitiveWithInfer):
 
     Inputs:
         - **inputs** (Tensor) - The variable to hook.
+
+    Raises:
+        TypeError: If `inputs` are not a Tensor.
+        TypeError: If `hook_fn` is not a function of python.
 
     Examples:
         >>> def hook_fn(grad_out):
@@ -329,13 +384,18 @@ class Print(PrimitiveWithInfer):
 
     Note:
         In pynative mode, please use python print function.
+        In graph mode, the bool, int and float would be converted into Tensor to print,
+        str remains unchanged.
 
     Inputs:
-        - **input_x** (Union[Tensor, str]) - The graph node to attach to. The input supports
-          multiple strings and tensors which are separated by ','.
+        - **input_x** (Union[Tensor, bool, int, float, str]) - The graph node to attach to.
+          Supports multiple inputs which are separated by ','.
+
+    Raises:
+        TypeError: If `input_x` is not one of the following: Tensor, bool, int, float, str.
 
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> class PrintDemo(nn.Cell):
@@ -360,7 +420,7 @@ class Print(PrimitiveWithInfer):
 
     @prim_attr_register
     def __init__(self):
-        self.add_prim_attr("_side_effect", True)
+        self.add_prim_attr("side_effect_io", True)
 
     def __call__(self, *args):
         for arg in args:
@@ -370,8 +430,11 @@ class Print(PrimitiveWithInfer):
         return [1]
 
     def infer_dtype(self, *inputs):
-        for dtype in inputs:
-            validator.check_subclass("input", dtype, (mstype.tensor, mstype.string), self.name)
+        # check argument types except the last one (io state).
+        for ele in inputs[:-1]:
+            validator.check_subclass("input", ele,
+                                     [mstype.tensor, mstype.int_, mstype.float_, mstype.bool_, mstype.string],
+                                     self.name)
         return mstype.int32
 
 
@@ -387,12 +450,17 @@ class Assert(PrimitiveWithInfer):
         - **condition** [Union[Tensor[bool], bool]] - The condition to evaluate.
         - **input_data** (Union(tuple[Tensor], list[Tensor])) - The tensors to print out when condition is false.
 
+    Raises:
+        TypeError: If `summarize` is not an int.
+        TypeError: If `condition` is neither a Tensor nor a bool.
+        TypeError: If `input_data` is neither a tuple nor a list.
+
     Examples:
         >>> class AssertDemo(nn.Cell):
         ...     def __init__(self):
         ...         super(AssertDemo, self).__init__()
         ...         self.assert1 = ops.Assert(summarize=10)
-        ...         self.add = ops.TensorAdd()
+        ...         self.add = ops.Add()
         ...
         ...     def construct(self, x, y):
         ...         data = self.add(x, y)

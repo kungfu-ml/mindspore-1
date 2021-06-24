@@ -32,10 +32,7 @@ CNodePtr CreateSplitVNode(const FuncGraphPtr &func_graph, const AnfNodePtr &inpu
 
 CNodePtr CreateBaseSplitVNode(const FuncGraphPtr &func_graph, const CNodePtr &origin_cnode) {
   MS_EXCEPTION_IF_NULL(origin_cnode);
-  if (origin_cnode->inputs().size() < kSplitInputNum) {
-    MS_LOG(EXCEPTION) << "The input number of split: " << origin_cnode->DebugString() << " should be "
-                      << kSplitInputNum - 1;
-  }
+  CheckCNodeInputSize(origin_cnode, kSplitInputTensorNum);
   return CreateSplitVNode(func_graph, origin_cnode->input(1));
 }
 
@@ -53,6 +50,9 @@ size_t GetSmallSplitSize(const AnfNodePtr &split_node, int64_t split_dim, int64_
   }
   if (LongToSize(split_dim) >= input_shape.size()) {
     MS_LOG(EXCEPTION) << "The split_dim value should be less than the shape size of input 0";
+  }
+  if (num_split == 0) {
+    MS_LOG(EXCEPTION) << "Divisor 'num_split' should not be 0.";
   }
   return input_shape[split_dim] / num_split;
 }

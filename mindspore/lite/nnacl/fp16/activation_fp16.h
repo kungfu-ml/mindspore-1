@@ -21,13 +21,7 @@
 #endif
 #include <math.h>
 #include "nnacl/op_base.h"
-#include "nnacl/quantization/fixed_point.h"
-
-typedef struct ActivationParameter {
-  OpParameter op_parameter_;
-  int type_;
-  float alpha_;
-} ActivationParameter;
+#include "nnacl/int8/fixed_point.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +33,8 @@ int SigmoidFp16(const float16_t *src, float16_t *dst, int ele_num);
 int TanhFp16(const float16_t *src, float16_t *dst, int ele_num);
 int HSwishFp16(const float16_t *src, float16_t *dst, int ele_num);
 int SwishFp16(const float16_t *src, float16_t *dst, int ele_num);
+int HardTanhFp16(const float16_t *src, int length, float16_t *dst, float min_val, float max_val);
+int GeluFp16(const float16_t *src, int length, float16_t *dst, bool approximate);
 #ifdef __cplusplus
 }
 #endif

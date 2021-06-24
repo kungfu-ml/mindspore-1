@@ -14,14 +14,15 @@
 # ============================================================================
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
+from mindspore.ops import _constants as Constants
 
 select = P.Select()
 maximum = P.Maximum()
 sqrt = P.Sqrt()
 greater = P.Greater()
 clip_by_norm_no_div_square_sum = Primitive('ClipByNormNoDivSum')
-make_tuple = Primitive('make_tuple')
-tuple_getitem = Primitive('tuple_getitem')
+make_tuple = Primitive('MakeTuple')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
 
 
 class FnDict:

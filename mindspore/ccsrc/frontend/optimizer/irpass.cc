@@ -23,6 +23,9 @@
 #include "frontend/optimizer/irpass/grad_var_prepare.h"
 #include "frontend/optimizer/irpass/gradient_eliminate.h"
 #include "frontend/optimizer/irpass/inline.h"
+#include "frontend/optimizer/irpass/updatestate_eliminate.h"
+#include "frontend/optimizer/irpass/load_eliminate.h"
+#include "frontend/optimizer/irpass/stopgrad_eliminate.h"
 #include "frontend/optimizer/irpass/incorporate_call.h"
 #include "frontend/optimizer/irpass/incorporate_getitem.h"
 #include "frontend/optimizer/irpass/item_tuple_or_list_eliminate.h"
@@ -52,7 +55,7 @@ namespace opt {
 namespace irpass {
 OptimizeIRPassLib::OptimizeIRPassLib() {
   arithmetic_simplify_ = MakeSubstitution(std::make_shared<ArithmeticSimplify>(), "arithmetic_simplify",
-                                          {prim::kPrimScalarAdd, prim::kPrimScalarMul, prim::kPrimTensorAdd,
+                                          {prim::kPrimScalarAdd, prim::kPrimScalarMul, prim::kPrimAdd,
                                            prim::kPrimIdentity, prim::kPrimMomentum, prim::kPrimMul, prim::kPrimPow});
   arithmetic_simplify2_ =
     MakeSubstitution(std::make_shared<ArithmeticSimplify2>(), "arithmetic_simplify2", {prim::kPrimMul});
@@ -65,10 +68,11 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
     MakeSubstitution(std::make_shared<ZeroLikeFillZero>(), "zero_like_fill_zero", prim::kPrimZerosLike);
   adjust_all_reduce_mul_add_ =
     MakeSubstitution(std::make_shared<AdjustAllReduceMulAdd>(), "adjust_all_reduce_mul_add", prim::kPrimAddN);
+  float_depend_g_call_ = MakeSubstitution(std::make_shared<FloatDependGCall>(), "float_depend_g_call", IsCNodeDup);
 
   // ops eliminate
   item_tuple_or_list_eliminate_ = MakeSubstitution(
-    std::make_shared<ItemTupleOrListEliminater>(), "item_tuple_or_list_eliminate",
+    std::make_shared<ItemTupleOrListEliminator>(), "item_tuple_or_list_eliminate",
     {prim::kPrimTupleGetItem, prim::kPrimTupleSetItem, prim::kPrimListGetItem, prim::kPrimListSetItem});
   tile_eliminate_ = MakeSubstitution(std::make_shared<TileEliminater>(), "tile_eliminate", prim::kPrimTile);
   cast_eliminate_ = MakeSubstitution(std::make_shared<CastEliminater>(), "cast_eliminate", prim::kPrimCast);
@@ -82,6 +86,9 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
   same_eliminate_ = MakeSubstitution(std::make_shared<SameEliminater>(), "same_eliminate", prim::kPrimSameTypeShape);
   mirror_mini_step_elim_ = MakeSubstitution(std::make_shared<MirrorMiniStepEliminater>(), "mirror_mini_step_eliminate",
                                             prim::kPrimMirrorMiniStep);
+  mini_step_allgather_replace_ = MakeSubstitution(std::make_shared<MiniStepAllGatherPass>(),
+                                                  "mini_step_allgather_replace", prim::kPrimMiniStepAllGather);
+  virtual_add_elim_ = MakeSubstitution(std::make_shared<VirtualAddEliminater>(), "virtual add", prim::kPrimVirtualAdd);
   check_bprop_eliminate_ =
     MakeSubstitution(std::make_shared<CheckBpropEliminater>(), "check_bprop_eliminate", prim::kPrimCheckBprop);
   reset_defer_inline_ =
@@ -116,8 +123,6 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
   replace_refkey_by_param_ = MakeSubstitution(std::make_shared<ReplaceRefkeyByParam>(), "replace_refkey_by_param",
                                               IsValueNode<RefKey>, opt::FORCE_RENORM);
   replace_old_param_ = MakeSubstitution(std::make_shared<ReplaceOldParam>(), "replace_old_param", IsParam);
-  // Gradient transforms
-  expand_jprim_ = MakeSubstitution(std::make_shared<ExpandJPrim>(), "expand_jprim", prim::kPrimJ);
   minmaximum_grad_ = MakeSubstitution(std::make_shared<MinMaximumGrad>(), "minmaximum_grad", prim::kPrimTupleGetItem);
 
   // branch culling
@@ -128,6 +133,8 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
     MakeSubstitution(std::make_shared<FloatEnvGetItemSwitch>(), "float_env_getitem_switch", prim::kPrimEnvGetItem);
   convert_switch_replacement_ =
     MakeSubstitution(std::make_shared<ConvertSwitchReplacement>(), "convert_switch_replacement", IsCNodeDup);
+  exchange_switch_depend_value_ =
+    MakeSubstitution(std::make_shared<ExchangeSwitchDependValue>(), "exchange_switch_depend_value", prim::kPrimSwitch);
 
   // Addn
   merge_addn_ = MakeSubstitution(std::make_shared<MergeAddN>(), "merge_addn", prim::kPrimAddN);
@@ -144,6 +151,19 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
     MakeSubstitution(std::make_shared<ReplaceApplicator>(), "replace_applicator", IsValueNode<FuncGraph>);
   specialize_transform_ =
     MakeSubstitution(std::make_shared<SpecializeOnGraphArguments>(), "specialize_transform", IsCNodeGraph);
+
+  // UpdateState eliminate
+  updatestate_eliminater_ =
+    MakeSubstitution(std::make_shared<UpdatestateEliminater>(), "updatestate_eliminater", prim::kPrimUpdateState);
+  switch_call_monad_eliminater_ = MakeSubstitution(std::make_shared<SwitchCallMonadParameterEliminater>(),
+                                                   "switch_call_monad_eliminater", IsCNodeDup);
+
+  // Load eliminate
+  load_eliminater_ = MakeSubstitution(std::make_shared<LoadEliminater>(), "load_eliminater", prim::kPrimLoad);
+
+  // StopGradient eliminate
+  stopgrad_eliminater_ =
+    MakeSubstitution(std::make_shared<StopGradientEliminater>(), "stopgrad_eliminater", prim::kPrimStopGradient);
 
   // Incorporation
   incorporate_getitem_set_ =
@@ -187,6 +207,10 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
     std::make_shared<RowTensorEliminater>(), "row_tensor_eliminate",
     {prim::kPrimRowTensorGetIndices, prim::kPrimRowTensorGetValues, prim::kPrimRowTensorGetDenseShape});
 
+  // RowTensorAddZerosLike Eliminate
+  row_tensor_add_zeros_like_ =
+    MakeSubstitution(std::make_shared<RowTensorAddZerosLike>(), "row_tensor_add_zeros_like", prim::kPrimRowTensorAdd);
+
   // SparseTensor Eliminate
   sparse_tensor_eliminate_ = MakeSubstitution(
     std::make_shared<SparseTensorEliminater>(), "sparse_tensor_eliminate",
@@ -202,10 +226,13 @@ OptimizeIRPassLib::OptimizeIRPassLib() {
 }
 
 ResolveIRPassLib::ResolveIRPassLib() {
-  resolver_resolve_attr_ =
-    MakeSubstitution(std::make_shared<ResolveAttr>(), "resolver_resolve_attr", prim::kPrimGetAttr);
+  resolver_resolve_and_getattr_ =
+    MakeSubstitution(std::make_shared<ResolverResolveAndGetAttr>(), "resolver_resolve_and_getattr",
+                     {prim::kPrimGetAttr, prim::kPrimResolve});
   resolver_resolve_ = MakeSubstitution(std::make_shared<ResolverResolve>(), "resolver_resolve", prim::kPrimResolve);
-  resolver_getattr_ = MakeSubstitution(std::make_shared<ResolverGetattr>(), "resolver_getattr", prim::kPrimGetAttr);
+  resolver_getattr_ = MakeSubstitution(std::make_shared<ResolverGetAttr>(), "resolver_getattr", prim::kPrimGetAttr);
+  resolver_getattr_resolve_ =
+    MakeSubstitution(std::make_shared<ResolverGetAttrResolve>(), "resolver_getattr_resolve", prim::kPrimGetAttr);
 }
 
 InferenceOptPrepareLib::InferenceOptPrepareLib() {

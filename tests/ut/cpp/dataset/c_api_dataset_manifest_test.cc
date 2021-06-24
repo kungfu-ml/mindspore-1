@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,14 +37,14 @@ TEST_F(MindDataTestPipeline, TestManifestBasic) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -89,14 +89,14 @@ TEST_F(MindDataTestPipeline, TestManifestBasicWithPipeline) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -147,7 +147,7 @@ TEST_F(MindDataTestPipeline, TestManifestDecode) {
 
   std::string file_path = datasets_root_path_ + "/testManifestData/cpp.json";
   // Create a Manifest Dataset
-  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", RandomSampler(), {}, true);
+  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", std::make_shared<RandomSampler>(), {}, true);
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -156,17 +156,17 @@ TEST_F(MindDataTestPipeline, TestManifestDecode) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    auto shape = image->shape();
-    MS_LOG(INFO) << "Tensor image shape size: " << shape.Size();
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    EXPECT_GT(shape.Size(), 1);  // Verify decode=true took effect
+    auto shape = image.Shape();
+    MS_LOG(INFO) << "Tensor image shape size: " << shape.size();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    EXPECT_GT(shape.size(), 1);  // Verify decode=true took effect
     iter->GetNextRow(&row);
   }
 
@@ -190,14 +190,14 @@ TEST_F(MindDataTestPipeline, TestManifestEval) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -218,7 +218,7 @@ TEST_F(MindDataTestPipeline, TestManifestClassIndex) {
   std::vector<int64_t> expected_label = {111, 222};
 
   // Create a Manifest Dataset
-  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", RandomSampler(), map, true);
+  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", std::make_shared<RandomSampler>(), map, true);
   EXPECT_NE(ds, nullptr);
 
   std::vector<std::pair<std::string, std::vector<int32_t>>> class_index1 = ds->GetClassIndexing();
@@ -234,7 +234,7 @@ TEST_F(MindDataTestPipeline, TestManifestClassIndex) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -242,11 +242,16 @@ TEST_F(MindDataTestPipeline, TestManifestClassIndex) {
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    row["label"]->GetItemAt<int32_t>(&label_idx, {});
+    auto label = row["label"];
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+
+    std::shared_ptr<Tensor> de_label;
+    ASSERT_OK(Tensor::CreateFromMSTensor(label, &de_label));
+    de_label->GetItemAt<int32_t>(&label_idx, {});
     MS_LOG(INFO) << "Tensor label value: " << label_idx;
     auto label_it = std::find(expected_label.begin(), expected_label.end(), label_idx);
     EXPECT_NE(label_it, expected_label.end());
+
     iter->GetNextRow(&row);
   }
 
@@ -261,7 +266,7 @@ TEST_F(MindDataTestPipeline, TestManifestNumSamplers) {
 
   std::string file_path = datasets_root_path_ + "/testManifestData/cpp.json";
   // Create a Manifest Dataset
-  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", SequentialSampler(0, 1), {}, true);
+  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", std::make_shared<SequentialSampler>(0, 1), {}, true);
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -270,14 +275,14 @@ TEST_F(MindDataTestPipeline, TestManifestNumSamplers) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 

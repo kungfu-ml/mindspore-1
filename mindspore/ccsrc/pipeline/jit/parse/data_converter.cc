@@ -203,6 +203,19 @@ bool ConvertMetaFuncGraph(const py::object &obj, ValuePtr *const data, bool use_
   return true;
 }
 
+bool ConvertFuncGraph(const py::object &obj, ValuePtr *const data) {
+  MS_LOG(DEBUG) << "Converting FuncGraph object";
+  auto func_graph = obj.cast<FuncGraphPtr>();
+  if (func_graph == nullptr) {
+    MS_LOG(ERROR) << "Resolve FuncGraph error, get ptr is null";
+    return false;
+  }
+  auto new_fg = BasicClone(func_graph);
+  new_fg->set_attr("is_load", MakeValue(true));
+  *data = new_fg;
+  return true;
+}
+
 bool ConvertSlice(const py::object &obj, ValuePtr *const data) {
   MS_LOG(DEBUG) << "Converting slice object";
 
@@ -368,6 +381,43 @@ bool ConvertFloatWithType(const float &obj, ValuePtr *const data, TypePtr dtype 
 }
 }  // namespace
 
+bool ConvertSingleData(const py::object &obj, ValuePtr *const data) {
+  MS_EXCEPTION_IF_NULL(data);
+  ValuePtr converted = nullptr;
+  if (py::isinstance<py::none>(obj)) {
+    converted = kNone;
+  } else if (py::isinstance<py::bool_>(obj)) {
+    converted = std::make_shared<BoolImm>(py::cast<bool>(obj));
+  } else if (py::isinstance<py::str>(obj)) {
+    converted = std::make_shared<StringImm>(py::cast<std::string>(obj));
+  } else if (py::isinstance<py::ellipsis>(obj)) {
+    converted = kEllipsis;
+  } else if (py::isinstance<py::module>(obj)) {
+    ConvertNameSpace(obj, &converted);
+  } else if (py::hasattr(obj, PYTHON_DATACLASS_FIELDS)) {
+    ConvertDataClass(obj, &converted);
+  } else if (py::isinstance<Type>(obj)) {
+    converted = obj.cast<TypePtr>();
+  } else if (py::isinstance<Tensor>(obj)) {
+    converted = obj.cast<TensorPtr>();
+  } else if (py::isinstance<MetaTensor>(obj)) {
+    converted = obj.cast<MetaTensorPtr>();
+  } else if (py::isinstance<UMonad>(obj)) {
+    converted = obj.cast<UMonadPtr>();
+  } else if (py::isinstance<IOMonad>(obj)) {
+    converted = obj.cast<IOMonadPtr>();
+  } else if (py::isinstance<EnvInstance>(obj)) {
+    auto env = obj.cast<std::shared_ptr<EnvInstance>>();
+    converted = env;
+  } else if (py::hasattr(obj, PYTHON_CLASS_MEMBER_NAMESPACE)) {
+    converted = std::make_shared<NameSpace>(RESOLVE_NAMESPACE_NAME_CLASS_MEMBER, obj);
+  } else {
+    return false;
+  }
+  *data = converted;
+  return true;
+}
+
 bool ConvertData(const py::object &obj, ValuePtr *const data, bool use_signature, TypePtr dtype) {
   // check parameter valid
   if (data == nullptr) {
@@ -375,24 +425,20 @@ bool ConvertData(const py::object &obj, ValuePtr *const data, bool use_signature
     return false;
   }
 
-  bool ret = true;
   ValuePtr converted = nullptr;
-  if (py::isinstance<py::none>(obj)) {
-    converted = kNone;
-  } else if (py::isinstance<py::bool_>(obj)) {
-    converted = std::make_shared<BoolImm>(py::cast<bool>(obj));
-  } else if (py::isinstance<py::int_>(obj)) {
+  bool ret = ConvertSingleData(obj, &converted);
+  if (ret) {
+    *data = converted;
+    return true;
+  }
+  if (py::isinstance<py::int_>(obj)) {
     ret = ConvertIntegerWithType(py::cast<int64_t>(obj), &converted, dtype);
   } else if (py::isinstance<py::float_>(obj)) {
     ret = ConvertFloatWithType(py::cast<float>(obj), &converted, dtype);
-  } else if (py::isinstance<py::str>(obj)) {
-    converted = std::make_shared<StringImm>(py::cast<std::string>(obj));
   } else if (py::isinstance<py::dict>(obj)) {
     ret = ConvertDict(obj, &converted, use_signature);
   } else if (py::isinstance<py::slice>(obj)) {
     ret = ConvertSlice(obj, &converted);
-  } else if (py::isinstance<py::ellipsis>(obj)) {
-    converted = kEllipsis;
   } else if (py::isinstance<py::tuple>(obj)) {
     ret = ConvertTuple(obj, &converted, use_signature);
   } else if (py::hasattr(obj, PYTHON_CELL_AS_LIST)) {
@@ -401,29 +447,15 @@ bool ConvertData(const py::object &obj, ValuePtr *const data, bool use_signature
     return ConvertCellObjToFuncGraph(obj.cast<CellPtr>(), data);
   } else if (py::isinstance<py::list>(obj)) {
     ret = ConvertList(obj, &converted, use_signature);
-  } else if (py::isinstance<py::module>(obj)) {
-    ConvertNameSpace(obj, &converted);
-  } else if (py::hasattr(obj, PYTHON_DATACLASS_FIELDS)) {
-    ConvertDataClass(obj, &converted);
   } else if (py::hasattr(obj, PYTHON_PRIMITIVE_FLAG)) {
     ret = ConvertPrimitive(obj, &converted, use_signature);
   } else if (py::isinstance<MetaFuncGraph>(obj)) {
     ret = ConvertMetaFuncGraph(obj, &converted, use_signature);
-  } else if (py::isinstance<Type>(obj)) {
-    converted = obj.cast<TypePtr>();
-  } else if (py::isinstance<Tensor>(obj)) {
-    converted = obj.cast<TensorPtr>();
-  } else if (py::isinstance<MetaTensor>(obj)) {
-    converted = obj.cast<MetaTensorPtr>();
-  } else if (py::isinstance<EnvInstance>(obj)) {
-    auto env = obj.cast<std::shared_ptr<EnvInstance>>();
-    converted = env;
-  } else if (py::hasattr(obj, PYTHON_CLASS_MEMBER_NAMESPACE)) {
-    converted = std::make_shared<NameSpace>(RESOLVE_NAMESPACE_NAME_CLASS_MEMBER, obj);
+  } else if (py::isinstance<FuncGraph>(obj)) {
+    ret = ConvertFuncGraph(obj, &converted);
   } else {
     ret = ConvertOtherObj(obj, &converted);
   }
-
   *data = converted;
   return ret;
 }
@@ -436,10 +468,10 @@ FuncGraphPtr ConvertToFuncGraph(const py::object &obj, const std::string &python
   FuncGraphPtr func_graph = nullptr;
   ValuePtr value = nullptr;
   bool is_cache = data_converter::GetObjectValue(obj_id, &value);
-  if (is_cache) {
-    if (value && value->isa<FuncGraph>()) {
-      MS_LOG(DEBUG) << "Get the cache data, obj = " << obj_id;
-      func_graph = value->cast<FuncGraphPtr>();
+  if (is_cache && value != nullptr && value->isa<FuncGraph>()) {
+    MS_LOG(DEBUG) << "Get the cache data, obj = " << obj_id;
+    func_graph = value->cast<FuncGraphPtr>();
+    if (!func_graph->dropped()) {
       return func_graph;
     }
   }

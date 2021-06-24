@@ -20,27 +20,43 @@
 #include <string>
 #include <map>
 #include <tuple>
+#include <memory>
 #include "include/api/types.h"
 #include "include/api/status.h"
+#include "include/api/context.h"
 
-namespace mindspore::api {
-struct AclModelOptions {
-  std::string output_node;  // todo: at convert.cc::BuildGraph(), no atc options
-  // build options
-  std::string insert_op_cfg_path;
-  std::string input_format;
-  std::string input_shape;
-  std::string output_type;
-  std::string precision_mode;
-  std::string op_select_impl_mode;
-  std::string soc_version = "Ascend310";
-
-  explicit AclModelOptions(const std::map<std::string, std::string> &options);
+namespace mindspore {
+class AclModelOptions {
+ public:
+  explicit AclModelOptions(const std::shared_ptr<Context> &context);
   ~AclModelOptions() = default;
+  std::string GenAclOptionsKey() const;
+  uint32_t GetDeviceID() const { return device_id_; }
+  std::string GetDumpCfgPath() const { return dump_cfg_path_; }
+  void RenameInput(const std::vector<std::string> &);
 
   // return tuple<init_options, build_options>
   std::tuple<std::map<std::string, std::string>, std::map<std::string, std::string>> GenAclOptions() const;
+
+ private:
+  std::string output_node_;  // todo: at convert.cc::BuildGraph(), no atc options
+  // build options
+  std::string insert_op_cfg_path_;
+  std::string input_format_;
+  std::string input_shape_;
+  std::string output_type_;
+  std::string precision_mode_;
+  std::string op_select_impl_mode_;
+  std::string fusion_switch_cfg_path_;
+  std::string soc_version_ = "Ascend310";
+  std::string dynamic_batch_size_;
+  std::string dynamic_image_size_;
+  std::string buffer_optimize_mode_;
+  std::map<int, std::vector<int>> input_shape_map_;
+  // other options
+  uint32_t device_id_;
+  std::string dump_cfg_path_;
 };
-}  // namespace mindspore::api
+}  // namespace mindspore
 
 #endif  // MINDSPORE_CCSRC_CXXAPI_SESSION_ACL_OPTION_PARSER_H

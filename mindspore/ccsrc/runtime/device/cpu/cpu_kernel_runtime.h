@@ -26,6 +26,7 @@
 #include "backend/session/session_basic.h"
 #include "backend/session/anf_runtime_algorithm.h"
 #include "utils/any.h"
+#include "profiler/device/cpu/cpu_profiling.h"
 namespace mindspore {
 namespace device {
 namespace cpu {
@@ -35,7 +36,7 @@ class CPUKernelRuntime : public KernelRuntime {
   ~CPUKernelRuntime() override = default;
 
   bool Init();
-  bool Run(session::KernelGraph *graph, bool is_task_sink) override;
+  bool Run(session::KernelGraph *const graph, bool is_task_sink) override;
   void AssignKernelAddress(session::KernelGraph *kernel_graph);
   void CreateOutputTensors(session::KernelGraph *kernel_graph, const std::vector<tensor::TensorPtr> &inputs,
                            VectorRef *outputs, std::map<tensor::TensorPtr, session::KernelWithIndex> *tensor_to_node);
@@ -45,9 +46,11 @@ class CPUKernelRuntime : public KernelRuntime {
   void DecreaseSummaryRefCount(const session::NamedSummaryOutputs &summary_outputs);
   bool GenDynamicKernel(const session::KernelGraph *graph) override { return true; }
   bool RunDynamicKernelAsync(const session::KernelGraph *graph) override { return true; }
+  DeviceAddressType GetTargetDeviceAddressType() const override { return DeviceAddressType::kCPU; };
 
  protected:
   bool SyncStream() override { return true; };
+  bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind) override { return true; };
   DeviceAddressPtr CreateDeviceAddress(void *device_ptr, size_t device_size, const string &format,
                                        TypeId type_id) override;
 

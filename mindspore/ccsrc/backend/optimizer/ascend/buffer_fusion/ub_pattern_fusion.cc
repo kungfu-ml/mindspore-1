@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "base/core_ops.h"
 #include "runtime/device/kernel_info.h"
 #include "utils/ms_context.h"
+#include "backend/optimizer/common/helper.h"
 
 namespace mindspore {
 namespace opt {
@@ -188,12 +189,18 @@ void ReplaceOldNode(std::unordered_map<int64_t, BufferFusionInfo_t> *buffer_fusi
   MS_EXCEPTION_IF_NULL(manager);
   auto buffer_fusion_info = (*buffer_fusion_infos)[fusion_id];
   if (buffer_fusion_info.outputs_list.size() == 1) {  // single output
+    if (kernel_graph != nullptr) {
+      kernel_graph->FrontBackendlMapUpdate(buffer_fusion_info.outputs_list[0], buffer_fusion_kernel);
+    }
     (void)manager->Replace(buffer_fusion_info.outputs_list[0], buffer_fusion_kernel);
     ReplaceInputNodeInOtherFusionScope(buffer_fusion_infos, fusion_id, buffer_fusion_info.outputs_list[0],
                                        buffer_fusion_kernel);
   } else {  // multiple output
     for (size_t index = 0; index < buffer_fusion_info.outputs_list.size(); ++index) {
       auto tuple_item = CreateTupleGetItem(buffer_fusion_kernel, kernel_graph, index);
+      if (kernel_graph != nullptr) {
+        kernel_graph->FrontBackendlMapUpdate(buffer_fusion_info.outputs_list[index], tuple_item);
+      }
       (void)manager->Replace(buffer_fusion_info.outputs_list[index], tuple_item);
       ReplaceInputNodeInOtherFusionScope(buffer_fusion_infos, fusion_id, buffer_fusion_info.outputs_list[index],
                                          tuple_item);
@@ -238,7 +245,9 @@ void GetFusionScopeInputNodeList(const session::KernelGraph &kernel_graph,
           if (auto in = cnode->input(idx); std::find((*buffer_fusion_infos)[fusion_id].inputs_list.begin(),
                                                      (*buffer_fusion_infos)[fusion_id].inputs_list.end(),
                                                      in) == (*buffer_fusion_infos)[fusion_id].inputs_list.end()) {
-            (*buffer_fusion_infos)[fusion_id].inputs_list.push_back(in);
+            if (!HasAbstractMonad(in)) {
+              (*buffer_fusion_infos)[fusion_id].inputs_list.push_back(in);
+            }
           }
         }
       }
@@ -345,6 +354,34 @@ void SetFusionOpRefInfos(session::KernelGraph *kernel_graph, const std::vector<A
     }
   }
 }
+
+void RemoveCircle(const session::KernelGraph &kernel_graph,
+                  std::unordered_map<int64_t, BufferFusionInfo_t> *buffer_fusion_infos) {
+  MS_EXCEPTION_IF_NULL(buffer_fusion_infos);
+  std::vector<int64_t> fusion_ids;
+  for (auto &[fusion_id, fusion_info] : *buffer_fusion_infos) {
+    bool has_circle = false;
+    for (auto &inp : fusion_info.inputs_list) {
+      MS_EXCEPTION_IF_NULL(inp);
+      if (!inp->isa<CNode>() || AnfAlgo::CheckPrimitiveType(inp, prim::kPrimLoad)) {
+        continue;
+      }
+
+      if (IsDepend(kernel_graph, inp, fusion_info.anf_nodes)) {
+        has_circle = true;
+        break;
+      }
+    }
+
+    if (has_circle) {
+      fusion_ids.emplace_back(fusion_id);
+    }
+  }
+
+  for (auto &fusion_id : fusion_ids) {
+    buffer_fusion_infos->erase(fusion_id);
+  }
+}
 }  // namespace
 
 void UbPatternFusion::GetBufferFusionInfo(session::KernelGraph *kernel_graph,
@@ -353,9 +390,17 @@ void UbPatternFusion::GetBufferFusionInfo(session::KernelGraph *kernel_graph,
   GetFusionScopeComputeNodeList(kernel_graph, buffer_fusion_infos);
   GetFusionScopeInputNodeList(*kernel_graph, buffer_fusion_infos);
   GetFusionScopeOutputNodeList(kernel_graph, buffer_fusion_infos);
+  // Remove the fusion infos which will produce a circle if do fusion
+  RemoveCircle(*kernel_graph, buffer_fusion_infos);
+
   for (auto &buffer_fusion_info : *buffer_fusion_infos) {
     buffer_fusion_info.second.kernel_build_info =
       CreateFusionOpKernelInfo(buffer_fusion_info.second.inputs_list, buffer_fusion_info.second.outputs_list);
+    // just for full_name_with_scope for every buffer_fusion_info.
+    auto fusion_node = CreateFusionOp(buffer_fusion_info.second.inputs_list, buffer_fusion_info.second.outputs_list,
+                                      buffer_fusion_info.second.anf_nodes, kernel_graph);
+    MS_EXCEPTION_IF_NULL(fusion_node);
+    buffer_fusion_info.second.full_name = fusion_node->fullname_with_scope();
   }
 }
 
@@ -369,9 +414,9 @@ bool UbPatternFusion::FuseBufferFusionPattern(session::KernelGraph *kernel_graph
   std::transform(
     buffer_fusion_infos.begin(), buffer_fusion_infos.end(), std::back_inserter(fusion_scope_infos),
     [](const std::pair<int64_t, BufferFusionInfo_t> &buffer_fusion_info) -> mindspore::kernel::FusionScopeInfo {
-      return mindspore::kernel::FusionScopeInfo(buffer_fusion_info.first, buffer_fusion_info.second.inputs_list,
-                                                buffer_fusion_info.second.anf_nodes,
-                                                buffer_fusion_info.second.outputs_list);
+      return mindspore::kernel::FusionScopeInfo(
+        buffer_fusion_info.first, buffer_fusion_info.second.full_name, buffer_fusion_info.second.inputs_list,
+        buffer_fusion_info.second.anf_nodes, buffer_fusion_info.second.outputs_list);
     });
   auto kernel_mods = mindspore::kernel::KernelFusion(fusion_scope_infos);
   std::set<int64_t> fusion_ids;
@@ -399,9 +444,13 @@ bool UbPatternFusion::ReplaceFusionOp(std::unordered_map<int64_t, BufferFusionIn
                                       session::KernelGraph *kernel_graph) const {
   MS_EXCEPTION_IF_NULL(buffer_fusion_infos);
   auto buffer_fusion_info = (*buffer_fusion_infos)[fusion_id];
+  if (buffer_fusion_info.anf_nodes.size() < 2) {
+    return false;
+  }
   TraceGuard guard(std::make_shared<TraceOpt>(buffer_fusion_info.anf_nodes[0]->debug_info()));
   auto buffer_fusion = CreateFusionOp(buffer_fusion_info.inputs_list, buffer_fusion_info.outputs_list,
                                       buffer_fusion_info.anf_nodes, kernel_graph);
+  buffer_fusion->set_fullname_with_scope(buffer_fusion_info.full_name);
   AnfAlgo::SetSelectKernelBuildInfo(buffer_fusion_info.kernel_build_info, buffer_fusion.get());
   // Set abstract of fusion_op node
   std::vector<TypeId> types;

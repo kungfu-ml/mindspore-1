@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
 #include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #ifndef ENABLE_ANDROID
 #include "minddata/dataset/kernels/image/image_utils.h"
 #else
@@ -67,7 +66,7 @@ Status AlbumOp::Builder::SanityCheck() {
   err_msg += builder_num_workers_ <= 0 ? "Invalid parameter, num_parallel_workers must be greater than 0, but got " +
                                            std::to_string(builder_num_workers_) + ".\n"
                                        : "";
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 AlbumOp::AlbumOp(int32_t num_wkrs, int32_t rows_per_buffer, std::string file_dir, int32_t queue_size, bool do_decode,
@@ -82,7 +81,8 @@ AlbumOp::AlbumOp(int32_t num_wkrs, int32_t rows_per_buffer, std::string file_dir
       row_cnt_(0),
       buf_cnt_(0),
       sampler_ind_(0),
-      dirname_offset_(0) {
+      dirname_offset_(0),
+      sample_ids_(nullptr) {
   // Set the column name map (base class field)
   for (int32_t i = 0; i < data_schema_->NumColumns(); ++i) {
     column_name_id_map_[data_schema_->column(i).name()] = i;
@@ -95,7 +95,7 @@ AlbumOp::AlbumOp(int32_t num_wkrs, int32_t rows_per_buffer, std::string file_dir
 bool StrComp(const std::string &a, const std::string &b) {
   // returns 1 if string "a" represent a numeric value less than string "b"
   // the following will always return name, provided there is only one "." character in name
-  // "." character is guaranteed to exist since the extension is checked befor this function call.
+  // "." character is guaranteed to exist since the extension is checked before this function call.
   int64_t value_a = std::stoi(a.substr(1, a.find(".")).c_str());
   int64_t value_b = std::stoi(b.substr(1, b.find(".")).c_str());
   return value_a < value_b;
@@ -107,7 +107,7 @@ Status AlbumOp::PrescanEntry() {
   Path folder(folder_path_);
   dirname_offset_ = folder_path_.length();
   std::shared_ptr<Path::DirIterator> dirItr = Path::DirIterator::OpenDirectory(&folder);
-  if (folder.Exists() == false || dirItr == nullptr) {
+  if (!folder.Exists() || dirItr == nullptr) {
     RETURN_STATUS_UNEXPECTED("Invalid file, failed to open folder: " + folder_path_);
   }
   MS_LOG(INFO) << "Album folder Path found: " << folder_path_ << ".";
@@ -441,7 +441,7 @@ Status AlbumOp::LoadIntTensor(const nlohmann::json &json_obj, uint32_t col_num, 
 // Load 1 TensorRow (image,label) using 1 ImageColumns. 1 function call produces 1 TensorRow in a DataBuffer
 // possible optimization: the helper functions of LoadTensorRow should be optimized
 // to take a reference to a column descriptor?
-// the design of this class is to make the code more readable, forgoing minor perfomance gain like
+// the design of this class is to make the code more readable, forgoing minor performance gain like
 // getting rid of duplicated checks
 Status AlbumOp::LoadTensorRow(row_id_type row_id, const std::string &file, TensorRow *row) {
   // testing here is to just print out file path
@@ -464,65 +464,7 @@ Status AlbumOp::LoadTensorRow(row_id_type row_id, const std::string &file, Tenso
 
       // loop over each column descriptor, this can optimized by switch cases
       for (int32_t i = 0; i < columns; i++) {
-        // special case to handle
-        if (data_schema_->column(i).name() == "id") {
-          // id is internal, special case to load from file
-          RETURN_IF_NOT_OK(LoadIDTensor(file, i, row));
-          continue;
-        }
-        // find if key does not exist, insert placeholder nullptr if not found
-        if (js.find(data_schema_->column(i).name()) == js.end()) {
-          // iterator not found, push nullptr as placeholder
-          MS_LOG(INFO) << "Pushing empty tensor for column: " << data_schema_->column(i).name() << ".";
-          RETURN_IF_NOT_OK(LoadEmptyTensor(i, row));
-          continue;
-        }
-        nlohmann::json column_value = js.at(data_schema_->column(i).name());
-        MS_LOG(INFO) << "This column is: " << data_schema_->column(i).name() << ".";
-        bool is_array = column_value.is_array();
-        // load single string
-        if (column_value.is_string() && data_schema_->column(i).type() == DataType::DE_STRING) {
-          RETURN_IF_NOT_OK(LoadStringTensor(column_value, i, row));
-          continue;
-        }
-        // load string array
-        if (is_array && data_schema_->column(i).type() == DataType::DE_STRING) {
-          RETURN_IF_NOT_OK(LoadStringArrayTensor(column_value, i, row));
-          continue;
-        }
-        // load image file
-        if (column_value.is_string() && data_schema_->column(i).type() != DataType::DE_STRING) {
-          std::string image_file_path = column_value;
-          RETURN_IF_NOT_OK(LoadImageTensor(image_file_path, i, row));
-          continue;
-        }
-        // load float value
-        if (!is_array && (data_schema_->column(i).type() == DataType::DE_FLOAT32 ||
-                          data_schema_->column(i).type() == DataType::DE_FLOAT64)) {
-          RETURN_IF_NOT_OK(LoadFloatTensor(column_value, i, row));
-          continue;
-        }
-        // load float array
-        if (is_array && (data_schema_->column(i).type() == DataType::DE_FLOAT32 ||
-                         data_schema_->column(i).type() == DataType::DE_FLOAT64)) {
-          RETURN_IF_NOT_OK(LoadFloatArrayTensor(column_value, i, row));
-          continue;
-        }
-        // int value
-        if (!is_array && (data_schema_->column(i).type() == DataType::DE_INT64 ||
-                          data_schema_->column(i).type() == DataType::DE_INT32)) {
-          RETURN_IF_NOT_OK(LoadIntTensor(column_value, i, row));
-          continue;
-        }
-        // int array
-        if (is_array && (data_schema_->column(i).type() == DataType::DE_INT64 ||
-                         data_schema_->column(i).type() == DataType::DE_INT32)) {
-          RETURN_IF_NOT_OK(LoadIntArrayTensor(column_value, i, row));
-          continue;
-        } else {
-          MS_LOG(WARNING) << "Value type for column: " << data_schema_->column(i).name() << " is not supported.";
-          continue;
-        }
+        RETURN_IF_NOT_OK(loadColumnData(file, i, js, row));
       }
     } catch (const std::exception &err) {
       file_handle.close();
@@ -530,7 +472,63 @@ Status AlbumOp::LoadTensorRow(row_id_type row_id, const std::string &file, Tenso
     }
   }
   file_handle.close();
+  std::vector<std::string> path(row->size(), folder_path_ + file);
+  row->setPath(path);
   return Status::OK();
+}
+
+Status AlbumOp::loadColumnData(const std::string &file, int32_t index, nlohmann::json js, TensorRow *row) {
+  int32_t i = index;
+  // special case to handle
+  if (data_schema_->column(i).name() == "id") {
+    // id is internal, special case to load from file
+    return LoadIDTensor(file, i, row);
+  }
+  // find if key does not exist, insert placeholder nullptr if not found
+  if (js.find(data_schema_->column(i).name()) == js.end()) {
+    // iterator not found, push nullptr as placeholder
+    MS_LOG(INFO) << "Pushing empty tensor for column: " << data_schema_->column(i).name() << ".";
+    return LoadEmptyTensor(i, row);
+  }
+  nlohmann::json column_value = js.at(data_schema_->column(i).name());
+  MS_LOG(INFO) << "This column is: " << data_schema_->column(i).name() << ".";
+  bool is_array = column_value.is_array();
+  // load single string
+  if (column_value.is_string() && data_schema_->column(i).type() == DataType::DE_STRING) {
+    return LoadStringTensor(column_value, i, row);
+  }
+  // load string array
+  if (is_array && data_schema_->column(i).type() == DataType::DE_STRING) {
+    return LoadStringArrayTensor(column_value, i, row);
+  }
+  // load image file
+  if (column_value.is_string() && data_schema_->column(i).type() != DataType::DE_STRING) {
+    std::string image_file_path = column_value;
+    return LoadImageTensor(image_file_path, i, row);
+  }
+  // load float value
+  bool judge_float = (data_schema_->column(i).type() == DataType::DE_FLOAT32) ||
+                     (data_schema_->column(i).type() == DataType::DE_FLOAT64);
+  if (!is_array && judge_float) {
+    return LoadFloatTensor(column_value, i, row);
+  }
+  // load float array
+  if (is_array && judge_float) {
+    return LoadFloatArrayTensor(column_value, i, row);
+  }
+  // int value
+  if (!is_array &&
+      (data_schema_->column(i).type() == DataType::DE_INT64 || data_schema_->column(i).type() == DataType::DE_INT32)) {
+    return LoadIntTensor(column_value, i, row);
+  }
+  // int array
+  if (is_array &&
+      (data_schema_->column(i).type() == DataType::DE_INT64 || data_schema_->column(i).type() == DataType::DE_INT32)) {
+    return LoadIntArrayTensor(column_value, i, row);
+  } else {
+    MS_LOG(WARNING) << "Value type for column: " << data_schema_->column(i).name() << " is not supported.";
+    return Status::OK();
+  }
 }
 
 // Looping over LoadTensorRow to make 1 DataBuffer. 1 function call produces 1 buffer
@@ -579,22 +577,17 @@ Status AlbumOp::InitSampler() {
 
 Status AlbumOp::LaunchThreadsAndInitOp() {
   if (tree_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
   }
   // registers QueueList and individual Queues for interrupt services
   RETURN_IF_NOT_OK(io_block_queues_.Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(wait_for_workers_post_.Register(tree_->AllTasks()));
   // launch main workers that load DataBuffers by reading all images
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_, std::bind(&AlbumOp::WorkerEntry, this, std::placeholders::_1)));
+  RETURN_IF_NOT_OK(
+    tree_->LaunchWorkers(num_workers_, std::bind(&AlbumOp::WorkerEntry, this, std::placeholders::_1), "", id()));
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(this->InitSampler());  // pass numRows to Sampler
   return Status::OK();
-}
-
-// Visitor accept method for NodePass
-Status AlbumOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<AlbumOp>(), modified);
 }
 
 Status AlbumOp::ComputeColMap() {
@@ -606,6 +599,26 @@ Status AlbumOp::ComputeColMap() {
   } else {
     MS_LOG(WARNING) << "Column name map is already set!";
   }
+  return Status::OK();
+}
+
+Status AlbumOp::GetNextRow(TensorRow *const row) {
+  if (image_rows_.empty()) PrescanEntry();
+  if (sample_ids_ == nullptr) {
+    RETURN_IF_NOT_OK(this->InitSampler());
+    std::unique_ptr<DataBuffer> sample_buffer;
+    TensorRow sample_row;
+    RETURN_IF_NOT_OK(sampler_->GetNextSample(&sample_buffer));
+    RETURN_IF_NOT_OK(sample_buffer->PopRow(&sample_row));
+    sample_ids_ = sample_row[0];
+  }
+  if (row_cnt_ + 1 > sample_ids_->Size()) {
+    return Status::OK();
+  }
+  int64_t key;
+  sample_ids_->GetItemAt(&key, {row_cnt_});
+  RETURN_IF_NOT_OK(LoadTensorRow(key, image_rows_[key], row));
+  row_cnt_++;
   return Status::OK();
 }
 }  // namespace dataset

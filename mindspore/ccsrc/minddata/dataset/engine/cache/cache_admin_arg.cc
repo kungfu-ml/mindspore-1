@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@
 #include "minddata/dataset/engine/cache/cache_server.h"
 #include "minddata/dataset/engine/cache/cache_ipc.h"
 #include "minddata/dataset/util/path.h"
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 
 namespace mindspore {
 namespace dataset {
@@ -48,8 +48,30 @@ CacheAdminArgHandler::CacheAdminArgHandler()
       log_level_(kDefaultLogLevel),
       memory_cap_ratio_(kMemoryCapRatio),
       hostname_(kCfgDefaultCacheHost),
-      spill_dir_(DefaultSpillDir()),
+      spill_dir_(""),
       command_id_(CommandId::kCmdUnknown) {
+  const char *env_cache_host = std::getenv("MS_CACHE_HOST");
+  const char *env_cache_port = std::getenv("MS_CACHE_PORT");
+  if (env_cache_host != nullptr) {
+    hostname_ = env_cache_host;
+  }
+  if (env_cache_port != nullptr) {
+    char *end = nullptr;
+    port_ = strtol(env_cache_port, &end, 10);
+    if (*end != '\0') {
+      std::cerr << "Cache port from env variable MS_CACHE_PORT is invalid\n";
+      port_ = 0;  // cause the port range validation to generate an error during the validation checks
+    }
+  }
+  const char *env_log_level = std::getenv("GLOG_v");
+  if (env_log_level != nullptr) {
+    char *end = nullptr;
+    log_level_ = strtol(env_log_level, &end, 10);
+    if (*end != '\0') {
+      std::cerr << "Log level from env variable GLOG_v is invalid\n";
+      log_level_ = -1;  // cause the log level range validation to generate an error during the validation checks
+    }
+  }
   // Initialize the command mappings
   arg_map_["-h"] = ArgValue::kArgHost;
   arg_map_["--hostname"] = ArgValue::kArgHost;
@@ -73,6 +95,7 @@ CacheAdminArgHandler::CacheAdminArgHandler()
   arg_map_["-r"] = ArgValue::kArgMemoryCapRatio;
   arg_map_["--memory_cap_ratio"] = ArgValue::kArgMemoryCapRatio;
   arg_map_["--list_sessions"] = ArgValue::kArgListSessions;
+  arg_map_["--server_info"] = ArgValue::kArgServerInfo;
   // Initialize argument tracker with false values
   for (int16_t i = 0; i < static_cast<int16_t>(ArgValue::kArgNumArgs); ++i) {
     ArgValue currAV = static_cast<ArgValue>(i);
@@ -88,7 +111,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, int32_t *out_arg, std
   ArgValue selected_arg = arg_map_[option];
   if (used_args_[selected_arg]) {
     std::string err_msg = "The " + option + " argument was given more than once.";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // Flag that this arg is used now
@@ -100,7 +123,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, int32_t *out_arg, std
   if (command_id != CommandId::kCmdUnknown) {
     if (command_id_ != CommandId::kCmdUnknown) {
       std::string err_msg = "Only one command at a time is allowed.  Invalid command: " + option;
-      return Status(StatusCode::kSyntaxError, err_msg);
+      return Status(StatusCode::kMDSyntaxError, err_msg);
     } else {
       command_id_ = command_id;
     }
@@ -112,7 +135,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, int32_t *out_arg, std
   *arg_stream >> value_as_string;
   if (value_as_string.empty()) {
     std::string err_msg = option + " option requires an argument field.  Syntax: " + option + " <field>";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // Now, attempt to convert the value into it's numeric format for output
@@ -120,7 +143,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, int32_t *out_arg, std
     *out_arg = std::stoul(value_as_string);
   } catch (const std::exception &e) {
     std::string err_msg = "Invalid numeric value: " + value_as_string;
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   return Status::OK();
@@ -132,7 +155,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, std::string *out_arg,
   ArgValue selected_arg = arg_map_[option];
   if (used_args_[selected_arg]) {
     std::string err_msg = "The " + option + " argument was given more than once.";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // Flag that this arg is used now
@@ -144,7 +167,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, std::string *out_arg,
   if (command_id != CommandId::kCmdUnknown) {
     if (command_id_ != CommandId::kCmdUnknown) {
       std::string err_msg = "Only one command at a time is allowed.  Invalid command: " + option;
-      return Status(StatusCode::kSyntaxError, err_msg);
+      return Status(StatusCode::kMDSyntaxError, err_msg);
     } else {
       command_id_ = command_id;
     }
@@ -157,12 +180,12 @@ Status CacheAdminArgHandler::AssignArg(std::string option, std::string *out_arg,
       *arg_stream >> *out_arg;
     } else {
       std::string err_msg = option + " option requires an argument field.  Syntax: " + option + " <field>";
-      return Status(StatusCode::kSyntaxError, err_msg);
+      return Status(StatusCode::kMDSyntaxError, err_msg);
     }
 
     if (out_arg->empty()) {
       std::string err_msg = option + " option requires an argument field.  Syntax: " + option + " <field>";
-      return Status(StatusCode::kSyntaxError, err_msg);
+      return Status(StatusCode::kMDSyntaxError, err_msg);
     }
   }
 
@@ -175,7 +198,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, float *out_arg, std::
   ArgValue selected_arg = arg_map_[option];
   if (used_args_[selected_arg]) {
     std::string err_msg = "The " + option + " argument was given more than once.";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // Flag that this arg is used now
@@ -187,7 +210,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, float *out_arg, std::
   if (command_id != CommandId::kCmdUnknown) {
     if (command_id_ != CommandId::kCmdUnknown) {
       std::string err_msg = "Only one command at a time is allowed.  Invalid command: " + option;
-      return Status(StatusCode::kSyntaxError, err_msg);
+      return Status(StatusCode::kMDSyntaxError, err_msg);
     } else {
       command_id_ = command_id;
     }
@@ -199,7 +222,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, float *out_arg, std::
   *arg_stream >> value_as_string;
   if (value_as_string.empty()) {
     std::string err_msg = option + " option requires an argument field.  Syntax: " + option + " <field>";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // Now, attempt to convert the value into it's string format for output
@@ -207,7 +230,7 @@ Status CacheAdminArgHandler::AssignArg(std::string option, float *out_arg, std::
     *out_arg = std::stof(value_as_string, nullptr);
   } catch (const std::exception &e) {
     std::string err_msg = "Invalid numeric value: " + value_as_string;
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   return Status::OK();
@@ -223,7 +246,7 @@ Status CacheAdminArgHandler::ParseArgStream(std::stringstream *arg_stream) {
         if (hostname_ != std::string(kCfgDefaultCacheHost)) {
           std::string err_msg =
             "Invalid host interface: " + hostname_ + ". Current limitation, only 127.0.0.1 can be used.";
-          return Status(StatusCode::kSyntaxError, err_msg);
+          return Status(StatusCode::kMDSyntaxError, err_msg);
         }
         break;
       }
@@ -280,6 +303,10 @@ Status CacheAdminArgHandler::ParseArgStream(std::stringstream *arg_stream) {
         RETURN_IF_NOT_OK(AssignArg(tok, static_cast<std::string *>(nullptr), arg_stream, CommandId::kCmdListSessions));
         break;
       }
+      case ArgValue::kArgServerInfo: {
+        RETURN_IF_NOT_OK(AssignArg(tok, static_cast<std::string *>(nullptr), arg_stream, CommandId::kCmdServerInfo));
+        break;
+      }
       default: {
         // Save space delimited trailing arguments
         trailing_args_ += (" " + tok);
@@ -299,7 +326,7 @@ Status CacheAdminArgHandler::Validate() {
   if (!trailing_args_.empty()) {
     std::string err_msg = "Invalid arguments provided: " + trailing_args_;
     err_msg += "\nPlease try `cache_admin --help` for more information";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // The user must pick at least one command.  i.e. it's meaningless to just give a hostname or port but no command to
@@ -307,18 +334,19 @@ Status CacheAdminArgHandler::Validate() {
   if (command_id_ == CommandId::kCmdUnknown) {
     std::string err_msg = "No command provided";
     err_msg += "\nPlease try `cache_admin --help` for more information";
-    return Status(StatusCode::kSyntaxError, err_msg);
+    return Status(StatusCode::kMDSyntaxError, err_msg);
   }
 
   // Additional checks here
   auto max_num_workers = std::max<int32_t>(std::thread::hardware_concurrency(), 100);
-  if (num_workers_ < 1 || num_workers_ > max_num_workers)
-    return Status(StatusCode::kSyntaxError,
+  if (used_args_[ArgValue::kArgNumWorkers] && (num_workers_ < 1 || num_workers_ > max_num_workers))
+    // Check the value of num_workers only if it's provided by users.
+    return Status(StatusCode::kMDSyntaxError,
                   "Number of workers must be in range of 1 and " + std::to_string(max_num_workers) + ".");
-  if (log_level_ < 0 || log_level_ > 3) return Status(StatusCode::kSyntaxError, "Log level must be in range (0..3).");
+  if (log_level_ < 0 || log_level_ > 4) return Status(StatusCode::kMDSyntaxError, "Log level must be in range (0..4).");
   if (memory_cap_ratio_ <= 0 || memory_cap_ratio_ > 1)
-    return Status(StatusCode::kSyntaxError, "Memory cap ratio should be positive and no greater than 1");
-  if (port_ < 1025 || port_ > 65535) return Status(StatusCode::kSyntaxError, "Port must be in range (1025..65535).");
+    return Status(StatusCode::kMDSyntaxError, "Memory cap ratio should be positive and no greater than 1");
+  if (port_ < 1025 || port_ > 65535) return Status(StatusCode::kMDSyntaxError, "Port must be in range (1025..65535).");
 
   return Status::OK();
 }
@@ -334,32 +362,7 @@ Status CacheAdminArgHandler::RunCommand() {
       break;
     }
     case CommandId::kCmdStop: {
-      CacheClientGreeter comm(hostname_, port_, 1);
-      RETURN_IF_NOT_OK(comm.ServiceStart());
-      SharedMessage msg;
-      RETURN_IF_NOT_OK(msg.Create());
-      auto rq = std::make_shared<ServerStopRequest>(msg.GetMsgQueueId());
-      RETURN_IF_NOT_OK(comm.HandleRequest(rq));
-      Status rc = rq->Wait();
-      if (rc.IsError()) {
-        msg.RemoveResourcesOnExit();
-        if (rc.IsNetWorkError()) {
-          std::string errMsg = "Server on port " + std::to_string(port_) + " is not up or has been shutdown already.";
-          return Status(StatusCode::kNetWorkError, errMsg);
-        }
-        return rc;
-      }
-      // OK return code only means the server acknowledge our request but we still
-      // have to wait for its complete shutdown because the server will shutdown
-      // the comm layer as soon as the request is received, and we need to wait
-      // on the message queue instead.
-      // The server will send a message back and remove the queue and we will then wake up. But on the safe
-      // side, we will also set up an alarm and kill this process if we hang on
-      // the message queue.
-      alarm(60);
-      Status dummy_rc;
-      (void)msg.ReceiveStatus(&dummy_rc);
-      std::cout << "Cache server on port " << std::to_string(port_) << " has been stopped successfully." << std::endl;
+      RETURN_IF_NOT_OK(StopServer(command_id_));
       break;
     }
     case CommandId::kCmdGenerateSession: {
@@ -421,12 +424,86 @@ Status CacheAdminArgHandler::RunCommand() {
       }
       break;
     }
+    case CommandId::kCmdServerInfo: {
+      RETURN_IF_NOT_OK(ShowServerInfo());
+      break;
+    }
     default: {
       RETURN_STATUS_UNEXPECTED("Invalid cache admin command id.");
       break;
     }
   }
 
+  return Status::OK();
+}
+
+Status CacheAdminArgHandler::ShowServerInfo() {
+  CacheClientGreeter comm(hostname_, port_, 1);
+  RETURN_IF_NOT_OK(comm.ServiceStart());
+  auto rq = std::make_shared<ListSessionsRequest>();
+  RETURN_IF_NOT_OK(comm.HandleRequest(rq));
+  RETURN_IF_NOT_OK(rq->Wait());
+
+  auto session_ids = rq->GetSessionIds();
+  auto server_cfg_info = rq->GetServerStat();
+  int32_t num_workers = server_cfg_info.num_workers;
+  int8_t log_level = server_cfg_info.log_level;
+  std::string spill_dir = server_cfg_info.spill_dir;
+  if (spill_dir.empty()) spill_dir = "None";
+
+  int name_w = 20;
+  int value_w = 15;
+  std::cout << "Cache Server Configuration: " << std::endl;
+  std::cout << "----------------------------------------" << std::endl;
+  std::cout << std::setw(name_w) << "config name" << std::setw(value_w) << "value" << std::endl;
+  std::cout << "----------------------------------------" << std::endl;
+  std::cout << std::setw(name_w) << "hostname" << std::setw(value_w) << hostname_ << std::endl;
+  std::cout << std::setw(name_w) << "port" << std::setw(value_w) << port_ << std::endl;
+  std::cout << std::setw(name_w) << "number of workers" << std::setw(value_w) << std::to_string(num_workers)
+            << std::endl;
+  std::cout << std::setw(name_w) << "log level" << std::setw(value_w) << std::to_string(log_level) << std::endl;
+  std::cout << std::setw(name_w) << "spill dir" << std::setw(value_w) << spill_dir << std::endl;
+  std::cout << "----------------------------------------" << std::endl;
+
+  std::cout << "Active sessions: " << std::endl;
+  if (!session_ids.empty()) {
+    for (auto session_id : session_ids) {
+      std::cout << session_id << "  ";
+    }
+    std::cout << std::endl << "(Please use 'cache_admin --list_sessions' to get detailed info of sessions.)\n";
+  } else {
+    std::cout << "No active sessions." << std::endl;
+  }
+  return Status::OK();
+}
+
+Status CacheAdminArgHandler::StopServer(CommandId command_id) {
+  CacheClientGreeter comm(hostname_, port_, 1);
+  RETURN_IF_NOT_OK(comm.ServiceStart());
+  SharedMessage msg;
+  RETURN_IF_NOT_OK(msg.Create());
+  auto rq = std::make_shared<ServerStopRequest>(msg.GetMsgQueueId());
+  RETURN_IF_NOT_OK(comm.HandleRequest(rq));
+  Status rc = rq->Wait();
+  if (rc.IsError()) {
+    msg.RemoveResourcesOnExit();
+    if (rc == StatusCode::kMDNetWorkError) {
+      std::string errMsg = "Server on port " + std::to_string(port_) + " is not up or has been shutdown already.";
+      return Status(StatusCode::kMDNetWorkError, errMsg);
+    }
+    return rc;
+  }
+  // OK return code only means the server acknowledge our request but we still
+  // have to wait for its complete shutdown because the server will shutdown
+  // the comm layer as soon as the request is received, and we need to wait
+  // on the message queue instead.
+  // The server will send a message back and remove the queue and we will then wake up. But on the safe
+  // side, we will also set up an alarm and kill this process if we hang on
+  // the message queue.
+  alarm(60);
+  Status dummy_rc;
+  (void)msg.ReceiveStatus(&dummy_rc);
+  std::cout << "Cache server on port " << std::to_string(port_) << " has been stopped successfully." << std::endl;
   return Status::OK();
 }
 
@@ -462,7 +539,6 @@ Status CacheAdminArgHandler::StartServer(CommandId command_id) {
   // fork the child process to become the daemon
   pid_t pid;
   pid = fork();
-
   // failed to fork
   if (pid < 0) {
     std::string err_msg = "Failed to fork process for cache server: " + std::to_string(errno);
@@ -488,7 +564,7 @@ Status CacheAdminArgHandler::StartServer(CommandId command_id) {
     if (WIFEXITED(status)) {
       auto exit_status = WEXITSTATUS(status);
       if (exit_status) {
-        return Status(StatusCode::kUnexpectedError, msg);
+        return Status(StatusCode::kMDUnexpectedError, msg);
       } else {
         // Not an error, some info message goes to stdout
         std::cout << msg << std::endl;
@@ -504,8 +580,10 @@ Status CacheAdminArgHandler::StartServer(CommandId command_id) {
     close(0);
     close(fd[1]);
     // exec the cache server binary in this process
+    // If the user did not provide the value of num_workers, we pass -1 to cache server to allow it assign the default.
+    // So that the server knows if the number is provided by users or by default.
+    std::string workers_string = used_args_[ArgValue::kArgNumWorkers] ? std::to_string(num_workers_) : "-1";
     std::string port_string = std::to_string(port_);
-    std::string workers_string = std::to_string(num_workers_);
     std::string shared_memory_string = std::to_string(shm_mem_sz_);
     std::string minloglevel_string = std::to_string(log_level_);
     std::string daemonize_string = "true";
@@ -538,13 +616,15 @@ void CacheAdminArgHandler::Help() {
   std::cerr << "                [[-h | --hostname] <hostname>]            Default is " << kCfgDefaultCacheHost << ".\n";
   std::cerr << "                [[-p | --port] <port number>]             Default is " << kCfgDefaultCachePort << ".\n";
   std::cerr << "                [[-w | --workers] <number of workers>]    Default is " << kDefaultNumWorkers << ".\n";
-  std::cerr << "                [[-s | --spilldir] <spilling directory>]  Default is " << DefaultSpillDir() << ".\n";
-  std::cerr << "                [[-l | --loglevel] <log level>]           Default is 1 (warning level).\n";
+  std::cerr << "                [[-s | --spilldir] <spilling directory>]  Default is no spilling.\n";
+  std::cerr << "                [[-l | --loglevel] <log level>]           Default is 1 (INFO level).\n";
   std::cerr << "            [--destroy_session  | -d] <session id>\n";
   std::cerr << "                [[-p | --port] <port number>]\n";
   std::cerr << "            [--generate_session | -g]\n";
   std::cerr << "                [[-p | --port] <port number>]\n";
   std::cerr << "            [--list_sessions]\n";
+  std::cerr << "                [[-p | --port] <port number>]\n";
+  std::cerr << "            [--server_info]\n";
   std::cerr << "                [[-p | --port] <port number>]\n";
   std::cerr << "            [--help]" << std::endl;
   // Do not expose these option to the user via help or documentation, but the options do exist to aid with

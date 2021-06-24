@@ -18,6 +18,7 @@
 #include <fstream>
 #include <algorithm>
 #include <vector>
+#include <map>
 #include "src/kernel_registry.h"
 #include "src/common/file_utils.h"
 
@@ -32,7 +33,7 @@ kernel::LiteKernel *GetOpenCLKernel(const std::vector<Tensor *> &in_tensors, con
                                     OpParameter *parameter, const InnerContext *ctx, const kernel::KernelKey &key) {
   auto creator = KernelRegistry::GetInstance()->GetCreator(key);
   if (creator != nullptr) {
-    auto kernel = creator(in_tensors, out_tensors, parameter, nullptr, key, nullptr);
+    auto kernel = creator(in_tensors, out_tensors, parameter, nullptr, key);
     return kernel;
   }
   return nullptr;
@@ -41,10 +42,10 @@ kernel::LiteKernel *GetOpenCLKernel(const std::vector<Tensor *> &in_tensors, con
 
 namespace mindspore::kernel {
 
-const std::set<schema::PrimitiveType> ArithmeticPrimitives = {schema::PrimitiveType_Mul,
-                                                              schema::PrimitiveType_Add,
-                                                              schema::PrimitiveType_Sub,
-                                                              schema::PrimitiveType_Div,
+const std::set<schema::PrimitiveType> ArithmeticPrimitives = {schema::PrimitiveType_MulFusion,
+                                                              schema::PrimitiveType_AddFusion,
+                                                              schema::PrimitiveType_SubFusion,
+                                                              schema::PrimitiveType_DivFusion,
                                                               schema::PrimitiveType_LogicalAnd,
                                                               schema::PrimitiveType_LogicalOr,
                                                               schema::PrimitiveType_Maximum,
@@ -58,11 +59,12 @@ const std::set<schema::PrimitiveType> ArithmeticPrimitives = {schema::PrimitiveT
                                                               schema::PrimitiveType_LessEqual,
                                                               schema::PrimitiveType_Greater,
                                                               schema::PrimitiveType_GreaterEqual,
-                                                              schema::PrimitiveType_Eltwise};
+                                                              schema::PrimitiveType_Eltwise,
+                                                              schema::PrimitiveType_BiasAdd};
 
 const std::set<schema::PrimitiveType> ArithmeticSelfPrimitives = {
   schema::PrimitiveType_Abs,        schema::PrimitiveType_Ceil,  schema::PrimitiveType_Cos,
-  schema::PrimitiveType_Exp,        schema::PrimitiveType_Floor, schema::PrimitiveType_Log,
+  schema::PrimitiveType_ExpFusion,  schema::PrimitiveType_Floor, schema::PrimitiveType_Log,
   schema::PrimitiveType_LogicalNot, schema::PrimitiveType_Round, schema::PrimitiveType_Rsqrt,
   schema::PrimitiveType_Sin,        schema::PrimitiveType_Neg,   schema::PrimitiveType_Sqrt,
   schema::PrimitiveType_Square};
@@ -122,157 +124,76 @@ int GetMaxDivisorStrategy1(int x, int divisor) {
   }
 }
 
-std::vector<size_t> GetCommonGlobalSize(const std::vector<size_t> &local, const std::vector<size_t> &global) {
-  MS_ASSERT(local.size() == global.size() && local.size() == 3);
-  std::vector<size_t> result(3);
-  for (int i = 0; i < 3; ++i) {
-    result[i] = UP_ROUND(global[i], local[i]);
-  }
-  return result;
-}
-
-std::vector<size_t> GetCommonLocalSize(const std::vector<size_t> &global, int max_size) {
-  MS_ASSERT(global.size() == 3);
-  size_t local_z = GetMaxDivisorStrategy0(global[2], 8);
-  if (local_z == 0) {
-    MS_LOG(ERROR) << "Divide by zero";
-    return {};
-  }
-  size_t local_xy = max_size / local_z;
-  size_t local_x = std::min(UP_DIV(global[0], 2), local_xy);
-  size_t local_y = std::min(local_xy / local_x, global[1]);
-  std::vector<size_t> local = {local_x, local_y, local_z};
-  return local;
-}
+std::map<cl_int, std::string> error_infos = {
+  {CL_SUCCESS, "Success"},
+  {CL_DEVICE_NOT_FOUND, "Device not found"},
+  {CL_DEVICE_NOT_AVAILABLE, "Device not available"},
+  {CL_COMPILER_NOT_AVAILABLE, "Compiler not available"},
+  {CL_MEM_OBJECT_ALLOCATION_FAILURE, "Memory object allocation failure"},
+  {CL_OUT_OF_RESOURCES, "Out of resources"},
+  {CL_OUT_OF_HOST_MEMORY, "Out of host memory"},
+  {CL_PROFILING_INFO_NOT_AVAILABLE, "Profiling information not available"},
+  {CL_MEM_COPY_OVERLAP, "Memory copy overlap"},
+  {CL_IMAGE_FORMAT_MISMATCH, "Image format mismatch"},
+  {CL_IMAGE_FORMAT_NOT_SUPPORTED, "Image format not supported"},
+  {CL_BUILD_PROGRAM_FAILURE, "Build program failure"},
+  {CL_MAP_FAILURE, "Mapping failure"},
+  {CL_MISALIGNED_SUB_BUFFER_OFFSET, "Misaligned sub-buffer offset"},
+  {CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST, "Execution status error for events in wait list"},
+  {CL_COMPILE_PROGRAM_FAILURE, "Compile program failure"},
+  {CL_LINKER_NOT_AVAILABLE, "Linker not available"},
+  {CL_LINK_PROGRAM_FAILURE, "Link program failure"},
+  {CL_DEVICE_PARTITION_FAILED, "Device partition failed"},
+  {CL_KERNEL_ARG_INFO_NOT_AVAILABLE, "Kernel argument information not available"},
+  {CL_INVALID_VALUE, "Invalid value"},
+  {CL_INVALID_DEVICE_TYPE, "Invalid device type"},
+  {CL_INVALID_PLATFORM, "Invalid platform"},
+  {CL_INVALID_DEVICE, "Invalid device"},
+  {CL_INVALID_CONTEXT, "Invalid context"},
+  {CL_INVALID_QUEUE_PROPERTIES, "Invalid queue properties"},
+  {CL_INVALID_COMMAND_QUEUE, "Invalid command queue"},
+  {CL_INVALID_HOST_PTR, "Invalid host pointer"},
+  {CL_INVALID_MEM_OBJECT, "Invalid memory object"},
+  {CL_INVALID_IMAGE_FORMAT_DESCRIPTOR, "Invalid image format descriptor"},
+  {CL_INVALID_IMAGE_SIZE, "Invalid image size"},
+  {CL_INVALID_SAMPLER, "Invalid sampler"},
+  {CL_INVALID_BINARY, "Invalid binary"},
+  {CL_INVALID_BUILD_OPTIONS, "Invalid build options"},
+  {CL_INVALID_PROGRAM, "Invalid program"},
+  {CL_INVALID_PROGRAM_EXECUTABLE, "Invalid program executable"},
+  {CL_INVALID_KERNEL_NAME, "Invalid kernel name"},
+  {CL_INVALID_KERNEL_DEFINITION, "Invalid kernel definition"},
+  {CL_INVALID_KERNEL, "Invalid kernel"},
+  {CL_INVALID_ARG_INDEX, "Invalid argument index"},
+  {CL_INVALID_ARG_VALUE, "Invalid argument value"},
+  {CL_INVALID_ARG_SIZE, "Invalid argument size"},
+  {CL_INVALID_KERNEL_ARGS, "Invalid kernel arguments"},
+  {CL_INVALID_WORK_DIMENSION, "Invalid work dimension"},
+  {CL_INVALID_WORK_GROUP_SIZE, "Invalid work group size"},
+  {CL_INVALID_WORK_ITEM_SIZE, "Invalid work item size"},
+  {CL_INVALID_GLOBAL_OFFSET, "Invalid global offset"},
+  {CL_INVALID_EVENT_WAIT_LIST, "Invalid event wait list"},
+  {CL_INVALID_EVENT, "Invalid event"},
+  {CL_INVALID_OPERATION, "Invalid operation"},
+  {CL_INVALID_GL_OBJECT, "Invalid GL object"},
+  {CL_INVALID_BUFFER_SIZE, "Invalid buffer size"},
+  {CL_INVALID_MIP_LEVEL, "Invalid mip-level"},
+  {CL_INVALID_GLOBAL_WORK_SIZE, "Invalid global work size"},
+  {CL_INVALID_PROPERTY, "Invalid property"},
+  {CL_INVALID_IMAGE_DESCRIPTOR, "Invalid image descriptor"},
+  {CL_INVALID_COMPILER_OPTIONS, "Invalid compiler options"},
+  {CL_INVALID_LINKER_OPTIONS, "Invalid linker options"},
+  {CL_INVALID_DEVICE_PARTITION_COUNT, "Invalid device partition count"},
+  {CL_INVALID_PIPE_SIZE, "Invalid pipe size"},
+  {CL_INVALID_DEVICE_QUEUE, "Invalid device queue"},
+  {CL_INVALID_GL_SHAREGROUP_REFERENCE_KHR, "Invalid GL share group reference KHR"}};
 
 std::string CLErrorCode(cl_int error_code) {
-  switch (error_code) {
-    case CL_SUCCESS:
-      return "Success";
-    case CL_DEVICE_NOT_FOUND:
-      return "Device not found";
-    case CL_DEVICE_NOT_AVAILABLE:
-      return "Device not available";
-    case CL_COMPILER_NOT_AVAILABLE:
-      return "Compiler not available";
-    case CL_MEM_OBJECT_ALLOCATION_FAILURE:
-      return "Memory object allocation failure";
-    case CL_OUT_OF_RESOURCES:
-      return "Out of resources";
-    case CL_OUT_OF_HOST_MEMORY:
-      return "Out of host memory";
-    case CL_PROFILING_INFO_NOT_AVAILABLE:
-      return "Profiling information not available";
-    case CL_MEM_COPY_OVERLAP:
-      return "Memory copy overlap";
-    case CL_IMAGE_FORMAT_MISMATCH:
-      return "Image format mismatch";
-    case CL_IMAGE_FORMAT_NOT_SUPPORTED:
-      return "Image format not supported";
-    case CL_BUILD_PROGRAM_FAILURE:
-      return "Build program failure";
-    case CL_MAP_FAILURE:
-      return "Mapping failure";
-    case CL_MISALIGNED_SUB_BUFFER_OFFSET:
-      return "Misaligned sub-buffer offset";
-    case CL_EXEC_STATUS_ERROR_FOR_EVENTS_IN_WAIT_LIST:
-      return "Execution status error for events in wait list";
-    case CL_COMPILE_PROGRAM_FAILURE:
-      return "Compile program failure";
-    case CL_LINKER_NOT_AVAILABLE:
-      return "Linker not available";
-    case CL_LINK_PROGRAM_FAILURE:
-      return "Link program failure";
-    case CL_DEVICE_PARTITION_FAILED:
-      return "Device partition failed";
-    case CL_KERNEL_ARG_INFO_NOT_AVAILABLE:
-      return "Kernel argument information not available";
-    case CL_INVALID_VALUE:
-      return "Invalid value";
-    case CL_INVALID_DEVICE_TYPE:
-      return "Invalid device type";
-    case CL_INVALID_PLATFORM:
-      return "Invalid platform";
-    case CL_INVALID_DEVICE:
-      return "Invalid device";
-    case CL_INVALID_CONTEXT:
-      return "Invalid context";
-    case CL_INVALID_QUEUE_PROPERTIES:
-      return "Invalid queue properties";
-    case CL_INVALID_COMMAND_QUEUE:
-      return "Invalid command queue";
-    case CL_INVALID_HOST_PTR:
-      return "Invalid host pointer";
-    case CL_INVALID_MEM_OBJECT:
-      return "Invalid memory object";
-    case CL_INVALID_IMAGE_FORMAT_DESCRIPTOR:
-      return "Invalid image format descriptor";
-    case CL_INVALID_IMAGE_SIZE:
-      return "Invalid image size";
-    case CL_INVALID_SAMPLER:
-      return "Invalid sampler";
-    case CL_INVALID_BINARY:
-      return "Invalid binary";
-    case CL_INVALID_BUILD_OPTIONS:
-      return "Invalid build options";
-    case CL_INVALID_PROGRAM:
-      return "Invalid program";
-    case CL_INVALID_PROGRAM_EXECUTABLE:
-      return "Invalid program executable";
-    case CL_INVALID_KERNEL_NAME:
-      return "Invalid kernel name";
-    case CL_INVALID_KERNEL_DEFINITION:
-      return "Invalid kernel definition";
-    case CL_INVALID_KERNEL:
-      return "Invalid kernel";
-    case CL_INVALID_ARG_INDEX:
-      return "Invalid argument index";
-    case CL_INVALID_ARG_VALUE:
-      return "Invalid argument value";
-    case CL_INVALID_ARG_SIZE:
-      return "Invalid argument size";
-    case CL_INVALID_KERNEL_ARGS:
-      return "Invalid kernel arguments";
-    case CL_INVALID_WORK_DIMENSION:
-      return "Invalid work dimension";
-    case CL_INVALID_WORK_GROUP_SIZE:
-      return "Invalid work group size";
-    case CL_INVALID_WORK_ITEM_SIZE:
-      return "Invalid work item size";
-    case CL_INVALID_GLOBAL_OFFSET:
-      return "Invalid global offset";
-    case CL_INVALID_EVENT_WAIT_LIST:
-      return "Invalid event wait list";
-    case CL_INVALID_EVENT:
-      return "Invalid event";
-    case CL_INVALID_OPERATION:
-      return "Invalid operation";
-    case CL_INVALID_GL_OBJECT:
-      return "Invalid GL object";
-    case CL_INVALID_BUFFER_SIZE:
-      return "Invalid buffer size";
-    case CL_INVALID_MIP_LEVEL:
-      return "Invalid mip-level";
-    case CL_INVALID_GLOBAL_WORK_SIZE:
-      return "Invalid global work size";
-    case CL_INVALID_PROPERTY:
-      return "Invalid property";
-    case CL_INVALID_IMAGE_DESCRIPTOR:
-      return "Invalid image descriptor";
-    case CL_INVALID_COMPILER_OPTIONS:
-      return "Invalid compiler options";
-    case CL_INVALID_LINKER_OPTIONS:
-      return "Invalid linker options";
-    case CL_INVALID_DEVICE_PARTITION_COUNT:
-      return "Invalid device partition count";
-    case CL_INVALID_PIPE_SIZE:
-      return "Invalid pipe size";
-    case CL_INVALID_DEVICE_QUEUE:
-      return "Invalid device queue";
-    case CL_INVALID_GL_SHAREGROUP_REFERENCE_KHR:
-      return "Invalid GL share group reference KHR";
-    default:
-      return "Unknown OpenCL error code";
+  auto it = error_infos.find(error_code);
+  if (it == error_infos.end()) {
+    return "Unknown OpenCL error code";
+  } else {
+    return it->second;
   }
 }
 
@@ -294,40 +215,108 @@ int WriteToBin(const std::string &file_path, void *data, size_t size) {
   return 0;
 }
 
-std::vector<int> GetNHWCShape(const std::vector<int> &tensor_shape) {
-  int n, h, w, c;
-  n = h = w = c = 1;
-  if (tensor_shape.size() == 1) {
-    c = tensor_shape[0];
-  } else if (tensor_shape.size() == 2) {
-    n = tensor_shape[0];
-    c = tensor_shape[1];
-  } else if (tensor_shape.size() == 3) {
-    n = tensor_shape[0];
-    h = tensor_shape[1];
-    c = tensor_shape[2];
-  } else if (tensor_shape.size() == 4) {
-    n = tensor_shape[0];
-    h = tensor_shape[1];
-    w = tensor_shape[2];
-    c = tensor_shape[3];
+int GetBroadcastGpuAxis(int ndim, int ori_axis) {
+  if (ori_axis >= ndim) {
+    return ndim - 1;
   }
-  return {n, h, w, c};
+  int axis = 0;
+  if (ndim == 1) {
+    axis = 3;
+  } else if (ndim == 2) {
+    axis = ori_axis == 0 ? 0 : 3;
+  } else if (ndim == 3) {
+    axis = ori_axis == 0 ? 0 : ori_axis == 1 ? 2 : 3;
+  } else if (ndim == 4) {
+    axis = ori_axis;
+  } else if (ndim > 4) {
+    MS_LOG(ERROR) << "GPU doesn't support ndim>=" << ndim;
+  }
+  return axis;
 }
 
-std::vector<size_t> GetImage2dShapeFromNHWC(const std::vector<int> &tensor_shape, schema::Format format) {
-  if (tensor_shape.size() != 4) {
-    return {1, 1};
+void PackNHWCToNHWC4(void *src, void *dst, bool src_is_fp16, bool dst_is_fp16, const GpuTensorInfo &tensor) {
+  MS_ASSERT(src);
+  MS_ASSERT(dst);
+  auto src_fp16 = reinterpret_cast<float16_t *>(src);
+  auto src_fp32 = reinterpret_cast<float32_t *>(src);
+  auto dst_fp16 = reinterpret_cast<float16_t *>(dst);
+  auto dst_fp32 = reinterpret_cast<float32_t *>(dst);
+  for (int n = 0, src_idx = 0; n < tensor.N; n++) {
+    for (int h = 0; h < tensor.H; ++h) {
+      for (int w = 0; w < tensor.W; ++w) {
+        for (int c = 0; c < tensor.C; ++c, ++src_idx) {
+          int dst_idx = ((n * tensor.H + h) * tensor.W + w) * tensor.Slice * C4NUM + c;
+          if (dst_is_fp16) {
+            dst_fp16[dst_idx] = src_is_fp16 ? src_fp16[src_idx] : static_cast<float16_t>(src_fp32[src_idx]);
+          } else {
+            dst_fp32[dst_idx] = src_is_fp16 ? static_cast<float32_t>(src_fp16[src_idx]) : src_fp32[src_idx];
+          }
+        }
+      }
+    }
   }
-  size_t image_x, image_y;
-  image_x = image_y = 1;
-  if (format == schema::Format_NHWC4) {
-    image_x = tensor_shape[2] * UP_DIV(tensor_shape[3], C4NUM);
-    image_y = tensor_shape[0] * tensor_shape[1];
-  } else if (format == schema::Format_NC4HW4) {
-    image_x = tensor_shape[2];
-    image_y = tensor_shape[0] * tensor_shape[1] * UP_DIV(tensor_shape[3], C4NUM);
+  // scalar
+  if (tensor.ElementsNum == 1) {
+    if (dst_is_fp16) {
+      dst_fp16[3] = dst_fp16[2] = dst_fp16[1] = dst_fp16[0];
+    } else {
+      dst_fp32[3] = dst_fp32[2] = dst_fp32[1] = dst_fp32[0];
+    }
   }
-  return {image_x, image_y};
 }
+
+int CheckParamLikeTensor(const std::string &kernel_name, const std::string &tensor_name, lite::Tensor *tensor,
+                         TypeId expect_data_type, const std::vector<int> &expect_shape) {
+  if (!tensor->IsConst()) {
+    MS_LOG(ERROR) << "in " << kernel_name << ": tensor " << tensor_name << " must be Const.";
+    return RET_ERROR;
+  }
+  if (tensor->data_type() != expect_data_type) {
+    MS_LOG(ERROR) << "in " << kernel_name << ": tensor's data_type must be " << expect_data_type;
+    return RET_ERROR;
+  }
+  if (tensor->shape() != expect_shape) {
+    std::string expect_shape_str = "(";
+    for (auto i : expect_shape) {
+      expect_shape_str += std::to_string(i) + ",";
+    }
+    expect_shape_str += ")";
+
+    std::string tensor_shape_str = "(";
+    for (auto i : tensor->shape()) {
+      tensor_shape_str += std::to_string(i) + ",";
+    }
+    tensor_shape_str += ")";
+
+    MS_LOG(ERROR) << "in " << kernel_name
+                  << ": tensor's shape is error. expect_shape: " + expect_shape_str +
+                       " tensor->shape(): " + tensor_shape_str;
+    return RET_ERROR;
+  }
+  return RET_OK;
+}
+
+static std::set<void *> tmp_weights;
+
+void StoreTmpWeight(lite::Tensor *tensor) {
+  MS_LOG(WARNING) << "store weight when kernel don't infer shape!";
+  if (tensor && tensor->data_c() && tensor->Size()) {
+    void *new_data = malloc(tensor->Size());
+    MS_ASSERT(new_data);
+    if (new_data == nullptr) {
+      return;
+    }
+    memcpy(new_data, tensor->data_c(), tensor->Size());
+    tensor->set_data(new_data);
+    tmp_weights.insert(new_data);
+  }
+}
+
+void FreeTmpWeight(void *data) {
+  if (tmp_weights.count(data)) {
+    free(data);
+    tmp_weights.erase(data);
+  }
+}
+
 }  // namespace mindspore::kernel

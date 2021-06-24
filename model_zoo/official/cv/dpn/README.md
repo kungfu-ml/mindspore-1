@@ -22,10 +22,6 @@
 - [Model Description](#model-description)
     - [Performance](#performance)
         - [Accuracy](#accuracy)
-            - [DPN92 (Pretrain)](#dpn92-pretrain)
-            - [DPN98 (Pretrain)](#dpn98-pretrain)
-            - [DPN131 (Pretrain)](#dpn131-pretrain)
-            - [DPN92 (Fine tune)](#dpn92-fine-tune)
             - [DPN92 (Training)](#dpn92-training)
         - [Efficiency](#efficiency)
             - [DPN92](#dpn92)
@@ -67,22 +63,20 @@ All the models in this repository are trained and validated on ImageNet-1K. The 
 
 ## [Mixed Precision](#contents)
 
-The [mixed precision](https://www.mindspore.cn/tutorial/zh-CN/master/advanced_use/mixed_precision.html) training method accelerates the deep learning neural network training process by using both the single-precision and half-precision data formats, and maintains the network precision achieved by the single-precision training at the same time. Mixed precision training can accelerate the computation process, reduce memory usage, and enable a larger model or batch size to be trained on specific hardware. For FP16 operators, if the input data type is FP32, the backend of MindSpore will automatically handle it with reduced precision. Users could check the reduced-precision operators by enabling INFO log and then searching ‘reduce precision’.
+The [mixed precision](https://www.mindspore.cn/tutorial/training/en/master/advanced_use/enable_mixed_precision.html) training method accelerates the deep learning neural network training process by using both the single-precision and half-precision data formats, and maintains the network precision achieved by the single-precision training at the same time. Mixed precision training can accelerate the computation process, reduce memory usage, and enable a larger model or batch size to be trained on specific hardware. For FP16 operators, if the input data type is FP32, the backend of MindSpore will automatically handle it with reduced precision. Users could check the reduced-precision operators by enabling INFO log and then searching ‘reduce precision’.
 
 # [Environment Requirements](#contents)
 
 To run the python scripts in the repository, you need to prepare the environment as follow:
 
 - Hardware
-    - Prepare hardware environment with Ascend or GPU processor. If you want to try Ascend , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to [ascend@huawei.com](mailto:ascend@huawei.com). Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend or GPU processor.
 - Python and dependencies
     - Python3.7
-    - Mindspore 1.0.0
-    - Easydict
-    - MXNet 1.6.0 if running the script `param_convert.py`
+    - Mindspore 1.1.0
 - For more information, please check the resources below：
-    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/zh-CN/master/index.html)
-    - [MindSpore API](https://www.mindspore.cn/api/zh-CN/master/index.html)
+    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
+    - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
 
 # [Quick Start](#contents)
 
@@ -124,6 +118,7 @@ The structure of the files in this repository is shown below.
     │   └─ lr_scheduler.py        // dpn learning rate scheduler
     ├─ eval.py                    // evaluation script
     ├─ train.py                   // training script
+    ├─ export.py                  // export model
     └─ README.md                  // descriptions about this repository
 ```
 
@@ -188,7 +183,7 @@ For example, you can run the shell command below to launch the training procedur
 sh scripts/train_standalone.sh 0 /data/dataset/imagenet/ scripts/pretrian/ 0
 ```
 
-If eval_each_epoch is 1, it will evaluate after each epoch and save the parameters with the max accurracy. But in this case, the time of one epoch will be longer.
+If eval_each_epoch is 1, it will evaluate after each epoch and save the parameters with the max accuracy. But in this case, the time of one epoch will be longer.
 
 If eval_each_epoch is 0, it will save parameters every some epochs instead of evaluating in the training process.
 
@@ -196,7 +191,9 @@ The script will run training in the background, you can view the results through
 
 ```text
 epoch: 1 step: 40036, loss is 3.6232593
-Epoch time: 10048893.336, per step time: 250.996
+epoch time: 10048893.336 ms, per step time: 250.996 ms
+epoch: 2 step: 40036, loss is 3.200775
+epoch time: 9306154.456 ms, per step time: 232.445 ms
 ...
 ```
 
@@ -204,7 +201,7 @@ or as follows (eval_each_epoch = 1):
 
 ```text
 epoch: 1 step: 40036, loss is 3.6232593
-Epoch time: 10048893.336, per step time: 250.996
+epoch time: 10048893.336 ms, per step time: 250.996 ms
 Save the maximum accuracy checkpoint,the accuracy is 0.2629158669225848
 ...
 ```
@@ -230,20 +227,10 @@ sh scripts/train_distributed.sh /home/rank_table.json /data/dataset/imagenet/ ..
 The above shell script will run distribute training in the background. You can view the results through the file `train_parallel[X]/log.txt` as follows:
 
 ```text
-train_parallel0/log:
-epoch: 1 step 20018, loss is 5.74429988861084
-Epoch time: 7908183.789, per step time: 395.054, avg loss: 5.744
-train_parallel0/log:
-epoch: 2 step 20018, loss is 4.53381872177124
-Epoch time: 5036189.547, per step time: 251.583, avg loss: 4.534
-...
-train_parallel1/log:
-poch: 1 step 20018, loss is 5.751555442810059
-Epoch time: 7895946.079, per step time: 394.442, avg loss: 5.752
-train_parallel1/log:
-epoch: 2 step 20018, loss is 4.875896453857422
-Epoch time: 5036190.008, per step time: 251.583, avg loss: 4.876
-...
+epoch: 1 step 5004, loss is 4.5680037
+epoch time: 2312519.441 ms, per step time: 462.134 ms
+epoch: 2 step 5004, loss is 2.964888
+Epoch time: 1350398.913 ms, per step time: 369.864 ms
 ...
 ```
 
@@ -262,7 +249,7 @@ sh scripts/eval.sh [device_id] [dataset_dir] [pretrained_ckpt]
 For example, you can run the shell command below to launch the validation procedure.
 
 ```text
-sh scripts/eval.sh 0 /data/dataset/imageNet/ pretrain/dpn92.ckpt
+sh scripts/eval.sh 0 /data/dataset/imagenet/ pretrain/dpn-180_5004.ckpt
 ```
 
 The above shell script will run evaluation in the background. You can view the results through the file `eval_log.txt`. The result will be achieved as follows:
@@ -282,65 +269,14 @@ All results are validated at image size of 224x224. The dataset preprocessing an
 
 ### [Accuracy](#contents)
 
-The `Pretrain` tag in the table above means that the model's weights are converted from MXNet directly without further training. Relatively, the `Fine tune` tag means that the model is fine tuned after converted from MXNet.
-
-#### DPN92 (Pretrain)
-
-| Parameters        | Ascend                      |
-| ----------------- | --------------------------- |
-| Model Version     | DPN92 (Pretrain)            |
-| Resource          | Ascend 910                  |
-| Uploaded Date     | 09/19/2020 (month/day/year) |
-| MindSpore Version | 0.5.0                       |
-| Dataset           | ImageNet-1K                 |
-| outputs           | probability                 |
-| train performance | Top1:79.12%; Top5:94.49%    |
-
-#### DPN98 (Pretrain)
-
-| Parameters        | Ascend                      |
-| ----------------- | --------------------------- |
-| Model Version     | DPN98 (Pretrain)            |
-| Resource          | Ascend 910                  |
-| Uploaded Date     | 09/19/2020 (month/day/year) |
-| MindSpore Version | 0.5.0                       |
-| Dataset           | ImageNet-1K                 |
-| outputs           | probability                 |
-| train performance | Top1:79.90%; Top5:94.81%    |
-
-#### DPN131 (Pretrain)
-
-| Parameters        | Ascend                      |
-| ----------------- | --------------------------- |
-| Model Version     | DPN131 (Pretrain)           |
-| Resource          | Ascend 910                  |
-| Uploaded Date     | 09/19/2020 (month/day/year) |
-| MindSpore Version | 0.5.0                       |
-| Dataset           | ImageNet-1K                 |
-| outputs           | probability                 |
-| train performance | Top1:79.96%; Top5:94.81%    |
-
-#### DPN92 (Fine tune)
-
-| Parameters        | Ascend                      |
-| ----------------- | --------------------------- |
-| Model Version     | DPN92 (Pretrain)            |
-| Resource          | Ascend 910                  |
-| Uploaded Date     | 09/19/2020 (month/day/year) |
-| MindSpore Version | 0.5.0                       |
-| Dataset           | ImageNet-1K                 |
-| epochs            | 30                          |
-| outputs           | probability                 |
-| train performance | Top1:79.30%; Top5:94.58%    |
-
 #### DPN92 (Training)
 
 | Parameters        | Ascend                      |
 | ----------------- | --------------------------- |
 | Model Version     | DPN92 (Train)               |
 | Resource          | Ascend 910                  |
-| Uploaded Date     | 11/13/2020 (month/day/year) |
-| MindSpore Version | 1.0.0                       |
+| Uploaded Date     | 12/20/2020 (month/day/year) |
+| MindSpore Version | 1.1.0                       |
 | Dataset           | ImageNet-1K                 |
 | epochs            | 180                         |
 | outputs           | probability                 |
@@ -354,12 +290,12 @@ The `Pretrain` tag in the table above means that the model's weights are convert
 | ----------------- | --------------------------------- |
 | Model Version     | DPN92                             |
 | Resource          | Ascend 910                        |
-| Uploaded Date     | 09/19/2020 (month/day/year)       |
-| MindSpore Version | 0.5.0                             |
+| Uploaded Date     | 12/20/2020 (month/day/year)       |
+| MindSpore Version | 1.1.0                             |
 | Dataset           | ImageNet-1K                       |
 | batch_size        | 32                                |
 | outputs           | probability                       |
-| speed             | 1pc:127.90 img/s;8pc:1023.2 img/s |
+| speed             | 1pc:233 ms/step;8pc:240 ms/step   |
 
 # [Description of Random Situation](#contents)
 

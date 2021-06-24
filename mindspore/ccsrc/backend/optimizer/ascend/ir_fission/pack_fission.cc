@@ -26,7 +26,7 @@ AnfNodePtr CreateNewPack(const FuncGraphPtr &func_graph, const CNodePtr &origin_
                          size_t offset) {
   MS_EXCEPTION_IF_NULL(func_graph);
   MS_EXCEPTION_IF_NULL(origin_pack_cnode);
-  std::vector<AnfNodePtr> new_pack_inputs{NewValueNode(std::make_shared<Primitive>(prim::kPrimPack->name()))};
+  std::vector<AnfNodePtr> new_pack_inputs{NewValueNode(std::make_shared<Primitive>(prim::kPrimStack->name()))};
   for (size_t i = begin_index; i < begin_index + offset; ++i) {
     new_pack_inputs.push_back(origin_pack_cnode->input(i));
   }
@@ -60,7 +60,7 @@ AnfNodePtr CreateNewPack(const FuncGraphPtr &func_graph, const CNodePtr &origin_
     }
   }
   new_shape.erase(new_shape.begin() + axis + 1);
-  AnfAlgo::SetOutputInferTypeAndShape({AnfAlgo::GetOutputInferDataType(origin_pack_cnode, 0)}, {output_shape},
+  AnfAlgo::SetOutputInferTypeAndShape({AnfAlgo::GetOutputInferDataType(origin_pack_cnode, 0)}, {new_shape},
                                       new_pack.get());
   return new_pack;
 }
@@ -68,7 +68,7 @@ AnfNodePtr CreateNewPack(const FuncGraphPtr &func_graph, const CNodePtr &origin_
 
 const BaseRef PackFission::DefinePattern() const {
   VarPtr Xs = std::make_shared<SeqVar>();
-  return VectorRef({prim::kPrimPack, Xs});
+  return VectorRef({prim::kPrimStack, Xs});
 }
 
 const AnfNodePtr PackFission::Process(const FuncGraphPtr &func_graph, const AnfNodePtr &node, const EquivPtr &) const {

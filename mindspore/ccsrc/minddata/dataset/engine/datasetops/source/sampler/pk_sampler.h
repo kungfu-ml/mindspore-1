@@ -61,6 +61,16 @@ class PKSamplerRT : public SamplerRT {  // NOT YET FINISHED
   // @param show_all - bool to show detailed vs summary
   void SamplerPrint(std::ostream &out, bool show_all) const override;
 
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
+
+  /// \brief PK cannot return an exact value because num_classes is not known until runtime, hence -1 is used
+  /// \param[out] num_rows
+  /// \return -1, which means PKSampler doesn't know how much data
+  int64_t CalculateNumSamples(int64_t num_rows) override { return -1; }
+
  private:
   bool shuffle_;
   uint32_t seed_;

@@ -113,7 +113,7 @@ TEST_F(TestHWTopKSplit, test_topk_no_split) {
   ConstInputToAttr(topk_cnode, attr_index);
   EXPECT_EQ(topk_cnode->inputs().size(), 2);
   input_names_vec = AnfAlgo::GetNodeAttr<std::vector<std::string>>(topk_cnode, kAttrInputNames);
-  EXPECT_EQ(input_names_vec.size(), 1);
+  EXPECT_EQ(input_names_vec.size(), 2);
 
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();

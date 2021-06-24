@@ -47,6 +47,12 @@ void PSContext::SetPSEnable(bool enabled) {
     } else {
       MS_LOG(WARNING) << "MS_ROLE is " << ms_role << ", which is invalid.";
     }
+
+    worker_num_ = std::strtol(common::GetEnv(kEnvWorkerNum).c_str(), nullptr, 10);
+    server_num_ = std::strtol(common::GetEnv(kEnvPServerNum).c_str(), nullptr, 10);
+    scheduler_host_ = common::GetEnv(kEnvSchedulerHost);
+    scheduler_port_ = std::strtol(common::GetEnv(kEnvSchedulerPort).c_str(), nullptr, 10);
+    core::ClusterMetadata::instance()->Init(worker_num_, server_num_, scheduler_host_, scheduler_port_);
   } else {
     MS_LOG(INFO) << "PS mode is disabled.";
     is_worker_ = false;
@@ -55,7 +61,7 @@ void PSContext::SetPSEnable(bool enabled) {
   }
 }
 
-bool PSContext::is_ps_enabled() const { return ps_enabled_; }
+bool PSContext::is_ps_mode() const { return ps_enabled_; }
 
 void PSContext::Reset() {
   ps_enabled_ = false;
@@ -82,11 +88,19 @@ std::string PSContext::ms_role() const {
   }
 }
 
-bool PSContext::is_role_worker() const { return is_worker_; }
+bool PSContext::is_worker() const { return is_worker_; }
 
-bool PSContext::is_role_pserver() const { return is_pserver_; }
+bool PSContext::is_server() const { return is_pserver_; }
 
-bool PSContext::is_role_sched() const { return is_sched_; }
+bool PSContext::is_scheduler() const { return is_sched_; }
+
+uint32_t PSContext::initial_worker_num() { return worker_num_; }
+
+uint32_t PSContext::initial_server_num() { return server_num_; }
+
+std::string PSContext::scheduler_host() { return scheduler_host_; }
+
+uint16_t PSContext::scheduler_port() { return scheduler_port_; }
 
 void PSContext::SetPSRankId(int rank_id) { rank_id_ = rank_id; }
 
@@ -127,6 +141,12 @@ void PSContext::CloneHashTable(const std::string &dest_param_name, const std::st
 void PSContext::set_cache_enable(bool cache_enable) const {
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
   PsDataPrefetch::GetInstance().set_cache_enable(cache_enable);
+#endif
+}
+
+void PSContext::set_rank_id(int rank_id) const {
+#if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
+  ps_cache_instance.set_rank_id(rank_id);
 #endif
 }
 }  // namespace ps

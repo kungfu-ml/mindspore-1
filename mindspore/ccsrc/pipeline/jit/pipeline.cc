@@ -48,8 +48,9 @@
 #include "pybind_api/pybind_patch.h"
 #include "utils/shape_utils.h"
 #include "utils/info.h"
+#include "load_mindir/load_model.h"
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-#include "ps/common.h"
+#include "ps/constants.h"
 #include "ps/util.h"
 #include "ps/worker.h"
 #include "ps/ps_cache/ps_data/ps_data_prefetch.h"
@@ -61,6 +62,11 @@
 #include "transform/graph_ir/convert.h"
 #include "transform/graph_ir/df_graph_manager.h"
 #include "transform/graph_ir/op_adapter_map.h"
+#include "runtime/device/ascend/profiling/profiling_manager.h"
+#endif
+#ifdef ENABLE_DUMP_IR
+#include "debug/rdr/running_data_recorder.h"
+#include "debug/rdr/recorder_manager.h"
 #endif
 
 namespace mindspore {
@@ -73,6 +79,10 @@ using mindspore::abstract::AbstractTensor;
 using mindspore::abstract::AbstractTensorPtr;
 using mindspore::abstract::AbstractTuple;
 using mindspore::abstract::AbstractTuplePtr;
+
+#if (ENABLE_GE || ENABLE_D)
+using mindspore::device::ascend::ProfilingManager;
+#endif
 
 const char IR_TYPE_ANF[] = "anf_ir";
 const char IR_TYPE_ONNX[] = "onnx_ir";
@@ -93,14 +103,66 @@ std::string GetBaseNameForIR(int64_t stage_idx, const std::string &action_name) 
   return oss.str();
 }
 
-void CheckArgIsTensor(const ValuePtr &arg, std::size_t idx) {
-  MS_EXCEPTION_IF_NULL(arg);
-  auto tensor_arg = arg->cast<TensorPtr>();
-  if (tensor_arg == nullptr) {
-    MS_EXCEPTION(TypeError) << "For 'graph mode', the " << idx << "th arg: " << arg->ToString() << " is not a tensor.";
+AbstractBasePtr ArgsToAbstract(const ValuePtr &value) {
+  MS_EXCEPTION_IF_NULL(value);
+  bool broaden = value->isa<MetaTensor>() ||
+                 (MsContext::GetInstance()->get_param<bool>(MS_CTX_GRAD_FOR_SCALAR) && value->isa<Scalar>());
+  return abstract::FromValue(value, broaden);
+}
+
+bool CheckArgValid(const py::handle &arg) {
+  if (py::isinstance<py::list>(arg) || py::isinstance<py::tuple>(arg)) {
+    auto vector_arg = py::cast<py::list>(arg);
+    return std::all_of(vector_arg.begin(), vector_arg.end(), CheckArgValid);
   }
-  if (tensor_arg->is_parameter()) {
-    MS_EXCEPTION(TypeError) << "The inputs could not be Parameter.";
+
+  if (py::isinstance<py::dict>(arg)) {
+    auto dict_arg = py::cast<py::dict>(arg);
+    return std::all_of(dict_arg.begin(), dict_arg.end(), [](const auto &pair) { return CheckArgValid(pair.second); });
+  }
+
+  return py::isinstance<py::int_>(arg) || py::isinstance<py::float_>(arg) || py::isinstance<Number>(arg) ||
+         (py::isinstance<Tensor>(arg) && !py::hasattr(arg, "__parameter__"));
+}
+
+void CheckArgsValid(const py::tuple &args) {
+  for (size_t i = 0; i < args.size(); i++) {
+    if (!CheckArgValid(args[i])) {
+      MS_EXCEPTION(TypeError)
+        << "The inputs types of the outermost network support bool, int, float, tensor, "
+           "mstype.Number(mstype.bool, mstype.int, mstype.float, mstype.uint), "
+           "and tuple or list containing only these types, and dict whose values are these types, but got "
+        << i << "th arg is " << py::str(args[i]);
+    }
+  }
+}
+
+std::string GetCompileExceptionInfo() {
+  std::ostringstream oss;
+  trace::TraceGraphEval();
+  trace::GetEvalStackInfo(oss);
+  if (oss.str().empty()) {
+    DebugInfoPtr debug_info = TraceManager::GetParseOrResolveDebugInfo();
+    if (debug_info != nullptr) {
+      oss << "\n\n# " << trace::GetDebugInfo(debug_info);
+    }
+  }
+  return oss.str();
+}
+
+void SetGpuLoopSink(const ResourcePtr &resource_) {
+  auto func_graph = resource_->func_graph();
+  if (func_graph != nullptr && func_graph->manager() != nullptr) {
+    auto manager = func_graph->manager();
+    size_t graph_nums = manager->func_graphs().size();
+    int64_t sinksize = ConfigManager::GetInstance().iter_num();
+    if (graph_nums == 1) {
+      resource_->set_gpu_loopsink(true, sinksize);
+    } else {
+      resource_->set_gpu_loopsink(false, sinksize);
+    }
+    MS_LOG(INFO) << "Change gpu_loopsink_flag_ to " << resource_->gpu_loopsink_flag() << ", set loopsink size to "
+                 << sinksize;
   }
 }
 }  // namespace
@@ -117,8 +179,7 @@ py::tuple GenerateKey(const std::string &name, const std::unordered_map<std::str
     if (!parse::ConvertData(arg.second, &converted)) {
       MS_LOG(EXCEPTION) << "GenerateKey convert arg failed";
     }
-    bool broaden = converted->isa<Tensor>() || converted->isa<MetaTensor>();
-    args_spec.push_back(abstract::FromValue(converted, broaden));
+    args_spec.push_back(ArgsToAbstract(converted));
   }
   if (g_args_cache.count(args_spec) == 0) {
     static int64_t key = 0;
@@ -215,7 +276,7 @@ py::bytes ExecutorPy::GetFuncGraphProto(const std::string &phase, const std::str
   if (ir_type == IR_TYPE_ANF) {
     std::string proto_str = GetFuncGraphProtoString(fg_ptr);
     if (proto_str.empty()) {
-      MS_LOG(EXCEPTION) << "Graph proto is empty.";
+      MS_LOG(EXCEPTION) << "Export ANF format model failed.";
     }
     return proto_str;
   }
@@ -223,7 +284,7 @@ py::bytes ExecutorPy::GetFuncGraphProto(const std::string &phase, const std::str
   if (ir_type == IR_TYPE_ONNX) {
     std::string proto_str = GetOnnxProtoString(fg_ptr);
     if (proto_str.empty()) {
-      MS_LOG(EXCEPTION) << "Graph proto is empty.";
+      MS_LOG(EXCEPTION) << "Export ONNX format model failed.";
     }
     return proto_str;
   }
@@ -231,7 +292,7 @@ py::bytes ExecutorPy::GetFuncGraphProto(const std::string &phase, const std::str
   if (ir_type == IR_TYPE_MINDIR) {
     std::string proto_str = GetBinaryProtoString(fg_ptr);
     if (proto_str.empty()) {
-      MS_LOG(EXCEPTION) << "Graph proto is empty.";
+      MS_LOG(EXCEPTION) << "Export MINDIR format model failed.";
     }
     return proto_str;
   }
@@ -249,6 +310,12 @@ py::dict ExecutorPy::GetParameterLayout(const std::string &phase) {
 py::dict ExecutorPy::GetCNodeStrategy(const std::string &phase) {
   MS_LOG(DEBUG) << "GetCNodeStrategy!";
   return stra_dict_[phase];
+}
+
+py::list ExecutorPy::GetParallelParameterNameList(const std::string &phase) {
+  std::string param_graph = phase + kStepParallelGraph;
+  auto graph = GetFuncGraph(param_graph);
+  return mindspore::parallel::GetParallelParameterNameList(graph);
 }
 
 void ExecutorPy::SetCNodeStrategy(const std::string &name, const parallel::Strategys &strategy) {
@@ -305,12 +372,72 @@ void ExecutorPy::DelNetRes(const std::string &id) {
 void ExecutorPy::ClearRes() {
   MS_LOG(INFO) << "Clean executor resource!";
   Resource::mem_cleaner().ClearPrimitivePyPythonObj();
+#ifdef ENABLE_DUMP_IR
+  mindspore::RDR::ClearAll();
+#endif
   executor_ = nullptr;
 }
 
 ExecutorPy::~ExecutorPy() {
   MS_LOG(INFO) << "Release Executor!";
   ConfigManager::GetInstance().ResetConfig();
+}
+
+void ExecutorPy::GetWeightInfo(const CNodePtr &root_node, const AnfNodePtr &weight_node,
+                               std::map<std::string, std::pair<PrimitivePyPtr, std::string>> *fake_quant_table) {
+  std::string weight_name;
+  auto x = root_node->input(1);
+  if (IsPrimitiveCNode(weight_node, prim::kPrimLoad)) {
+    weight_name = weight_node->cast<CNodePtr>()->input(1)->cast<ParameterPtr>()->name();
+  } else {
+    weight_name = weight_node->cast<ParameterPtr>()->name();
+  }
+  // find the fakequant from input
+  int64_t count = 0;
+  const int64_t max_depth = 5;
+  CNodePtr cnode = nullptr;
+  auto is_quant_cnode = [](const AnfNodePtr &node) {
+    return IsPrimitiveCNode(node, prim::kPrimFakeQuantPerLayer) ||
+           IsPrimitiveCNode(node, prim::kPrimFakeQuantPerChannel);
+  };
+  while (!is_quant_cnode(x)) {
+    if (count >= max_depth) {
+      break;
+    }
+    cnode = x->cast<CNodePtr>();
+    if (cnode == nullptr || cnode->size() <= 1) {
+      break;
+    }
+    x = cnode->input(1);
+    count += 1;
+  }
+  if (x->isa<Parameter>() || IsPrimitiveCNode(x, prim::kPrimLoad)) {
+    (*fake_quant_table)[weight_name] = std::make_pair(nullptr, "input");
+  }
+  // get the fakequant parameter minq's name
+  if (!is_quant_cnode(x)) {
+    return;
+  }
+  cnode = x->cast<CNodePtr>();
+  if (cnode == nullptr || IsPrimitiveCNode(cnode, prim::kPrimLoad) || cnode->size() != 4) {
+    return;
+  }
+  auto fakequant_min_node = cnode->input(2);
+  if (!fakequant_min_node->isa<Parameter>() && !IsPrimitiveCNode(fakequant_min_node, prim::kPrimLoad)) {
+    return;
+  }
+  std::string fakequant_min_node_name;
+  if (IsPrimitiveCNode(fakequant_min_node, prim::kPrimLoad)) {
+    fakequant_min_node_name = fakequant_min_node->cast<CNodePtr>()->input(1)->cast<ParameterPtr>()->name();
+  } else {
+    fakequant_min_node_name = fakequant_min_node->cast<ParameterPtr>()->name();
+  }
+  auto quant_op_value = cnode->input(0)->cast<ValueNodePtr>()->value();
+  if (!quant_op_value->isa<PrimitivePy>()) {
+    return;
+  }
+  auto quant_op = quant_op_value->cast<PrimitivePyPtr>();
+  (*fake_quant_table)[weight_name] = std::make_pair(quant_op, fakequant_min_node_name);
 }
 
 std::map<std::string, std::pair<PrimitivePyPtr, std::string>> ExecutorPy::FetchInfoForQuantExport(
@@ -329,58 +456,21 @@ std::map<std::string, std::pair<PrimitivePyPtr, std::string>> ExecutorPy::FetchI
            IsPrimitiveCNode(node, prim::kPrimFakeQuantPerChannel);
   };
   for (const auto &node : nodes) {
-    auto cnode = node->cast<CNodePtr>();
-    if (cnode == nullptr || cnode->size() != 3) {
+    auto root_node = node->cast<CNodePtr>();
+    if (root_node == nullptr || root_node->size() != 3) {
       continue;
     }
-    auto x = cnode->input(1);
-    auto weight = cnode->input(2);
+    auto weight = root_node->input(2);
     if (!is_quant_cnode(weight)) {
       continue;
     }
     // get parameter weight's name
-    cnode = weight->cast<CNodePtr>();
+    auto cnode = weight->cast<CNodePtr>();
     auto weight_node = cnode->input(2);
-    if (!weight_node->isa<Parameter>()) {
+    if (!weight_node->isa<Parameter>() && !IsPrimitiveCNode(weight_node, prim::kPrimLoad)) {
       continue;
     }
-    auto weight_name = weight_node->cast<ParameterPtr>()->name();
-    // find the fakequant from input
-    int64_t count = 0;
-    const int64_t max_depth = 5;
-    while (!is_quant_cnode(x)) {
-      if (count >= max_depth) {
-        break;
-      }
-      cnode = x->cast<CNodePtr>();
-      if (cnode == nullptr || cnode->size() <= 1) {
-        break;
-      }
-      x = cnode->input(1);
-      count += 1;
-    }
-    if (x->isa<Parameter>()) {
-      fake_quant_table[weight_name] = std::make_pair(nullptr, "input");
-    }
-    // get the fakequant parameter minq's name
-    if (!is_quant_cnode(x)) {
-      continue;
-    }
-    cnode = x->cast<CNodePtr>();
-    if (cnode == nullptr || cnode->size() != 4) {
-      continue;
-    }
-    auto fakequant_min_node = cnode->input(2);
-    if (!fakequant_min_node->isa<Parameter>()) {
-      continue;
-    }
-    auto fakequant_min_node_name = fakequant_min_node->cast<ParameterPtr>()->name();
-    auto quant_op_value = cnode->input(0)->cast<ValueNodePtr>()->value();
-    if (!quant_op_value->isa<PrimitivePy>()) {
-      continue;
-    }
-    auto quant_op = quant_op_value->cast<PrimitivePyPtr>();
-    fake_quant_table[weight_name] = std::make_pair(quant_op, fakequant_min_node_name);
+    GetWeightInfo(root_node, weight_node, &fake_quant_table);
   }
 
   return fake_quant_table;
@@ -423,20 +513,17 @@ bool IsPhaseExportAir(const std::string &phase_s) {
   return phase_s.rfind(phase_to_export) != std::string::npos;
 }
 
-std::vector<ActionItem> GetPipline(const ResourcePtr &resource, const std::string &phase_s, bool use_vm) {
+std::vector<ActionItem> GetPipeline(const ResourcePtr &resource, const std::string &phase_s, bool use_vm) {
   bool is_air = IsPhaseExportAir(phase_s);
 
   std::string backend = MsContext::GetInstance()->backend_policy();
 
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  if (mindspore::ps::Util::IsParamServerMode()) {
-    mindspore::ps::Util::SetInternalEnvVar();
-  }
-  if (ps::Util::IsRoleOfPServer()) {
+  if (ps::PSContext::instance()->is_server()) {
     resource->results()[kBackend] = compile::CreateBackend();
     return PServerPipeline();
   }
-  if (ps::Util::IsRoleOfScheduler()) {
+  if (ps::PSContext::instance()->is_scheduler()) {
     return PSchedulerPipeline();
   }
 #endif
@@ -458,11 +545,13 @@ bool ExecutorPy::CompileInner(const py::object &obj, const py::tuple &args, cons
     MS_LOG(ERROR) << "Arg phase must be string.";
     return false;
   }
-  // check the arg valid?
+  // check the function or net is valid
   if (py::isinstance<py::none>(obj)) {
     MS_LOG(ERROR) << "Find error: parse obj is None.";
     return false;
   }
+  // check the args of function or net is valid
+  CheckArgsValid(args);
 #ifdef ENABLE_GE
   GetGeBackendPolicy();
 #endif
@@ -472,7 +561,7 @@ bool ExecutorPy::CompileInner(const py::object &obj, const py::tuple &args, cons
   MS_LOG(INFO) << "ExecutorPy compile phase:" << phase_s << "!";
   ResourcePtr resource = std::make_shared<Resource>(obj);
 
-  auto p_actions = GetPipline(resource, phase_s, use_vm);
+  auto p_actions = GetPipeline(resource, phase_s, use_vm);
   std::shared_ptr<Pipeline> pip = std::make_shared<Pipeline>(resource, FilterActions(p_actions, phase_s));
 
   // get the parameters items and add the value to args_spec
@@ -484,11 +573,7 @@ bool ExecutorPy::CompileInner(const py::object &obj, const py::tuple &args, cons
     if (!succ) {
       MS_LOG(EXCEPTION) << "Args convert error";
     }
-    if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) == kGraphMode) {
-      CheckArgIsTensor(converted, i);
-    }
-    bool broaden = true;
-    args_spec.push_back(abstract::FromValue(converted, broaden));
+    args_spec.push_back(ArgsToAbstract(converted));
   }
 
   resource->set_args_spec(args_spec);
@@ -546,13 +631,10 @@ bool ExecutorPy::Compile(const py::object &obj, const py::tuple &args, const py:
     ret_value = CompileInner(obj, args, phase, use_vm);
   } catch (const py::error_already_set &ex) {
     // print function call stack info before release
-    std::ostringstream oss;
-    trace::TraceGraphEval();
-    trace::GetEvalStackInfo(oss);
-    // call py::print to output function call stack to STDOUT, in case of output the log to file, the user can see
-    // these info from screen, no need to open log file to find these info
-    py::print(oss.str());
-    MS_LOG(ERROR) << oss.str();
+    std::string exception_info = GetCompileExceptionInfo();
+    if (!exception_info.empty()) {
+      MS_LOG(ERROR) << exception_info;
+    }
     ReleaseResource(phase);
 
     // re-throw this exception to Python interpreter to handle it
@@ -572,6 +654,9 @@ bool ExecutorPy::Compile(const py::object &obj, const py::tuple &args, const py:
   } catch (const py::attribute_error &ex) {
     ReleaseResource(phase);
     throw py::attribute_error(ex);
+  } catch (const py::name_error &ex) {
+    ReleaseResource(phase);
+    throw py::name_error(ex);
   } catch (const std::exception &ex) {
     ReleaseResource(phase);
     // re-throw this exception to Python interpreter to handle it
@@ -662,57 +747,49 @@ void Pipeline::Run() {
         MS_LOG(DEBUG) << "Action " << action.first << " end.";
       };
       if (action.first == "task_emit") {
-        auto func_graph = resource_->func_graph();
-        if (func_graph != nullptr && func_graph->manager() != nullptr) {
-          auto manager = func_graph->manager();
-          size_t graph_nums = manager->func_graphs().size();
-          int64_t sinksize = ConfigManager::GetInstance().iter_num();
-          if (graph_nums == 1) {
-            resource_->set_gpu_loopsink(true, sinksize);
-          } else {
-            resource_->set_gpu_loopsink(false, sinksize);
-          }
-          MS_LOG(INFO) << "Change gpu_loopsink_flag_ to " << resource_->gpu_loopsink_flag() << ", set loopsink size to "
-                       << sinksize;
-        }
+        SetGpuLoopSink(resource_);
       }
       if (!result) {
         MS_LOG(EXCEPTION) << "Pipeline running to end, failed in step:" << action.first;
       }
-      if (MsContext::GetInstance()->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG) && resource_->func_graph() != nullptr) {
-        auto graph = resource_->func_graph();
-        if (graph != nullptr) {
-          user_graph = graph;
-          std::string base_name = GetBaseNameForIR(i, action.first);
 
-          // generate IR file in dot format, which can be converted to svg file using graphviz dot command
-          draw::Draw(base_name + ".dot", graph);
-          // generate IR file in human readable format
-          if (i == actions_.size() - 1) {
-            DumpIR(base_name + ".ir", graph, false, kWholeStack);
+      FuncGraphPtr graph = resource_->func_graph();
+#ifdef ENABLE_DUMP_IR
+      if (mindspore::RecorderManager::Instance().RdrEnable()) {
+        MS_LOG(INFO) << "Recording FuncGraph in pipeline using RDR.";
+        std::string name = GetBaseNameForIR(i, action.first);
+        if (graph != nullptr) {
+          auto graph_clone = BasicClone(graph);
+          if (graph_clone != nullptr) {
+            DumpGraphParams dump_params = {false, static_cast<int>(kTopStack)};
+            if (i == actions_.size()) {
+              dump_params.dump_mode = static_cast<int>(kWholeStack);
+            }
+            mindspore::RDR::RecordAnfGraph(SUBMODULE_ID, name, graph_clone, dump_params, ".ir");
           } else {
-            DumpIR(base_name + ".ir", graph, false, kTopStack);
+            MS_LOG(WARNING) << "Clone FuncGraph failed in pipeline, no FuncGraph recording in RDR.";
           }
-          // generate IR file in a heavily commented format, which can also be reloaded
-          ExportIR(base_name + ".dat", std::to_string(i), graph);
+        } else {
+          MS_LOG(WARNING) << "Pipeline Resource has no FuncGraph, no FuncGraph recording in RDR";
         }
-#ifdef MS_DEBUG
-        // Dump graph cnode list
-        MS_LOG(INFO) << "Show CNode list after " << action.first;
-        graph->DumpCNodeList();
-#endif
+        MS_LOG(INFO) << "Recording FuncGraph in pipeline end.";
       }
-      if (resource_->func_graph() != nullptr) {
-        auto func_graph = resource_->func_graph();
-        if (func_graph->has_flag(GRAPH_FLAG_HAS_EFFECT)) {
-          func_graph->EraseUnusedNodeInOrder();
-          func_graph->CheckOrder();
-          for (auto fg : func_graph->func_graphs_used_total()) {
-            MS_LOG(DEBUG) << "Check order graph " << fg->ToString() << ".";
-            fg->EraseUnusedNodeInOrder();
-            fg->CheckOrder();
-          }
+#endif
+
+      if (MsContext::GetInstance()->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG) && graph != nullptr) {
+        user_graph = graph;
+        std::string base_name = GetBaseNameForIR(i, action.first);
+
+        // generate IR file in dot format, which can be converted to svg file using graphviz dot command
+        draw::Draw(base_name + ".dot", graph);
+        // generate IR file in human readable format
+        if (i == actions_.size() - 1) {
+          DumpIR(base_name + ".ir", graph, false, kWholeStack);
+        } else {
+          DumpIR(base_name + ".ir", graph, false, kTopStack);
         }
+        // generate IR file in a heavily commented format, which can also be reloaded
+        ExportIR(base_name + ".dat", std::to_string(i), graph);
       }
       i++;
 #ifdef ENABLE_TIMELINE
@@ -813,9 +890,6 @@ py::object ExecutorPy::Run(const py::tuple &args, const py::object &phase) {
           ValuePtr converted = nullptr;
           if (!parse::ConvertData(args[i], &converted)) {
             MS_LOG(EXCEPTION) << "The " << i << "th arg convert failed.";
-          }
-          if (!converted->isa<tensor::Tensor>()) {
-            MS_EXCEPTION(TypeError) << "The " << i << "th arg: " << converted->ToString() << " is not tensor.";
           }
         }
       }
@@ -937,7 +1011,7 @@ bool InitExecDatasetVm(const std::string &queue_name, int64_t size, int64_t batc
                        const std::vector<TypePtr> &types, const std::vector<std::vector<int64_t>> &shapes,
                        const std::vector<int64_t> &input_indexes, bool need_run) {
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  if ((ps::Util::IsParamServerMode()) && (!ps::Util::IsRoleOfWorker())) {
+  if ((ps::PSContext::instance()->is_ps_mode()) && (!ps::PSContext::instance()->is_worker())) {
     return true;
   }
 #endif
@@ -989,7 +1063,7 @@ bool InitExecDatasetVm(const std::string &queue_name, int64_t size, int64_t batc
   ConfigManager::GetInstance().set_iter_num(size);
   // PS cache does not support loop sink.
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  if (ps::Util::IsRoleOfWorker() && ps::PsDataPrefetch::GetInstance().cache_enable()) {
+  if (ps::PSContext::instance()->is_worker() && ps::PsDataPrefetch::GetInstance().cache_enable()) {
     ps::PsDataPrefetch::GetInstance().CreateDataChannel(queue_name, LongToSize(size));
     ConfigManager::GetInstance().set_iter_num(1);
   }
@@ -1029,11 +1103,15 @@ void InitHccl() {
     runtime_instance->PreInit();
     (void)context::OpenTsd(ms_context);
     if (!runtime_instance->Init()) {
-      MS_LOG(ERROR) << "Kernel runtime init error.";
-      return;
+      MS_LOG(EXCEPTION) << "Runtime init failed.";
     }
   } else {
     (void)context::OpenTsd(ms_context);
+  }
+#endif
+#if (ENABLE_GE || ENABLE_D)
+  if (!ProfilingManager::GetInstance().IsProfiling()) {
+    ProfilingManager::GetInstance().SetHcclEnabledBefProfilingEnabled();
   }
 #endif
 }
@@ -1054,6 +1132,8 @@ void ExportGraph(const std::string &file_name, const std::string &, const std::s
   MS_EXCEPTION(ValueError) << "Only support export file in 'AIR' format with Ascend backend.";
 #endif
 }
+
+FuncGraphPtr LoadMindIR(const std::string &file_name) { return mindspore::LoadMindIR(file_name); }
 
 void ReleaseGeTsd() {
   auto context_ptr = MsContext::GetInstance();
@@ -1110,11 +1190,12 @@ void ClearResAtexit() {
   pynative::ClearPyNativeSession();
   session::ClearPythonParasMap();
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  if (ps::Util::IsParamServerMode() && ps::Util::IsRoleOfWorker()) {
+  if (ps::PSContext::instance()->is_ps_mode() && ps::PSContext::instance()->is_worker()) {
     if (ps::PsDataPrefetch::GetInstance().cache_enable()) {
       ps::ps_cache_instance.Finalize();
     }
-    ps::worker.Finalize();
+    MS_LOG(INFO) << "ps::worker.Finalize";
+    ps::Worker::GetInstance().Finalize();
   }
 #endif
   ad::g_k_prims.clear();

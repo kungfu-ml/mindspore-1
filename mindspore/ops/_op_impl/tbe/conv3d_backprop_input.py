@@ -25,10 +25,10 @@ conv3d_backprop_input_op_info = TBERegOp("Conv3DBackpropInput") \
     .partial_flag(True) \
     .attr("input_size", "required", "listInt", "all") \
     .attr("strides", "required", "listInt", "all") \
-    .attr("pads", "required", "listInt", "all") \
+    .attr("pad_list", "required", "listInt", "all") \
     .attr("dilations", "required", "listInt", "all") \
     .attr("groups", "optional", "int", "all") \
-    .attr("data_format", "optional", "str", "all") \
+    .attr("format", "optional", "str", "all") \
     .input(0, "filter", False, "required", "all") \
     .input(1, "out_backprop", False, "required", "all") \
     .output(0, "y", True, "required", "all") \

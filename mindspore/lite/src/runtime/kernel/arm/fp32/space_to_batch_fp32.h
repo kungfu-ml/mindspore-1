@@ -25,9 +25,8 @@ namespace mindspore::kernel {
 class SpaceToBatchCPUKernel : public LiteKernel {
  public:
   SpaceToBatchCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                        const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                        const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                        const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     param_ = reinterpret_cast<SpaceToBatchParameter *>(op_parameter_);
   }
   ~SpaceToBatchCPUKernel() {}
@@ -35,6 +34,7 @@ class SpaceToBatchCPUKernel : public LiteKernel {
   int Init() override;
   int ReSize() override;
   int Run() override;
+  void ProcessInput();
 
  public:
   void DoRun(int task_id);

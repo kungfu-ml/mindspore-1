@@ -1,9 +1,11 @@
 # 目录
 
+[view English](./README.md)
+
 <!-- TOC -->
 
 - [目录](#目录)
-- [Transfomer 概述](#transfomer-概述)
+- [Transformer 概述](#transfomer-概述)
 - [模型架构](#模型架构)
 - [数据集](#数据集)
 - [环境要求](#环境要求)
@@ -26,7 +28,7 @@
 
 <!-- /TOC -->
 
-## Transfomer 概述
+## Transformer 概述
 
 Transformer于2017年提出，用于处理序列数据。Transformer主要应用于自然语言处理（NLP）领域,如机器翻译或文本摘要等任务。不同于传统的循环神经网络按次序处理数据，Transformer采用注意力机制，提高并行，减少训练次数，从而实现在较大数据集上训练。自Transformer模型引入以来，许多NLP中出现的问题得以解决，衍生出众多网络模型，比如BERT(多层双向transformer编码器)和GPT(生成式预训练transformers) 。
 
@@ -38,13 +40,13 @@ Transformer具体包括六个编码模块和六个解码模块。每个编码模
 
 ## 数据集
 
-- 训练数据集*WMT Englis-German*
+- 训练数据集*WMT English-German*
 - 评估数据集*WMT newstest2014*
 
 ## 环境要求
 
-- 硬件（Ascend处理器）
-    - 使用Ascend处理器准备硬件环境。- 如需试用昇腾处理器，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx)至ascend@huawei，申请通过后，即可获得资源。
+- 硬件（Ascend/GPU处理器）
+    - 使用Ascend或GPU处理器准备硬件环境。
 - 框架
     - [MindSpore](https://gitee.com/mindspore/mindspore)
 - 如需查看详情，请参见如下资源：
@@ -109,7 +111,7 @@ usage: train.py  [--distribute DISTRIBUTE] [--epoch_size N] [----device_num N] [
                  [--data_path DATA_PATH] [--bucket_boundaries BUCKET_LENGTH]
 
 options:
-    --distribute               pre_training by serveral devices: "true"(training by more than 1 device) | "false", default is "false"
+    --distribute               pre_training by several devices: "true"(training by more than 1 device) | "false", default is "false"
     --epoch_size               epoch size: N, default is 52
     --device_num               number of used devices: N, default is 1
     --device_id                device id: N, default is 0
@@ -243,7 +245,7 @@ Parameters for learning rate:
 
 #### 训练性能
 
-| 参数                | Transformer                                                    |
+| 参数                | Ascend                                                    |
 | -------------------------- | -------------------------------------------------------------- |
 | 资源                  | Ascend 910                                                     |
 | 上传日期              | 2020-06-09                                    |
@@ -261,7 +263,7 @@ Parameters for learning rate:
 
 #### 评估性能
 
-| 参数          | GoogleNet                   |
+| 参数          | Ascend                   |
 | ------------------- | --------------------------- |
 |资源| Ascend 910 |
 | 上传日期       | 2020-06-09 |

@@ -18,15 +18,14 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-#include "nnacl/unstack.h"
+#include "nnacl/base/unstack_base.h"
 
 namespace mindspore::kernel {
 class UnstackCPUKernel : public LiteKernel {
  public:
   UnstackCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                   const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~UnstackCPUKernel() { free(output_addr_array_); }
 
   int Init() override;
@@ -34,7 +33,7 @@ class UnstackCPUKernel : public LiteKernel {
   int Run() override;
 
  private:
-  float **output_addr_array_ = nullptr;
+  void **output_addr_array_ = nullptr;
 };
 }  // namespace mindspore::kernel
 

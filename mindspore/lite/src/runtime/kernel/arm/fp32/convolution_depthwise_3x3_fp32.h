@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_DEPTHWISE_3X3_H_
-#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_DEPTHWISE_3X3_H_
+#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_DEPTHWISE_3X3_FP32_H_
+#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_DEPTHWISE_3X3_FP32_H_
 
+#if defined(ENABLE_ARM) || (defined(ENABLE_SSE) && !defined(ENABLE_AVX))
 #include <vector>
 #include "src/lite_kernel.h"
 #include "src/runtime/kernel/arm/base/convolution_base.h"
@@ -26,9 +27,8 @@ namespace mindspore::kernel {
 class ConvolutionDepthwise3x3CPUKernel : public ConvolutionBaseCPUKernel {
  public:
   ConvolutionDepthwise3x3CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                                   const mindspore::lite::PrimitiveC *primitive)
-      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx) {}
   ~ConvolutionDepthwise3x3CPUKernel() override;
 
   int Init() override;
@@ -37,15 +37,14 @@ class ConvolutionDepthwise3x3CPUKernel : public ConvolutionBaseCPUKernel {
 
   int InitWeightBias();
   int Execute(int task_id);
+  int Eval() override;
 
  private:
-  int InitBuffer();
-  SlidingWindowParam *sliding_ = nullptr;
   float *packed_weight_ = nullptr;
   float *input_ptr_ = nullptr;
   float *output_ptr_ = nullptr;
   float *buffer_ = nullptr;
 };
 }  // namespace mindspore::kernel
-
-#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_DEPTHWISE_3X3_H_
+#endif
+#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_DEPTHWISE_3X3_FP32_H_

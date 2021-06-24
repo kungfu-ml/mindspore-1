@@ -19,6 +19,7 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <string>
 #include "backend/session/session_basic.h"
 #include "backend/session/kernel_graph.h"
 #include "backend/session/session_factory.h"
@@ -37,12 +38,15 @@ class GPUSession : public SessionBasic {
  protected:
   void UnifyMindIR(const KernelGraphPtr &graph) override { return; }
   GraphId CompileGraphImpl(const AnfNodePtrList &lst, const AnfNodePtrList &outputs) override;
+  GraphId CompileGraphImpl(NotNull<FuncGraphPtr> func_graph) override;
   void RunGraphImpl(const GraphId &graph_id, const std::vector<tensor::TensorPtr> &inputs, VectorRef *outputs) override;
   void BuildOpImpl(const OpRunInfo &op_run_info, const GraphInfo &graph_info,
                    const std::vector<tensor::TensorPtr> &input_tensors,
                    const std::vector<int64_t> &tensors_mask) override;
   void RunOpImpl(const GraphInfo &graph_info, OpRunInfo *op_run_info, std::vector<tensor::TensorPtr> *input_tensors,
                  VectorRef *outputs, const std::vector<int64_t> &tensors_mask) override;
+  std::shared_ptr<device::Bucket> CreateBucket(uint32_t bucket_id, uint32_t bucket_size) override;
+  std::string GetCommWorldGroup() override { return kNcclWorldGroup; }
 
  private:
   void SelectKernel(const std::shared_ptr<KernelGraph> &kernel_graph) const;
@@ -78,9 +82,7 @@ class GPUSession : public SessionBasic {
 
   void PostIterationDbg(const std::shared_ptr<KernelGraph> &kernel_graph) const;
 
-  void SyncValueNodeDeviceAddr(const std::shared_ptr<KernelGraph> &kernel_graph) const;
-
-  void CleanValueNodeDeviceAddr(const std::shared_ptr<KernelGraph> &kernel_graph) const;
+  GraphId CompileGraphImpl(KernelGraphPtr kernel_graph);
 };
 using GPUSessionPtr = std::shared_ptr<GPUSession>;
 MS_REG_SESSION(kGPUDevice, GPUSession);

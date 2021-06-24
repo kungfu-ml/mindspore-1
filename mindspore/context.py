@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 The context of mindspore, used to configure the current execution environment,
 includes the execution mode, execution backend and other feature switches.
 """
+import json
 import os
 import time
 import threading
@@ -35,9 +36,10 @@ __all__ = ['GRAPH_MODE', 'PYNATIVE_MODE', 'set_context', 'get_context', 'set_aut
 
 GRAPH_MODE = 0
 PYNATIVE_MODE = 1
-_DEVICE_APP_MEMORY_SIZE = 31 # The max memory size of graph plus variable.
+_DEVICE_APP_MEMORY_SIZE = 31  # The max memory size of graph plus variable.
 _re_pattern = r'[1-9][0-9]*(\.)?[0-9]*GB|0\.[0-9]*GB'
 _k_context = None
+
 
 def _make_directory(path):
     """Make directory."""
@@ -81,15 +83,16 @@ class _ThreadLocalInfo(threading.local):
     def __init__(self):
         super(_ThreadLocalInfo, self).__init__()
         self._reserve_class_name_in_scope = True
+        self.debug_runtime = False
 
     @property
     def reserve_class_name_in_scope(self):
-        """Gets whether to save the network class name in the scope."""
+        """Get whether to save the network class name in the scope."""
         return self._reserve_class_name_in_scope
 
     @reserve_class_name_in_scope.setter
     def reserve_class_name_in_scope(self, reserve_class_name_in_scope):
-        """Sets whether to save the network class name in the scope."""
+        """Set whether to save the network class name in the scope."""
         if not isinstance(reserve_class_name_in_scope, bool):
             raise ValueError(
                 "Set reserve_class_name_in_scope value must be bool!")
@@ -203,6 +206,13 @@ class _Context:
         if self.enable_debug_runtime and target == "CPU":
             self.set_backend_policy("vm")
 
+    def set_auto_tune_mode(self, tune_mode):
+        candidate = ["NO_TUNE", "RL", "GA", "RL,GA", "GA,RL"]
+        if tune_mode in candidate:
+            self.set_param(ms_ctx_param.tune_mode, tune_mode)
+        else:
+            raise ValueError(f"Tune mode must be in ['NO_TUNE', 'RL', 'GA', 'RL,GA', 'GA,RL'], but got {tune_mode}")
+
     def set_device_id(self, device_id):
         if device_id < 0 or device_id > 4095:
             raise ValueError(f"Device id must be in [0, 4095], but got {device_id}")
@@ -254,27 +264,44 @@ class _Context:
             full_file_name = print_file_path
         self.set_param(ms_ctx_param.print_file_path, full_file_name)
 
+    def set_env_config_path(self, env_config_path):
+        """Check and set env_config_path."""
+        if not self._context_handle.enable_dump_ir():
+            raise ValueError("The 'env_config_path' is not supported, please enable ENABLE_DUMP_IR "
+                             "with '-D on' and recompile source.")
+        env_config_path = os.path.realpath(env_config_path)
+        if not os.path.isfile(env_config_path):
+            raise ValueError("The %r set by 'env_config_path' should be an existing json file." % env_config_path)
+        try:
+            with open(env_config_path, 'r') as f:
+                json.load(f)
+        except (TypeError, ValueError) as exo:
+            raise ValueError("The %r set by 'env_config_path' should be a json file. "
+                             "Detail: %s." % (env_config_path, str(exo)))
+        self.set_param(ms_ctx_param.env_config_path, env_config_path)
+
     setters = {
         'mode': set_mode,
-        'backend_policy': set_backend_policy,
         'save_graphs_path': set_save_graphs_path,
         'device_target': set_device_target,
         'device_id': set_device_id,
+        'auto_tune_mode': set_auto_tune_mode,
         'max_call_depth': set_max_call_depth,
         'profiling_options': set_profiling_options,
         'variable_memory_max_size': set_variable_memory_max_size,
         'max_device_memory': set_max_device_memory,
-        'print_file_path': set_print_file_path
+        'print_file_path': set_print_file_path,
+        'env_config_path': set_env_config_path
     }
 
     @property
     def reserve_class_name_in_scope(self):
-        """Gets whether to save the network class name in the scope."""
+        """Get whether to save the network class name in the scope."""
         return self._thread_local_info.reserve_class_name_in_scope
 
     @reserve_class_name_in_scope.setter
     def reserve_class_name_in_scope(self, reserve_class_name_in_scope):
-        """Sets whether to save the network class name in the scope."""
+        """Set whether to save the network class name in the scope."""
         self._thread_local_info.reserve_class_name_in_scope = reserve_class_name_in_scope
 
     @property
@@ -377,7 +404,7 @@ def set_auto_parallel_context(**kwargs):
         parameter_broadcast (bool): Whether to broadcast parameters before training. Before training, in order to have
                      the same network initialization parameter values for all devices, broadcast the parameters
                      on device 0 to other devices. Parameter broadcasting in different parallel modes is different,
-                     data_parallel mode, all parameters are broadcast except for the prameter whose attribute
+                     data_parallel mode, all parameters are broadcast except for the parameter whose attribute
                      layerwise_parallel is True. Hybrid_parallel, semi_auto_parallel and auto_parallel mode, the
                      segmented parameters do not participate in broadcasting. Default: False.
         strategy_ckpt_load_file (str): The path to load parallel strategy checkpoint. Default: ''
@@ -415,9 +442,10 @@ def set_auto_parallel_context(**kwargs):
     """
     _set_auto_parallel_context(**kwargs)
 
+
 def get_auto_parallel_context(attr_key):
     """
-    Gets auto parallel context attribute value according to the key.
+    Get auto parallel context attribute value according to the key.
 
     Args:
         attr_key (str): The key of the attribute.
@@ -452,7 +480,7 @@ def reset_auto_parallel_context():
 
 
 def _check_target_specific_cfgs(device, arg_key):
-    """Checking whether a config is sutable for a specified device"""
+    """Checking whether a config is suitable for a specified device"""
     device_cfgs = {
         'enable_auto_mixed_precision': ['Ascend'],
         'enable_dump': ['Ascend'],
@@ -463,6 +491,7 @@ def _check_target_specific_cfgs(device, arg_key):
         'profiling_options': ['Ascend'],
         'print_file_path': ['Ascend'],
         'variable_memory_max_size': ['Ascend'],
+        'auto_tune_mode': ['Ascend'],
         'max_device_memory': ['GPU']
     }
     # configs not in map device_cfgs are supposed to be suitable for all devices
@@ -477,14 +506,14 @@ def _check_target_specific_cfgs(device, arg_key):
 
 
 @args_type_check(mode=int, precompile_only=bool, device_target=str, device_id=int, save_graphs=bool,
-                 save_graphs_path=str, enable_dump=bool,
+                 save_graphs_path=str, enable_dump=bool, auto_tune_mode=str,
                  save_dump_path=str, enable_reduce_precision=bool, variable_memory_max_size=str,
                  enable_profiling=bool, profiling_options=str, enable_auto_mixed_precision=bool,
                  enable_graph_kernel=bool, check_bprop=bool, max_device_memory=str, print_file_path=str,
-                 enable_sparse=bool, max_call_depth=int)
+                 enable_sparse=bool, max_call_depth=int, env_config_path=str)
 def set_context(**kwargs):
     """
-    Sets context for running environment.
+    Set context for running environment.
 
     Context should be configured before running your program. If there is no configuration,
     the "Ascend" device target will be used by default. GRAPH_MODE or
@@ -498,10 +527,10 @@ def set_context(**kwargs):
 
     Note:
         Attribute name is required for setting attributes.
-        The mode is not recommended to be changed after net was initilized because the implementations of some
+        The mode is not recommended to be changed after net was initialized because the implementations of some
         operations are different in graph mode and pynative mode. Default: PYNATIVE_MODE.
 
-    Some configurations are device specific, see the bellow table for details:
+    Some configurations are device specific, see the below table for details:
 
     ===========================  ===========================  =================
     Common(CPU/GPU/Ascend)       Ascend                       GPU
@@ -514,7 +543,9 @@ def set_context(**kwargs):
     mode                         enable_profiling
     reserve_class_name_in_scope  profiling_options
     save_graphs                  variable_memory_max_size
-    save_graphs_path
+    save_graphs_path             auto_tune_mode
+    env_config_path
+    grad_for_scalar
     ===========================  ===========================  =================
 
     Args:
@@ -523,7 +554,13 @@ def set_context(**kwargs):
         device_id (int): ID of the target device, the value must be in [0, device_num_per_host-1],
                     while device_num_per_host should be no more than 4096. Default: 0.
         save_graphs (bool): Whether to save graphs. Default: False.
-        save_graphs_path (str): Path to save graphs. Default: "."
+        save_graphs_path (str): Path to save graphs. Default: ".".
+
+            If the program is executed in the parallel mode, `save_graphs_path` should consist of the path and the
+            current device id, to ensure that writing file conflicts won't happen when the different processes try to
+            create the files in the same directory. For example, the `device_id` can be generated by
+            `device_id = os.getenv("DEVICE_ID")` and the `save_graphs_path` can be set by
+            `context.set_context(save_graphs_path="path/to/ir/files"+device_id)`.
         enable_graph_kernel (bool): Whether to enable composition of basic primitives. These primitives would be
             compiled into a fused kernel automatically. Default: False.
         reserve_class_name_in_scope (bool) : Whether to save the network class name in the scope. Default: True.
@@ -537,17 +574,44 @@ def set_context(**kwargs):
         profiling_options (str): Set profiling collection options, operators can profiling data here.
             The values of profiling collection options are as follows, supporting the collection of multiple data.
 
+            - output: the saving the path of the profiling collection result file. The directory spectified by this
+              parameter needs to be created in advance on the training environment (container or host side) and ensure
+              that the running user configured during installation has read and write permissions.It supports the
+              configuration of absolute or relative paths(relative to the current path when executing the command line).
+              The absolute path configuration starts with '/', for example:/home/data/output.
+              The relative path configuration directly starts with the directory name,for example:output.
+
             - training_trace: collect iterative trajectory data, that is, the training task and software information of
               the AI software stack, to achieve performance analysis of the training task, focusing on data
               enhancement, forward and backward calculation, gradient aggregation update and other related data.
+              The value is on/off.
+
             - task_trace: collect task trajectory data, that is, the hardware information of the HWTS/AICore of
               the Ascend 910 processor, and analyze the information of beginning and ending of the task.
-            - op_trace: collect single operator performance data.
+              The value is on/off.
 
-            The profiling can choose the combination of `training_trace`, `task_trace`,
-            `training_trace` and `task_trace` combination, and eparated by colons;
-            a single operator can choose `op_trace`, `op_trace` cannot be combined with
-            `training_trace` and `task_trace`. Default: "training_trace".
+            - aicpu: collect profiling data enhanced by aicpu data. The value is on/off.
+
+            - fp_point: specify the start position of the forward operator of the training network iteration trajectory,
+              which is used to record the start timestamp of the forward calculation.The configuration value is the name
+              of the first operator specified in the forward direction. when the value is empty,the system will
+              automatically obtain the forward operator name.
+
+            - bp_point: specify the end position of the iteration trajectory reversal operator of the training network,
+              record the end timestamp of the backward calculation. The configuration value is the name of the operator
+              after the specified reverse. when the value is empty,the system will automatically obtain the backward
+              operator name.
+
+            - aic_metrics: the values are as follows:
+              ArithmeticUtilization: percentage statistics of various calculation indicators.
+              PipeUtilization: the time-consuming ratio of calculation unit and handling unit,this item is
+              the default value.
+              Memory: percentage of external memory read and write instructions.
+              MemoryL0: percentage of internal memory read and write instructions.
+              ResourceConflictRatio: proportion of pipline queue instructions.
+
+            The profiling_options is like '{"output":'/home/data/output','training_trace':'on'}'
+
         check_bprop (bool): Whether to check bprop. Default: False.
         max_device_memory (str): Sets the maximum memory available for devices.
             Currently, it is only supported on GPU. The format is "xxGB". Default: "1024GB".
@@ -555,7 +619,16 @@ def set_context(**kwargs):
             a file by default, and turns off printing to the screen. If the file already exists, add a timestamp
             suffix to the file. Default: ''.
         enable_sparse (bool): Whether to enable sparsity feature. Default: False.
-        max_call_depth(int): Specify the maximum depth of function call. Default: 1000.
+        max_call_depth (int): Specify the maximum depth of function call. Default: 1000.
+        env_config_path (str): Config path for DFX.
+        auto_tune_mode (str): The mode of auto tune when op building, get the best tiling performance,
+            default: NO_TUNE. The value must be in ['RL', 'GA', 'RL,GA'].
+            RL: rl_tune;
+            GA: ga_tune;
+            RL,GA: rl_tune/ga_tune(Automatic selection).
+            - rl_tune: Reinforecement Learning tune.
+            - ga_tune: Genetic Algorithm tune.
+        grad_for_scalar (bool): Whether to get gradient for scalar. Default: False.
 
     Raises:
         ValueError: If input key is not an attribute in context.
@@ -573,10 +646,12 @@ def set_context(**kwargs):
         >>> context.set_context(mode=context.GRAPH_MODE,
         ...                     device_target="Ascend",device_id=0, save_graphs=True,
         ...                     save_graphs_path="/mindspore")
-        >>> context.set_context(enable_profiling=True, profiling_options="training_trace")
+        >>> context.set_context(enable_profiling=True,
+        ...                     profiling_options='{"output":"/home/data/output","training_trace":"on"}')
         >>> context.set_context(max_device_memory="3.5GB")
         >>> context.set_context(print_file_path="print.pb")
         >>> context.set_context(max_call_depth=80)
+        >>> context.set_context(env_config_path="./env_config.json")
     """
     ctx = _context()
     # set device target first
@@ -596,7 +671,7 @@ def set_context(**kwargs):
         if key in ctx.setters:
             ctx.setters[key](ctx, value)
             continue
-        # enum variables begining with '_' are for internal use
+        # enum variables beginning with '_' are for internal use
         if key in ms_ctx_param.__members__ and key[0] != '_':
             ctx.set_param(ms_ctx_param.__members__[key], value)
             continue
@@ -605,7 +680,7 @@ def set_context(**kwargs):
 
 def get_context(attr_key):
     """
-    Gets context attribute value according to the input key.
+    Get context attribute value according to the input key.
 
     Args:
         attr_key (str): The key of the attribute.
@@ -621,7 +696,7 @@ def get_context(attr_key):
     _ = _check_target_specific_cfgs(device, attr_key)
     if hasattr(ctx, attr_key):
         return getattr(ctx, attr_key)
-    # enum variables begining with '_' are for internal use
+    # enum variables beginning with '_' are for internal use
     if attr_key in ms_ctx_param.__members__ and attr_key[0] != '_':
         return ctx.get_param(ms_ctx_param.__members__[attr_key])
     raise ValueError("Get context keyword %s is not recognized!" % attr_key)
@@ -634,11 +709,11 @@ class ParallelMode:
     There are five kinds of parallel modes, "STAND_ALONE", "DATA_PARALLEL",
     "HYBRID_PARALLEL", "SEMI_AUTO_PARALLEL" and "AUTO_PARALLEL". Default: "STAND_ALONE".
 
-        - STAND_ALONE: Only one processor is working.
-        - DATA_PARALLEL: Distributes the data across different processors.
-        - HYBRID_PARALLEL: Achieves data parallelism and model parallelism manually.
-        - SEMI_AUTO_PARALLEL: Achieves data parallelism and model parallelism by setting parallel strategies.
-        - AUTO_PARALLEL: Achieves parallelism automatically.
+    - STAND_ALONE: Only one processor is working.
+    - DATA_PARALLEL: Distributes the data across different processors.
+    - HYBRID_PARALLEL: Achieves data parallelism and model parallelism manually.
+    - SEMI_AUTO_PARALLEL: Achieves data parallelism and model parallelism by setting parallel strategies.
+    - AUTO_PARALLEL: Achieves parallelism automatically.
 
     MODE_LIST: The list of all supported parallel modes.
     """
@@ -650,6 +725,7 @@ class ParallelMode:
     AUTO_PARALLEL = "auto_parallel"
     MODE_LIST = [STAND_ALONE, DATA_PARALLEL, HYBRID_PARALLEL, SEMI_AUTO_PARALLEL, AUTO_PARALLEL]
 
+
 @args_type_check(enable_ps=bool)
 def set_ps_context(**kwargs):
     """
@@ -659,16 +735,14 @@ def set_ps_context(**kwargs):
         Some other environment variables should also be set for parameter server training mode.
         These environment variables are listed below:
 
-        .. code-block::
-
-            MS_SERVER_NUM  # Server number
-            MS_WORKER_NUM  # Worker number
-            MS_SCHED_HOST  # Scheduler IP address
-            MS_SCHED_PORT  # Scheduler port
-            MS_ROLE        # The role of this process:
-                           # MS_SCHED represents the scheduler,
-                           # MS_WORKER represents the worker,
-                           # MS_PSERVER represents the Server
+        MS_SERVER_NUM  # Server number
+        MS_WORKER_NUM  # Worker number
+        MS_SCHED_HOST  # Scheduler IP address
+        MS_SCHED_PORT  # Scheduler port
+        MS_ROLE        # The role of this process:
+        MS_SCHED       #represents the scheduler,
+        MS_WORKER      #represents the worker,
+        MS_PSERVER     #represents the Server
 
 
     Args:
@@ -699,6 +773,7 @@ def get_ps_context(attr_key):
         ValueError: If input key is not attribute in auto parallel context.
     """
     return _get_ps_context(attr_key)
+
 
 def reset_ps_context():
     """

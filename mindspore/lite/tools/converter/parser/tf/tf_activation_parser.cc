@@ -19,57 +19,56 @@
 #include <map>
 #include <vector>
 #include "tools/converter/parser/tf/tf_node_parser_registry.h"
+#include "ops/fusion/activation.h"
+#include "ops/leaky_relu.h"
 
 namespace mindspore {
 namespace lite {
-STATUS TFActivationParser::Parse(const tensorflow::NodeDef &tf_op,
-                                 const std::map<string, const tensorflow::NodeDef *> &tf_node_map,
-                                 PrimitiveC **primitiveC, std::vector<std::string> *inputs, int *output_size) {
-  MS_LOG(INFO) << "TF ActivationParser";
-  if (primitiveC == nullptr || output_size == nullptr) {
-    MS_LOG(ERROR) << "primitiveC is nullptr";
-    return RET_NULL_PTR;
-  }
-
-  auto primitive = std::make_unique<schema::PrimitiveT>();
-  if (primitive == nullptr) {
-    MS_LOG(ERROR) << "primitive is nullptr";
-    return RET_NULL_PTR;
-  }
-  auto attr = std::make_unique<schema::ActivationT>();
-  if (attr == nullptr) {
-    MS_LOG(ERROR) << "new op failed";
-    return RET_NULL_PTR;
-  }
+ops::PrimitiveC *TFActivationParser::Parse(const tensorflow::NodeDef &tf_op,
+                                           const std::map<string, const tensorflow::NodeDef *> &tf_node_map,
+                                           std::vector<std::string> *inputs, int *output_size) {
+  auto prim = std::make_unique<ops::Activation>();
 
   if (tf_op.op() == "Relu") {
-    attr->type = schema::ActivationType_RELU;
+    prim->set_activation_type(mindspore::ActivationType::RELU);
   } else if (tf_op.op() == "Relu6") {
-    attr->type = schema::ActivationType_RELU6;
+    prim->set_activation_type(mindspore::ActivationType::RELU6);
   } else if (tf_op.op() == "Sigmoid") {
-    attr->type = schema::ActivationType_SIGMOID;
+    prim->set_activation_type(mindspore::ActivationType::SIGMOID);
   } else if (tf_op.op() == "Tanh") {
-    attr->type = schema::ActivationType_TANH;
+    prim->set_activation_type(mindspore::ActivationType::TANH);
+  } else if (tf_op.op() == "Selu") {
+    prim->set_activation_type(mindspore::ActivationType::SELU);
+  } else if (tf_op.op() == "Softplus") {
+    prim->set_activation_type(mindspore::ActivationType::SOFTPLUS);
+  } else if (tf_op.op() == "LeakyRelu") {
+    prim->set_activation_type(mindspore::ActivationType::LEAKY_RELU);
+    tensorflow::AttrValue attr_value;
+    if (!TensorFlowUtils::FindAttrValue(tf_op, "alpha", &attr_value)) {
+      MS_LOG(ERROR) << "The attribute alpha should be specified.";
+      return nullptr;
+    }
+    prim->set_alpha(attr_value.f());
   } else {
     MS_LOG(ERROR) << "unsupported activation type:" << tf_op.op();
-    return RET_ERROR;
-  }
-
-  primitive->value.type = schema::PrimitiveType_Activation;
-  primitive->value.value = attr.release();
-  *primitiveC = PrimitiveC::Create(primitive.release());
-  if (*primitiveC == nullptr) {
-    MS_LOG(ERROR) << "primitiveC is nullptr";
-    return RET_ERROR;
+    return nullptr;
   }
 
   *output_size = 1;
-  auto status = AddOpInput(tf_op, 0, inputs);
-  return status;
+  if (AddOpInput(tf_op, 0, inputs) != RET_OK) {
+    MS_LOG(ERROR) << "add op input failed";
+    return nullptr;
+  }
+
+  return prim.release();
 }
+
 TFNodeRegistrar g_tfReluParser("Relu", new TFActivationParser());
 TFNodeRegistrar g_tfRelu6Parser("Relu6", new TFActivationParser());
 TFNodeRegistrar g_tfSigmoidParser("Sigmoid", new TFActivationParser());
 TFNodeRegistrar g_tfTanhParser("Tanh", new TFActivationParser());
+TFNodeRegistrar g_tfSeLUParser("Selu", new TFActivationParser());
+TFNodeRegistrar g_tfLeakyReluParser("LeakyRelu", new TFActivationParser());
+TFNodeRegistrar g_tfSoftplusParser("Softplus", new TFActivationParser());
 }  // namespace lite
 }  // namespace mindspore

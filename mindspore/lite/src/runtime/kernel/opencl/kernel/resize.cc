@@ -33,7 +33,7 @@ using mindspore::schema::PrimitiveType_Resize;
 namespace mindspore::kernel {
 
 int ResizeOpenCLKernel::CheckSpecs() {
-  if (in_tensors_.size() != 1 || out_tensors_.size() != 1) {
+  if (!(in_tensors_.size() == 1 || in_tensors_.size() == 2) || out_tensors_.size() != 1) {
     MS_LOG(ERROR) << "in size: " << in_tensors_.size() << ", out size: " << out_tensors_.size();
     return RET_ERROR;
   }
@@ -53,7 +53,7 @@ int ResizeOpenCLKernel::CheckSpecs() {
 
 int ResizeOpenCLKernel::Prepare() {
   auto resize_param = reinterpret_cast<ResizeParameter *>(op_parameter_);
-  alignCorner = resize_param->align_corners_;
+  alignCorner = resize_param->coordinate_transform_mode_ == 1;
   preserveAspectRatio = resize_param->preserve_aspect_ratio_;
   auto in_shape = in_tensors_[0]->shape();
   auto out_shape = out_tensors_[0]->shape();
@@ -106,7 +106,7 @@ void ResizeOpenCLKernel::SetConstArgs() {
 void ResizeOpenCLKernel::SetGlobalLocal() {
   local_size_ = {};
   auto out_shape = GpuTensorInfo(out_tensors_[0]);
-  global_size_ = {out_shape.Slice, out_shape.W, out_shape.H};
+  global_size_ = {out_shape.Slice, out_shape.W, out_shape.H * out_shape.N};
   AlignGlobalLocal(global_size_, local_size_);
 }
 
@@ -117,6 +117,17 @@ int ResizeOpenCLKernel::Run() {
   ocl_runtime_->SetKernelArg(kernel_, arg_idx++, out_tensors_[0]->data_c());
   ocl_runtime_->RunKernel(kernel_, global_range_, local_range_, nullptr, &event_);
   return RET_OK;
+}
+
+int ResizeOpenCLKernel::PreProcess() {
+  if (Type() == PrimitiveType_Resize && !op_parameter_->infer_flag_ && in_tensors_.size() == 2) {
+    auto shape_tensor = in_tensors_[1];
+    if (!shape_tensor->IsConst()) {
+      ocl_runtime_->SyncCommandQueue();
+      shape_tensor->MutableData();
+    }
+  }
+  return OpenCLKernel::PreProcess();
 }
 
 REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_Resize, OpenCLKernelCreator<ResizeOpenCLKernel>)

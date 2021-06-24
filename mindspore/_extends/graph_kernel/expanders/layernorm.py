@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,46 +13,33 @@
 # limitations under the License.
 # ===========================================================================
 """generate json desc for LayerNorm"""
-from mindspore._extends.graph_kernel.model import model_builder as builder
+from mindspore._extends.graph_kernel.model.model import DataFormat as DF
+from ._utils import Expander, ExpanderInfoValidator as VLD
 
 
-def expand_layernorm(expand_info):
+@VLD.add_format(DF.DEFAULT, DF.DEFAULT, DF.DEFAULT)
+@VLD.check_attrs('begin_norm_axis', 'begin_params_axis', 'epsilon')
+class LayerNorm(Expander):
     """LayerNorm expander"""
-    # get op info.
-    input_desc_0 = expand_info['input_desc'][0]
-    input_desc_1 = expand_info['input_desc'][1]
-    input_desc_2 = expand_info['input_desc'][2]
-    attrs = expand_info['attr']
-    begin_norm_axis = None
-    epsilon = None
-    for item in attrs:
-        if 'begin_norm_axis' in item:
-            begin_norm_axis = item['begin_norm_axis']
-        if 'epsilon' in item:
-            epsilon = item['epsilon']
-    graph_builder = builder.GraphBuilder()
 
-    # generate a graph.
-    with graph_builder.graph_scope('main') as graph_scope:
-        # create tensor input.
-        input_x = graph_builder.tensor(input_desc_0['shape'], input_desc_0['data_type'], input_desc_0['format'])
-        input_gamma = graph_builder.tensor(input_desc_1['shape'], input_desc_1['data_type'], input_desc_1['format'])
-        input_beta = graph_builder.tensor(input_desc_2['shape'], input_desc_2['data_type'], input_desc_2['format'])
+    def _expand(self, graph_builder):
+        input_x, input_gamma, input_beta = self.inputs
+        begin_norm_axis = self.attrs['begin_norm_axis']
+        epsilon = self.attrs['epsilon']
 
         # Calculate the scaling ratio of the average
-        shape_x = input_desc_0['shape']
         if begin_norm_axis < 0:
-            begin_norm_axis += len(shape_x)
+            begin_norm_axis += len(input_x.shape)
         reduce_axis = ()
-        for i, _ in enumerate(shape_x):
+        for i, _ in enumerate(input_x.shape):
             if i > begin_norm_axis or i == begin_norm_axis:
                 reduce_axis = reduce_axis + (i,)
 
         reduce_elts = 1.0
         for i in reduce_axis:
-            reduce_elts *= shape_x[i]
+            reduce_elts *= input_x.shape[i]
         mean_cof = 1.0 / reduce_elts
-        mean_cof_v = graph_builder.value(input_x.dtype, mean_cof, input_x.data_format)
+        mean_cof_v = graph_builder.value(input_x.dtype, mean_cof)
 
         # Calculate mean
         mean_red = graph_builder.emit('ReduceSum', [input_x], attrs={'reduce_axis': reduce_axis, 'keep_dims': True})
@@ -67,17 +54,13 @@ def expand_layernorm(expand_info):
 
         # Calculate normalize
         normalize_sub = graph_builder.emit('Sub', [input_x, mean])
-        epsilon_v = graph_builder.value(input_x.dtype, epsilon, input_x.data_format)
-        normalize_add = graph_builder.emit('TensorAdd', [variance, epsilon_v])
+        epsilon_v = graph_builder.value(input_x.dtype, epsilon)
+        normalize_add = graph_builder.emit('Add', [variance, epsilon_v])
         normlize_rsqrt = graph_builder.emit('Rsqrt', [normalize_add])
         normalize_mul = graph_builder.emit('Mul', [normalize_sub, normlize_rsqrt])
 
         # Calculate scale and translate
         scale_mul = graph_builder.emit('Mul', [input_gamma, normalize_mul])
-        res = graph_builder.emit('TensorAdd', [scale_mul, input_beta])
+        res = graph_builder.emit('Add', [scale_mul, input_beta])
 
-        # set graph output.
-        graph_scope.set_output(res, mean, variance)
-
-    graph = graph_builder.get()[0]
-    return graph
+        return res, mean, variance

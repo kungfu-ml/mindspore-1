@@ -36,12 +36,11 @@ TEST_F(MindDataTestTensorOpFusionPass, RandomCropDecodeResizeDisabled) {
   MS_LOG(INFO) << "Doing MindDataTestTensorOpFusionPass-RandomCropDecodeResizeDisabled";
 
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, SequentialSampler(0, 11));
-  ds = ds->SetNumWorkers(16);
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, std::make_shared<SequentialSampler>(0, 11));
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> decode = vision::Decode();
-  std::shared_ptr<TensorOperation> random_resized_crop = vision::RandomResizedCrop({5});
+  std::shared_ptr<TensorTransform> decode(new vision::Decode());
+  std::shared_ptr<TensorTransform> random_resized_crop(new vision::RandomResizedCrop({5}));
   ds = ds->Map({decode, random_resized_crop}, {"image"});
 
   std::shared_ptr<DatasetNode> node = ds->IRNode();
@@ -68,12 +67,11 @@ TEST_F(MindDataTestTensorOpFusionPass, RandomCropDecodeResizeEnabled) {
   MS_LOG(INFO) << "Doing MindDataTestTensorOpFusionPass-RandomCropDecodeResizeEnabled";
 
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, SequentialSampler(0, 11));
-  ds = ds->SetNumWorkers(16);
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, std::make_shared<SequentialSampler>(0, 11));
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> decode = vision::Decode();
-  std::shared_ptr<TensorOperation> random_resized_crop = vision::RandomResizedCrop({5});
+  std::shared_ptr<TensorTransform> decode(new vision::Decode());
+  std::shared_ptr<TensorTransform> random_resized_crop(new vision::RandomResizedCrop({5}));
   ds = ds->Map({decode, random_resized_crop}, {"image"});
 
   std::shared_ptr<DatasetNode> node = ds->IRNode();

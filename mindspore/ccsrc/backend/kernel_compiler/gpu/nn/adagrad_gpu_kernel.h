@@ -24,7 +24,7 @@
 
 namespace mindspore {
 namespace kernel {
-template <typename T>
+template <typename T, typename S, typename G>
 class AdagradGpuKernel : public GpuKernel {
  public:
   AdagradGpuKernel()
@@ -36,6 +36,29 @@ class AdagradGpuKernel : public GpuKernel {
   const std::vector<size_t> &GetOutputSizeList() const override { return output_size_list_; }
   const std::vector<size_t> &GetWorkspaceSizeList() const override { return workspace_size_list_; }
 
+  bool Launch(const std::vector<AddressPtr> &inputs, const std::vector<AddressPtr> & /*workspace*/,
+              const std::vector<AddressPtr> &outputs, void *stream_ptr) override {
+    T *variable = GetDeviceAddress<T>(inputs, 0);
+    T *accumulation = GetDeviceAddress<T>(inputs, 1);
+    S *learning_rate = GetDeviceAddress<S>(inputs, 2);
+    G *gradient = GetDeviceAddress<G>(inputs, 3);
+    T *variable_out = GetDeviceAddress<T>(outputs, 0);
+    T *accumulation_out = GetDeviceAddress<T>(outputs, 1);
+    ApplyAdagrad(inputs[0]->size / sizeof(T), update_slots, learning_rate, gradient, variable, accumulation,
+                 reinterpret_cast<cudaStream_t>(stream_ptr));
+
+    CHECK_CUDA_RET_WITH_EXCEPT(kernel_node_,
+                               cudaMemcpyAsync(&variable_out[0], &variable[0], variable_size_, cudaMemcpyDeviceToDevice,
+                                               reinterpret_cast<cudaStream_t>(stream_ptr)),
+                               "cudaMemcpyAsync output failed");
+    CHECK_CUDA_RET_WITH_EXCEPT(kernel_node_,
+                               cudaMemcpyAsync(&accumulation_out[0], &accumulation[0], accumulation_size_,
+                                               cudaMemcpyDeviceToDevice, reinterpret_cast<cudaStream_t>(stream_ptr)),
+                               "cudaMemcpyAsync output failed");
+
+    return true;
+  }
+
   bool Init(const CNodePtr &kernel_node) override {
     size_t input_num = AnfAlgo::GetInputTensorNum(kernel_node);
     update_slots = AnfAlgo::GetNodeAttr<bool>(kernel_node, "update_slots");
@@ -45,8 +68,8 @@ class AdagradGpuKernel : public GpuKernel {
     }
     variable_size_ = sizeof(T);
     accumulation_size_ = sizeof(T);
-    learning_rate_size_ = sizeof(T);
-    gradient_size_ = sizeof(T);
+    learning_rate_size_ = sizeof(S);
+    gradient_size_ = sizeof(G);
 
     auto variable_shape = AnfAlgo::GetPrevNodeOutputInferShape(kernel_node, 0);
     for (size_t i = 0; i < variable_shape.size(); i++) {
@@ -62,19 +85,7 @@ class AdagradGpuKernel : public GpuKernel {
     for (size_t i = 0; i < gradient_shape.size(); i++) {
       gradient_size_ *= gradient_shape[i];
     }
-
     InitSizeLists();
-    return true;
-  }
-
-  bool Launch(const std::vector<AddressPtr> &inputs, const std::vector<AddressPtr> &, const std::vector<AddressPtr> &,
-              void *stream_ptr) override {
-    T *variable = GetDeviceAddress<T>(inputs, 0);
-    T *accumulation = GetDeviceAddress<T>(inputs, 1);
-    T *learning_rate = GetDeviceAddress<T>(inputs, 2);
-    T *gradient = GetDeviceAddress<T>(inputs, 3);
-    ApplyAdagrad(inputs[0]->size / sizeof(T), update_slots, learning_rate, gradient, variable, accumulation,
-                 reinterpret_cast<cudaStream_t>(stream_ptr));
     return true;
   }
 
@@ -84,8 +95,8 @@ class AdagradGpuKernel : public GpuKernel {
     input_size_list_.push_back(accumulation_size_);
     input_size_list_.push_back(learning_rate_size_);
     input_size_list_.push_back(gradient_size_);
-    output_size_list_.push_back(0);
-    output_size_list_.push_back(0);
+    output_size_list_.push_back(variable_size_);
+    output_size_list_.push_back(accumulation_size_);
   }
 
  private:

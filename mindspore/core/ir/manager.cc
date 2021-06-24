@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -188,7 +188,7 @@ bool FuncGraphManager::func_graph_j_total(const FuncGraphPtr &fg) const {
   return j_total_->j_total_analysis()[fg];
 }
 
-// add a func graph to this manager, optionally as a root func graph.
+// Add a func graph to this manager, optionally as a root func graph.
 void FuncGraphManager::AddFuncGraph(FuncGraphPtr func_graph, bool is_root) {
   MS_EXCEPTION_IF_NULL(func_graph);
   if (is_root) {
@@ -197,15 +197,29 @@ void FuncGraphManager::AddFuncGraph(FuncGraphPtr func_graph, bool is_root) {
   if (func_graphs_.contains(func_graph)) {
     return;
   }
+
+  // Add func_graph as a managed graph.
   AddIntoManaged(func_graph);
-  std::vector<AnfNodePtr> para = func_graph->parameters();
-  AcquireNodes(para);
-  std::vector<AnfNodePtr> return_vec({func_graph->get_return()});
-  AcquireNodes(return_vec);
+
+  // New nodes to be acquired.
+  std::vector<AnfNodePtr> new_nodes = func_graph->parameters();
+  new_nodes.emplace_back(func_graph->get_return());
+
+  // Acquire all nodes from func_graph.
+  AcquireNodes(new_nodes);
 }
 
-// clear the all information in manager
+// Clear the all information in manager
 void FuncGraphManager::Clear() {
+  for (auto graph : func_graphs_) {
+    graph->DecAttachedMngCnt();
+    if (graph->attached_mng_cnt() == 0) {
+      graph->ClearAllManagerInfo();
+    } else if (graph->attached_mng_cnt() < 0) {
+      MS_LOG(EXCEPTION) << "graph:" << graph->ToString() << " attached cnt not right:" << graph->attached_mng_cnt();
+    }
+  }
+
   func_graphs_.clear();
   all_nodes_.clear();
   node_users_.clear();
@@ -275,6 +289,7 @@ void FuncGraphManager::AddIntoManaged(const FuncGraphPtr &fg) {
     fg->set_manager(this_manager);
   }
   func_graphs_.add(fg);
+  fg->IncAttachedMngCnt();
 }
 
 void FuncGraphManager::MaybeDropFuncGraphs(const FuncGraphSet &func_graphs, bool ignore_users) {
@@ -305,7 +320,7 @@ void FuncGraphManager::MaybeDropFuncGraphs(const FuncGraphSet &func_graphs, bool
   for (auto &fg : dropped) {
     MS_EXCEPTION_IF_NULL(fg);
     all_nodes_.difference_update(fg->parameters());
-    (void)func_graphs_.erase(fg);
+    EraseOneGraph(fg.get());
     if (fg->manager().get() == this) {
       fg->set_manager(nullptr);
     }
@@ -433,10 +448,14 @@ void FuncGraphManager::AddParameter(const FuncGraphPtr &fg, const AnfNodePtr &pa
 }
 
 bool FuncGraphManager::Replace(const AnfNodePtr &old_node, const AnfNodePtr &new_node) {
+  auto func_graph = old_node->func_graph();
   auto tr = Transact();
   bool success = tr.Replace(old_node, new_node);
   if (success) {
     tr.Commit();
+    if (func_graph != nullptr) {
+      func_graph->ReplaceInOrder(old_node, new_node);
+    }
   }
   return success;
 }
@@ -444,6 +463,12 @@ bool FuncGraphManager::Replace(const AnfNodePtr &old_node, const AnfNodePtr &new
 void FuncGraphManager::SetEdge(const AnfNodePtr &node, int index, const AnfNodePtr &value) {
   auto tr = Transact();
   tr.SetEdge(node, index, value);
+  tr.Commit();
+}
+
+void FuncGraphManager::AddEdge(const AnfNodePtr &node, const AnfNodePtr &value) {
+  auto tr = Transact();
+  tr.AddEdge(node, value);
   tr.Commit();
 }
 
@@ -470,7 +495,8 @@ void FuncGraphManager::MoveAllCNodeDropGraph(FuncGraphPtr source, FuncGraphPtr t
 
   MoveAllNodes(source, target);
   all_nodes_.difference_update(source->parameters());
-  (void)func_graphs_.erase(source);
+  EraseOneGraph(source.get());
+  source->set_dropped(true);
   if (source->manager().get() == this) {
     source->set_manager(nullptr);
   }
@@ -499,7 +525,7 @@ void FuncGraphManager::AddEdge(AnfNodePtr node, int index, AnfNodePtr input) {
 
 void FuncGraphManager::DropEdge(AnfNodePtr node, int index, AnfNodePtr input) {
   auto fg = node->func_graph();
-  if (input->isa<ValueNode>()) {
+  if (fg != nullptr && input->isa<ValueNode>()) {
     fg->DropValueNode(input);
     if (IsValueNode<FuncGraph>(input)) {
       auto used = GetValueNode<FuncGraphPtr>(input);
@@ -525,8 +551,8 @@ void FuncGraphManager::MoveAllNodes(FuncGraphPtr source, FuncGraphPtr target) {
   target->CopyFreeVariables(source);
   target->CopyFuncGraphsUsed(source);
   target->CopyJValueNodes(source);
-  signals_->InvalidateComputer();
   source->ClearAllManagerInfo();
+  signals_->InvalidateComputer();
 }
 
 FuncGraphTransaction FuncGraphManager::Transact() {
@@ -548,6 +574,13 @@ void FuncGraphManager::ParseChanges(const std::vector<Change> &changes, EdgeTupl
         (*rms)[old_node] += 1;
         (*adds)[edge.new_node] += 1;
         edge.root_node->set_input(edge.index, edge.new_node);
+      } break;
+      case Change::kTxAddEdge: {
+        auto edge = args.cast<ArgsOfAddEdge>();
+        auto index = edge.root_node->inputs().size();
+        (*add_edges)[std::make_pair(edge.root_node, std::make_pair(index, edge.new_node))] += 1;
+        (*adds)[edge.new_node] += 1;
+        edge.root_node->add_input(edge.new_node);
       } break;
       case Change::kTxSetParams: {
         auto param = args.cast<ArgsOfSetParams>();
@@ -614,6 +647,18 @@ void FuncGraphManager::CommitChanges(const std::vector<Change> &changes) {
   MaybeDropFuncGraphs(*drop_func_graphs);
 }
 
+void FuncGraphManager::EraseOneGraph(FuncGraph *fg) {
+  MS_EXCEPTION_IF_NULL(fg);
+  size_t erase_cnt = func_graphs_.erase(fg->shared_from_base<FuncGraph>());
+  if (!erase_cnt) {
+    return;
+  }
+  fg->DecAttachedMngCnt();
+  if (fg->attached_mng_cnt() == 0) {
+    fg->ClearAllManagerInfo();
+  }
+}
+
 void FuncGraphTransaction::SetParameters(FuncGraphPtr fg, const std::vector<AnfNodePtr> &params) {
   changes_.emplace_back(Change::kTxSetParams, ArgsOfSetParams{fg, params});
 }
@@ -648,6 +693,15 @@ void FuncGraphTransaction::SetEdge(const AnfNodePtr &src_node, int k, const AnfN
     MS_LOG(EXCEPTION) << "src_node should be a cnode, but cast failed.";
   }
   changes_.emplace_back(Change::kTxSetEdge, ArgsOfSetEdge{cnode, v, IntToSize(k)});
+}
+
+void FuncGraphTransaction::AddEdge(const AnfNodePtr &src_node, const AnfNodePtr &v) {
+  MS_EXCEPTION_IF_NULL(src_node);
+  auto cnode = src_node->cast<CNodePtr>();
+  if (cnode == nullptr) {
+    MS_LOG(EXCEPTION) << "src_node should be a cnode, but cast failed.";
+  }
+  changes_.emplace_back(Change::kTxAddEdge, ArgsOfAddEdge{cnode, v});
 }
 
 void FuncGraphTransaction::Commit() {

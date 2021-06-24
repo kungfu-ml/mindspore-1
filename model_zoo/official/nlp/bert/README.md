@@ -1,5 +1,7 @@
 # Contents
 
+[查看中文](./README_CN.md)
+
 - [Contents](#contents)
 - [BERT Description](#bert-description)
 - [Model Architecture](#model-architecture)
@@ -12,8 +14,8 @@
         - [Pre-Training](#pre-training)
         - [Fine-Tuning and Evaluation](#fine-tuning-and-evaluation)
     - [Options and Parameters](#options-and-parameters)
-        - [Options:](#options)
-        - [Parameters:](#parameters)
+        - [Options](#options)
+        - [Parameters](#parameters)
     - [Training Process](#training-process)
         - [Training](#training)
             - [Running on Ascend](#running-on-ascend)
@@ -25,6 +27,7 @@
         - [Evaluation](#evaluation)
             - [evaluation on cola dataset when running on Ascend](#evaluation-on-cola-dataset-when-running-on-ascend)
             - [evaluation on cluener dataset when running on Ascend](#evaluation-on-cluener-dataset-when-running-on-ascend)
+            - [evaluation on msra dataset when running on Ascend](#evaluation-on-msra-dataset-when-running-on-ascend)
             - [evaluation on squad v1.1 dataset when running on Ascend](#evaluation-on-squad-v11-dataset-when-running-on-ascend)
     - [Model Description](#model-description)
     - [Performance](#performance)
@@ -47,13 +50,20 @@ The backbone structure of BERT is transformer. For BERT_base, the transformer co
 
 # [Dataset](#contents)
 
-- Download the zhwiki or enwiki dataset for pre-training. Extract and refine texts in the dataset with [WikiExtractor](https://github.com/attardi/wikiextractor). Convert the dataset to TFRecord format. Please refer to create_pretraining_data.py file in [BERT](https://github.com/google-research/bert) repository.
-- Download dataset for fine-tuning and evaluation such as CLUENER, TNEWS, SQuAD v1.1, etc. Convert dataset files from JSON format to TFRECORD format, please refer to run_classifier.py file in [BERT](https://github.com/google-research/bert) repository.
+- Create pre-training dataset
+    - Download the [zhwiki](https://dumps.wikimedia.org/zhwiki/) or [enwiki](https://dumps.wikimedia.org/enwiki/) dataset for pre-training.
+    - Extract and refine texts in the dataset with [WikiExtractor](https://github.com/attardi/wikiextractor). The commands are as follows:
+        - pip install wikiextractor
+        - python -m wikiextractor.WikiExtractor -o <output file path> -b <output file size> <Wikipedia dump file>
+    - Convert the dataset to TFRecord format. Please refer to create_pretraining_data.py file in [BERT](https://github.com/google-research/bert) repository and download vocab.txt here, if AttributeError: module 'tokenization' has no attribute 'FullTokenizer' occur, please install bert-tensorflow.
+- Create fine-tune dataset
+    - Download dataset for fine-tuning and evaluation such as [CLUENER](https://github.com/CLUEbenchmark/CLUENER2020), [TNEWS](https://github.com/CLUEbenchmark/CLUE), [SQuAD v1.1 train dataset](https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v1.1.json), [SQuAD v1.1 eval dataset](https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json), etc.
+    - Convert dataset files from JSON format to TFRECORD format, please refer to run_classifier.py file in [BERT](https://github.com/google-research/bert) repository.
 
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend/GPU）
-    - Prepare hardware environment with Ascend/GPU processor. If you want to try Ascend, please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get access to the resources.
+    - Prepare hardware environment with Ascend or GPU processor.
 - Framework
     - [MindSpore](https://gitee.com/mindspore/mindspore)
 - For more information, please check the resources below：
@@ -197,7 +207,7 @@ For example, the schema file of cn-wiki-128 dataset for pretraining shows as fol
   ├─scripts
     ├─ascend_distributed_launcher
         ├─__init__.py
-        ├─hyper_parameter_config.ini          # hyper paramter for distributed pretraining
+        ├─hyper_parameter_config.ini          # hyper parameter for distributed pretraining
         ├─get_distribute_pretrain_cmd.py          # script for distributed pretraining
         ├─README.md
     ├─run_classifier.sh                       # shell script for standalone classifier task on ascend or gpu
@@ -213,7 +223,7 @@ For example, the schema file of cn-wiki-128 dataset for pretraining shows as fol
     ├─bert_for_finetune.py                    # backbone code of network
     ├─bert_for_pre_training.py                # backbone code of network
     ├─bert_model.py                           # backbone code of network
-    ├─clue_classification_dataset_precess.py  # data preprocessing
+    ├─finetune_data_preprocess.py             # data preprocessing
     ├─cluner_evaluation.py                    # evaluation for cluner
     ├─config.py                               # parameter configuration for pretraining
     ├─CRF.py                                  # assessment method for clue dataset
@@ -247,7 +257,7 @@ usage: run_pretrain.py  [--distribute DISTRIBUTE] [--epoch_size N] [----device_n
 
 options:
     --device_target                device where the code will be implemented: "Ascend" | "GPU", default is "Ascend"
-    --distribute                   pre_training by serveral devices: "true"(training by more than 1 device) | "false", default is "false"
+    --distribute                   pre_training by several devices: "true"(training by more than 1 device) | "false", default is "false"
     --epoch_size                   epoch size: N, default is 1
     --device_num                   number of used devices: N, default is 1
     --device_id                    device id: N, default is 0
@@ -289,16 +299,16 @@ options:
     --use_crf                         whether to use crf to calculate loss: true | false
     --device_id                       device id to run task
     --epoch_num                       total number of training epochs to perform
-    --num_class                       number of classes to do labeling
     --train_data_shuffle              Enable train data shuffle, default is true
     --eval_data_shuffle               Enable eval data shuffle, default is true
     --vocab_file_path                 the vocabulary file that the BERT model was trained on
-    --label2id_file_path              label to id json file
+    --label2id_file_path              label to id file, each label name must be consistent with the type name labeled in the original dataset file
     --save_finetune_checkpoint_path   path to save generated finetuning checkpoint
     --load_pretrain_checkpoint_path   initial checkpoint (usually from a pre-trained BERT model)
     --load_finetune_checkpoint_path   give a finetuning checkpoint path if only do eval
     --train_data_file_path            ner tfrecord for training. E.g., train.tfrecord
     --eval_data_file_path             ner tfrecord for predictions if f1 is used to evaluate result, ner json for predictions if clue_benchmark is used to evaluate result
+    --dataset_format                  dataset format, support mindrecord or tfrecord
     --schema_file_path                path to datafile schema file
 
 usage: run_squad.py [--device_target DEVICE_TARGET] [--do_train DO_TRAIN] [----do_eval DO_EVAL]
@@ -380,7 +390,8 @@ config for lossscale and etc.
 ```text
 Parameters for dataset and network (Pre-Training/Fine-Tuning/Evaluation):
     seq_length                      length of input sequence: N, default is 128
-    vocab_size                      size of each embedding vector: N, must be consistant with the dataset you use. Default is 21136
+    vocab_size                      size of each embedding vector: N, must be consistent with the dataset you use. Default is 21128.
+                                    Usually, we use 21128 for CN vocabs and 30522 for EN vocabs according to the origin paper.
     hidden_size                     size of bert encoder layers: N, default is 768
     num_hidden_layers               number of hidden layers: N, default is 12
     num_attention_heads             number of attention heads: N, default is 12
@@ -432,8 +443,8 @@ The command above will run in the background, you can view training logs in pret
 
 ```text
 # grep "epoch" pretraining_log.txt
-epoch: 0.0, current epoch percent: 0.000, step: 1, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.0856101e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
-epoch: 0.0, current epoch percent: 0.000, step: 2, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.0821701e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.000, step: 1, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.0856101e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.000, step: 2, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.0821701e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
 ...
 ```
 
@@ -447,8 +458,8 @@ The command above will run in the background, you can view the results the file 
 
 ```bash
 # grep "epoch" pretraining_log.txt
-epoch: 0.0, current epoch percent: 0.000, step: 1, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.0856101e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
-epoch: 0.0, current epoch percent: 0.000, step: 2, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.0821701e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.000, step: 1, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.0856101e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.000, step: 2, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.0821701e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
 ...
 ```
 
@@ -477,11 +488,11 @@ The command above will run in the background, you can view training logs in pret
 
 ```bash
 # grep "epoch" LOG*/pretraining_log.txt
-epoch: 0.0, current epoch percent: 0.001, step: 100, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.08209e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
-epoch: 0.0, current epoch percent: 0.002, step: 200, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.07566e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.001, step: 100, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.08209e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.002, step: 200, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.07566e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
 ...
-epoch: 0.0, current epoch percent: 0.001, step: 100, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.08218e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
-epoch: 0.0, current epoch percent: 0.002, step: 200, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.07770e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.001, step: 100, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.08218e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.002, step: 200, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.07770e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
 ...
 ```
 
@@ -495,11 +506,11 @@ The command above will run in the background, you can view the results the file 
 
 ```bash
 # grep "epoch" LOG*/pretraining_log.txt
-epoch: 0.0, current epoch percent: 0.001, step: 100, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.08209e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
-epoch: 0.0, current epoch percent: 0.002, step: 200, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.07566e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.001, step: 100, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.08209e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.002, step: 200, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.07566e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
 ...
-epoch: 0.0, current epoch percent: 0.001, step: 100, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.08218e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
-epoch: 0.0, current epoch percent: 0.002, step: 200, outpus are (Tensor(shape=[1], dtype=Float32, [ 1.07770e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.001, step: 100, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.08218e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
+epoch: 0.0, current epoch percent: 0.002, step: 200, outputs are (Tensor(shape=[1], dtype=Float32, [ 1.07770e+01]), Tensor(shape=[], dtype=Bool, False), Tensor(shape=[], dtype=Float32, 65536))
 ...
 ```
 
@@ -528,7 +539,7 @@ acc_num XXX, total_num XXX, accuracy 0.588986
 #### evaluation on cluener dataset when running on Ascend
 
 ```bash
-bash scripts/ner.sh
+bash scripts/run_ner.sh
 ```
 
 The command above will run in the background, you can view training logs in ner_log.txt.
@@ -539,6 +550,28 @@ If you choose F1 as assessment method, the result will be as follows:
 Precision 0.920507
 Recall 0.948683
 F1 0.920507
+```
+
+#### evaluation on msra dataset when running on Ascend
+
+For preprocess, you can first convert the original txt format of MSRA dataset into mindrecord by run the command as below (please keep in mind that the label names in label2id_file should be consistent with the type names labeled in the original msra_dataset.xml dataset file):
+
+```python
+python src/finetune_data_preprocess.py --data_dir=/path/msra_dataset.xml --vocab_file=/path/vacab_file --save_path=/path/msra_dataset.mindrecord --label2id=/path/label2id_file --max_seq_len=seq_len --class_filter="NAMEX" --split_begin=0.0 --split_end=1.0
+```
+
+For finetune and evaluation, just do
+
+```bash
+bash scripts/run_ner.sh
+```
+
+The command above will run in the background, you can view training logs in ner_log.txt.
+
+If you choose MF1(F1 score with multi-labels) as assessment method, the result will be as follows if evaluation is done after finetuning 10 epoches:
+
+```text
+F1 0.931243
 ```
 
 #### evaluation on squad v1.1 dataset when running on Ascend

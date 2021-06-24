@@ -19,15 +19,13 @@
 
 #include <vector>
 #include "src/runtime/kernel/opencl/opencl_kernel.h"
-#include "nnacl/fp32/slice_fp32.h"
+#include "nnacl/base/slice_base.h"
 
 namespace mindspore::kernel {
 
 class StridedSliceOpenCLKernel : public OpenCLKernel {
  public:
-  StridedSliceOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                           const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
 
   ~StridedSliceOpenCLKernel() override = default;
 

@@ -28,9 +28,8 @@ class ArithmeticSelfGradCPUKernel : public LiteKernel {
 
  public:
   ArithmeticSelfGradCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                              const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                              const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                              const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx), thread_count_(ctx->thread_num_) {}
   ~ArithmeticSelfGradCPUKernel() override {}
   int Init() override;
   int ReSize() override;
@@ -38,7 +37,7 @@ class ArithmeticSelfGradCPUKernel : public LiteKernel {
   int DoArithmeticSelfGrad(int thread_id);
 
  private:
-  int thread_stride_;
+  int thread_count_;
   ArithmeticSelfGradOperation self_grad_operation_;
 };
 }  // namespace mindspore::kernel

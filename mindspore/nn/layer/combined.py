@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -76,8 +76,14 @@ class Conv2dBnAct(Cell):
     Outputs:
         Tensor of shape :math:`(N, C_{out}, H_{out}, W_{out})`.
 
+    Raises:
+        TypeError: If `in_channels`, `out_channels`, `stride`, `padding` or `dilation` is not an int.
+        TypeError: If `has_bias` is not a bool.
+        ValueError: If `in_channels` or `out_channels` `stride`, `padding` or `dilation` is less than 1.
+        ValueError: If `pad_mode` is not one of 'same', 'valid', 'pad'.
+
     Supported Platforms:
-        ``Ascend`` ``GPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> net = nn.Conv2dBnAct(120, 240, 4, has_bn=True, activation='relu')
@@ -170,8 +176,14 @@ class DenseBnAct(Cell):
     Outputs:
         Tensor of shape :math:`(N, out\_channels)`.
 
+    Raises:
+        TypeError: If `in_channels` or `out_channels` is not an int.
+        TypeError: If `has_bias`, `has_bn` or `after_fake` is not a bool.
+        TypeError: If `momentum` or `eps` is not a float.
+        ValueError: If `momentum` is not in range [0, 1.0].
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> net = nn.DenseBnAct(3, 4)

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,9 @@
 #include "common/common.h"
 #include "minddata/dataset/callback/ds_callback.h"
 #include "minddata/dataset/core/client.h"
+#include "minddata/dataset/engine/datasetops/epoch_ctrl_op.h"
 #include "minddata/dataset/engine/datasetops/source/random_data_op.h"
+#include "minddata/dataset/engine/tree_adapter.h"
 #include "minddata/dataset/include/datasets.h"
 #include "minddata/dataset/include/transforms.h"
 #include "minddata/dataset/kernels/data/no_op.h"
@@ -165,6 +167,10 @@ TEST_F(MindDataTestCallback, TestBasicCallback) {
   std::shared_ptr<RepeatOp> repeat_op;
   rc = RepeatOp::Builder(2).Build(&repeat_op);
   // start build then launch tree
+  leaf->set_total_repeats(2);
+  leaf->set_num_repeats_per_epoch(2);
+  map_op->set_total_repeats(2);
+  map_op->set_num_repeats_per_epoch(2);
   std::shared_ptr<ExecutionTree> tree = test::BuildTree({leaf, map_op, repeat_op});
   rc = tree->Prepare();
   EXPECT_TRUE(rc.IsOk());
@@ -212,8 +218,15 @@ TEST_F(MindDataTestCallback, TestMultiEpochCallback) {
   // config RepeatOp
   std::shared_ptr<RepeatOp> repeat_op;
   rc = RepeatOp::Builder(2).Build(&repeat_op);
+  // config EpochCtrlOp
+  std::shared_ptr<EpochCtrlOp> epoch_ctrl_op;
+  rc = EpochCtrlOp::Builder(-1).Build(&epoch_ctrl_op);
   // start build then launch tree
-  std::shared_ptr<ExecutionTree> tree = test::BuildTree({leaf, map_op, repeat_op});
+  leaf->set_total_repeats(-2);
+  leaf->set_num_repeats_per_epoch(2);
+  map_op->set_total_repeats(-2);
+  map_op->set_num_repeats_per_epoch(2);
+  std::shared_ptr<ExecutionTree> tree = test::BuildTree({leaf, map_op, repeat_op, epoch_ctrl_op});
   rc = tree->Prepare();
   EXPECT_TRUE(rc.IsOk());
   rc = tree->Launch();
@@ -270,8 +283,15 @@ TEST_F(MindDataTestCallback, TestSelectedCallback) {
   // config RepeatOp
   std::shared_ptr<RepeatOp> repeat_op;
   rc = RepeatOp::Builder(2).Build(&repeat_op);
+  // config EpochCtrlOp
+  std::shared_ptr<EpochCtrlOp> epoch_ctrl_op;
+  rc = EpochCtrlOp::Builder(-1).Build(&epoch_ctrl_op);
   // start build then launch tree
-  std::shared_ptr<ExecutionTree> tree = test::BuildTree({leaf, map_op, repeat_op});
+  leaf->set_total_repeats(-2);
+  leaf->set_num_repeats_per_epoch(2);
+  map_op->set_total_repeats(-2);
+  map_op->set_num_repeats_per_epoch(2);
+  std::shared_ptr<ExecutionTree> tree = test::BuildTree({leaf, map_op, repeat_op, epoch_ctrl_op});
   rc = tree->Prepare();
   EXPECT_TRUE(rc.IsOk());
   rc = tree->Launch();
@@ -309,10 +329,10 @@ TEST_F(MindDataTestCallback, TestCAPICallback) {
   std::shared_ptr<DSCallback> cb1 = tst_cb;
   // Create a RandomDataset.  Use random_data to avoid I/O
   std::shared_ptr<SchemaObj> schema = Schema();
-  ASSERT_OK(schema->add_column("label", mindspore::TypeId::kNumberTypeUInt32, {}));
+  ASSERT_OK(schema->add_column("label", mindspore::DataType::kNumberTypeUInt32, {}));
   std::shared_ptr<Dataset> ds = RandomData(44, schema);
   ASSERT_NE(ds, nullptr);
-  ds = ds->Map({transforms::TypeCast("uint64")}, {"label"}, {}, {}, nullptr, {cb1});
+  ds = ds->Map({std::make_shared<transforms::TypeCast>("uint64")}, {"label"}, {}, {}, nullptr, {cb1});
   ASSERT_NE(ds, nullptr);
   ds = ds->Repeat(2);
   ASSERT_NE(ds, nullptr);

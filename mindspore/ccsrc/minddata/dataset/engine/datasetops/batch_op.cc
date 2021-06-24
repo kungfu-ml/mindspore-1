@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 #include "minddata/dataset/engine/datasetops/batch_op.h"
 
 #include <utility>
-#include <iomanip>
 
 #include "utils/ms_utils.h"
 #ifdef ENABLE_PYTHON
@@ -24,7 +23,6 @@
 #endif
 #include "minddata/dataset/engine/data_buffer.h"
 #include "minddata/dataset/engine/db_connector.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/kernels/data/data_utils.h"
 #include "minddata/dataset/util/status.h"
 
@@ -61,7 +59,7 @@ Status BatchOp::Builder::SanityCheck() {
   err += builder_num_workers_ <= 0 ? "Invalid parameter, num_parallel_workers must be greater than 0, but got " +
                                        std::to_string(builder_num_workers_) + ".\n"
                                    : "";
-  return err.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, common::SafeCStr(err));
+  return err.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, common::SafeCStr(err));
 }
 
 #ifdef ENABLE_PYTHON
@@ -76,8 +74,18 @@ BatchOp::BatchOp(int32_t batch_size, bool drop, bool pad, int32_t op_queue_size,
       out_col_names_(out_col),
       batch_size_func_(batch_size_func),
       batch_map_func_(batch_map_func),
-      pad_info_(pad_map) {
-  worker_queues_.Init(num_workers, op_queue_size);
+      pad_info_(pad_map),
+      batch_num_(0),
+      batch_cnt_(0) {
+  // Adjust connector queue size.  After batch each row is batch_size times larger
+  int32_t queue_size;
+  queue_size = std::max(1, op_queue_size / start_batch_size_);
+  if (num_workers == 1) {
+    // ensure there is at least 2 queue slots for whole operation..  If only 1 worker, incrase it to 2
+    queue_size = std::max(2, queue_size);
+  }
+
+  worker_queues_.Init(num_workers, queue_size);
 }
 // if PYTHON is disabled. per_batch_map can't be used
 #else
@@ -88,8 +96,16 @@ BatchOp::BatchOp(int32_t batch_size, bool drop, bool pad, int32_t op_queue_size,
       drop_(drop),
       pad_(pad),
       in_col_names_(cols_to_map),
-      pad_info_(pad_map) {
-  worker_queues_.Init(num_workers, op_queue_size);
+      pad_info_(pad_map),
+      batch_num_(0),
+      batch_cnt_(0) {
+  int32_t queue_size;
+  queue_size = std::max(1, op_queue_size / start_batch_size_);
+  if (num_workers == 1) {
+    // ensure there is at least 2 queue slots for whole operation..  If only 1 worker, incrase it to 2
+    queue_size = std::max(2, queue_size);
+  }
+  worker_queues_.Init(num_workers, queue_size);
 }
 #endif
 
@@ -133,7 +149,7 @@ Status BatchOp::operator()() {
     RETURN_IF_NOT_OK(GetBatchSize(&cur_batch_size, CBatchInfo(epoch_num, batch_num, cnt - epoch_num)));
     RETURN_IF_NOT_OK(child_iterator_->FetchNextTensorRow(&new_row));
 
-#if !defined(_WIN32) && !defined(_WIN64)
+#if !defined(_WIN32) && !defined(_WIN64) && ENABLE_PYTHON
     if ((num_workers_ > 1 || batch_map_func_) && GetMemoryUsage() > MAX_MEMORY_USAGE_THRESHOLD) {
       MS_LOG(WARNING) << "Memory consumption is more than " << MAX_MEMORY_USAGE_THRESHOLD * 100 << "%, "
                       << "which may cause oom error. Please reduce num_parallel_workers size / "
@@ -174,6 +190,7 @@ Status BatchOp::BatchRows(const std::unique_ptr<TensorQTable> *src, const std::u
 
   if (batch_size == 1) {
     TensorRow row = std::move((*src)->front());
+    row.setPath({});
     (*src)->pop_front();
     (*dest)->push_back(row);
     for (const auto &tensor : (*dest)->front()) {
@@ -260,11 +277,11 @@ Status BatchOp::MakeBatchedBuffer(std::pair<std::unique_ptr<TensorQTable>, CBatc
 
 Status BatchOp::LaunchThreadsAndInitOp() {
   if (tree_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
   }
   RETURN_IF_NOT_OK(worker_queues_.Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(
-    tree_->LaunchWorkers(num_workers_, std::bind(&BatchOp::WorkerEntry, this, std::placeholders::_1), Name()));
+    tree_->LaunchWorkers(num_workers_, std::bind(&BatchOp::WorkerEntry, this, std::placeholders::_1), Name(), id()));
   return Status::OK();
 }
 
@@ -337,23 +354,23 @@ Status BatchOp::InvokeBatchSizeFunc(int32_t *batch_size, CBatchInfo info) {
     // Acquire Python GIL
     py::gil_scoped_acquire gil_acquire;
     if (Py_IsInitialized() == 0) {
-      return Status(StatusCode::kPythonInterpreterFailure, "Python Interpreter is finalized.");
+      return Status(StatusCode::kMDPythonInterpreterFailure, "Python Interpreter is finalized.");
     }
     try {
       py::object size = batch_size_func_(info);
       *batch_size = size.cast<int32_t>();
       if (*batch_size <= 0) {
-        return Status(StatusCode::kPyFuncException,
+        return Status(StatusCode::kMDPyFuncException,
                       "Invalid parameter, batch size function should return an integer greater than 0.");
       }
     } catch (const py::error_already_set &e) {
-      return Status(StatusCode::kPyFuncException, e.what());
+      return Status(StatusCode::kMDPyFuncException, e.what());
     } catch (const py::cast_error &e) {
-      return Status(StatusCode::kPyFuncException,
+      return Status(StatusCode::kMDPyFuncException,
                     "Invalid parameter, batch size function should return an integer greater than 0.");
     }
   }
-  return Status(StatusCode::kOK, "Batch size func call succeed.");
+  return Status(StatusCode::kSuccess, "Batch size func call succeed.");
 }
 
 Status BatchOp::InvokeBatchMapFunc(TensorTable *input, TensorTable *output, CBatchInfo info) {
@@ -361,7 +378,7 @@ Status BatchOp::InvokeBatchMapFunc(TensorTable *input, TensorTable *output, CBat
     // Acquire Python GIL
     py::gil_scoped_acquire gil_acquire;
     if (Py_IsInitialized() == 0) {
-      return Status(StatusCode::kPythonInterpreterFailure, "Python Interpreter is finalized.");
+      return Status(StatusCode::kMDPythonInterpreterFailure, "Python Interpreter is finalized.");
     }
     try {
       // Prepare batch map call back parameters
@@ -388,12 +405,9 @@ Status BatchOp::InvokeBatchMapFunc(TensorTable *input, TensorTable *output, CBat
       for (size_t i = 0; i < ret_tuple.size(); i++) {
         TensorRow output_batch;
         // If user returns a type that is neither a list nor an array, issue a error msg.
-        if (py::isinstance<py::array>(ret_tuple[i])) {
+        if (!py::isinstance<py::list>(ret_tuple[i])) {
           MS_LOG(INFO) << "column: " << out_col_names_[i]
-                       << " returned by per_batch_map is a np.array. Please use list instead.";
-        } else if (!py::isinstance<py::list>(ret_tuple[i])) {
-          MS_LOG(ERROR) << "column: " << out_col_names_[i]
-                        << " returned by per_batch_map is not a list, this could lead to conversion failure.";
+                       << " returned by per_batch_map is not a list, this could lead to conversion failure.";
         }
 
         py::list output_list = py::cast<py::list>(ret_tuple[i]);
@@ -406,9 +420,9 @@ Status BatchOp::InvokeBatchMapFunc(TensorTable *input, TensorTable *output, CBat
         output->push_back(std::move(output_batch));
       }
     } catch (const py::error_already_set &e) {
-      return Status(StatusCode::kPyFuncException, e.what());
+      return Status(StatusCode::kMDPyFuncException, e.what());
     } catch (const py::cast_error &e) {
-      return Status(StatusCode::kPyFuncException,
+      return Status(StatusCode::kMDPyFuncException,
                     "Invalid parameter, batch map function should return a tuple of list of numpy array.");
     }
   }
@@ -497,18 +511,6 @@ Status BatchOp::UnpackPadInfo(const PadInfo &pad_info,
   return Status::OK();
 }
 
-// Visitor accept method for NodePass
-Status BatchOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<BatchOp>(), modified);
-}
-
-// Visitor pre-accept method for NodePass
-Status BatchOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->PreRunOnNode(shared_from_base<BatchOp>(), modified);
-}
-
 Status BatchOp::ComputeColMap() {
   CHECK_FAIL_RETURN_UNEXPECTED(child_.size() == 1,
                                "Batch has " + std::to_string(child_.size()) + " child/children, expects only 1 child.");
@@ -571,6 +573,36 @@ int64_t BatchOp::GetTreeBatchSize() {
   }
 #endif
   return start_batch_size_;
+}
+
+Status BatchOp::GetNextRow(TensorRow *const row) {
+  std::unique_ptr<TensorQTable> table = std::make_unique<TensorQTable>();
+  child_iterator_ = std::make_unique<ChildIterator>(this, 0, 0);
+  int32_t cur_batch_size = 0;
+  RETURN_IF_NOT_OK(GetBatchSize(&cur_batch_size, CBatchInfo(0, batch_num_, batch_cnt_)));
+  for (int i = 0; i < cur_batch_size; i++) {
+    TensorRow new_row;
+    RETURN_IF_NOT_OK(child_[0]->GetNextRow(&new_row));
+    if (!new_row.empty()) {
+      table->emplace_back(new_row);
+      if (table->size() == static_cast<size_t>(cur_batch_size)) break;
+    } else {
+      if (drop_ || table->empty()) {
+        table = std::make_unique<TensorQTable>();  // this drops when drop == true
+      }
+    }
+  }
+  std::unique_ptr<TensorQTable> out = std::make_unique<TensorQTable>();
+  RETURN_UNEXPECTED_IF_NULL(table);
+  if (pad_) RETURN_IF_NOT_OK(PadColumns(&table, pad_info_, column_name_id_map_));  // do padding if needed
+  if (!table->empty()) {
+    RETURN_IF_NOT_OK(BatchRows(&table, &out, table->size()));
+    CHECK_FAIL_RETURN_UNEXPECTED(out->size() == 1, "Batch returned 2 rows while 1 row was expected.");
+    *row = out->back();
+    batch_cnt_++;
+    batch_num_++;
+  }
+  return Status::OK();
 }
 
 }  // namespace dataset

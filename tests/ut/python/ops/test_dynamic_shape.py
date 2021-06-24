@@ -41,7 +41,7 @@ def test_sparse_apply_proximal_ada_grad():
         def __init__(self):
             super(NetWrapper, self).__init__()
             self.unq = P.Unique()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.expand_dims = P.ExpandDims()
             self.cast = P.Cast()
             self.net = Net()
@@ -75,7 +75,7 @@ def test_sparse_apply_ftrl():
         def __init__(self):
             super(NetWrapper, self).__init__()
             self.unq = P.Unique()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.expand_dims = P.ExpandDims()
             self.cast = P.Cast()
             self.net = SparseApplyFtrlNet()
@@ -97,7 +97,7 @@ def test_gatherv2():
         def __init__(self):
             super(Net, self).__init__()
             self.unq = P.Unique()
-            self.gather = P.GatherV2()
+            self.gather = P.Gather()
             self.yy = Tensor(np.ones([8], dtype=np.int32))
 
         def construct(self, x, y):

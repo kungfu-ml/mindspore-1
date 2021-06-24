@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,12 @@ DECLARE_OP_USE_OUTPUT(MaxPool)
 
 DECLARE_OP_ADAPTER(MaxPoolGrad)
 DECLARE_OP_USE_OUTPUT(MaxPoolGrad)
+
+DECLARE_OP_ADAPTER(MaxPool3D)
+DECLARE_OP_USE_OUTPUT(MaxPool3D)
+
+DECLARE_OP_ADAPTER(MaxPool3DGrad)
+DECLARE_OP_USE_OUTPUT(MaxPool3DGrad)
 
 DECLARE_OP_ADAPTER(AvgPool)
 DECLARE_OP_USE_OUTPUT(AvgPool)

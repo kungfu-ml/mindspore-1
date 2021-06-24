@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,10 +16,10 @@
 """GradCAM."""
 
 from mindspore.ops import operations as op
+from mindspore.explainer._utils import ForwardProbe, retrieve_layer, unify_inputs, unify_targets
 
-from .backprop_utils import compute_gradients
+from .backprop_utils import get_bp_weights, GradNet
 from .intermediate_layer import IntermediateLayerAttribution
-from ...._utils import ForwardProbe, retrieve_layer, unify_inputs, unify_targets
 
 
 def _gradcam_aggregation(attributions):
@@ -61,7 +61,7 @@ class GradCAM(IntermediateLayerAttribution):
     Args:
         network (Cell): The black-box model to be explained.
         layer (str, optional): The layer name to generate the explanation, usually chosen as the last convolutional
-            layer for better practice. If it is '', the explantion will be generated at the input layer.
+            layer for better practice. If it is '', the explanation will be generated at the input layer.
             Default: ''.
 
     Inputs:
@@ -76,18 +76,18 @@ class GradCAM(IntermediateLayerAttribution):
         >>> import numpy as np
         >>> import mindspore as ms
         >>> from mindspore.explainer.explanation import GradCAM
-        >>> from mindspore.train.serialization import load_checkpoint, load_param_into_net
-        >>> # load a trained network
-        >>> net = resnet50(10)
-        >>> param_dict = load_checkpoint("resnet50.ckpt")
-        >>> load_param_into_net(net, param_dict)
+        >>>
+        >>> # The detail of LeNet5 is shown in model_zoo.official.cv.lenet.src.lenet.py
+        >>> net = LeNet5(10, num_channel=3)
         >>> # specify a layer name to generate explanation, usually the layer can be set as the last conv layer.
-        >>> layer_name = 'layer4'
+        >>> layer_name = 'conv2'
         >>> # init GradCAM with a trained network and specify the layer to obtain attribution
         >>> gradcam = GradCAM(net, layer=layer_name)
-        >>> inputs = ms.Tensor(np.random.rand(1, 3, 224, 224), ms.float32)
+        >>> inputs = ms.Tensor(np.random.rand(1, 3, 32, 32), ms.float32)
         >>> label = 5
         >>> saliency = gradcam(inputs, label)
+        >>> print(saliency.shape)
+        (1, 1, 32, 32)
     """
 
     def __init__(self, network, layer=""):
@@ -123,8 +123,9 @@ class GradCAM(IntermediateLayerAttribution):
             inputs = unify_inputs(inputs)
             targets = unify_targets(targets)
 
-            gradients = compute_gradients(self._backward_model, *inputs, targets)
-
+            weights = get_bp_weights(self._backward_model, *inputs, targets)
+            grad_net = GradNet(self._backward_model)
+            gradients = grad_net(*inputs, weights)
             # get intermediate activation
             activation = (probe.value,)
 

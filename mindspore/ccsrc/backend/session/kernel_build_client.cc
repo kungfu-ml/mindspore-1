@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,15 +19,89 @@
 
 namespace mindspore {
 namespace kernel {
+inline static bool init_flag = false;
 void ReplaceStr(std::string *dest, const std::string &replace, char new_char) {
   std::string::size_type start = 0;
   while ((start = (*dest).find(replace, start)) != std::string::npos) {
     (*dest).replace(start, replace.size(), 1, new_char);
-    start++;  // Replaced 1 charactor.
+    start++;  // Replaced 1 character.
   }
 }
 
-int AscendKernelBuildClient::TbeStart(const std::string &json) {
+bool KernelBuildClient::AkgStart(int process_num, int wait_time) {
+  // Start compiling..
+  auto res = SendRequest(kAkgStart);
+  if (res != kAck) {
+    MS_LOG(ERROR) << "AKG/START failed, res: " << res;
+    return false;
+  }
+  std::string process_num_str = std::to_string(process_num);
+  res = SendRequest(process_num_str);
+  if (res != kAck) {
+    MS_LOG(ERROR) << "AKG/START(process_num) responds failed, res: " << res;
+    return false;
+  }
+  std::string wait_time_str = std::to_string(wait_time);
+  res = SendRequest(wait_time_str);
+  if (res != kAck) {
+    MS_LOG(ERROR) << "AKG/START(wait_time) responds failed, res: " << res;
+    return false;
+  }
+  return true;
+}
+
+bool KernelBuildClient::AkgSendData(const std::vector<std::string> &jsons) {
+  auto res = SendRequest(kAkgData);
+  if (res != kAck) {
+    MS_LOG(ERROR) << "AKG/DATA failed, res: " << res;
+    return false;
+  }
+  for (auto &json : jsons) {
+    res = SendRequest(json);
+    if (res != kAck) {
+      MS_LOG(ERROR) << "AKG/DATA.. responds failed, res: " << res << ", when sending [" << json << "]";
+      return false;
+    }
+  }
+  return true;
+}
+
+// Fetch the result of AKG compiling.
+bool KernelBuildClient::AkgWait() {
+  auto res = SendRequest(kAkgWait);
+  if (res != kTrue) {
+    MS_LOG(ERROR) << "AKG/WAIT failed, res: " << res;
+    return false;
+  }
+  return true;
+}
+
+bool AscendKernelBuildClient::TbePre(const std::string &mode) {
+  auto res = SendRequest(kTbePre);
+  if (res.find(kSuccess) == res.npos) {
+    MS_LOG(EXCEPTION) << "PRE failed, res: " << res;
+  }
+  MS_LOG(INFO) << "Pre " << res;
+  // init env for auto tune
+  res = SendRequest(kTbeTune);
+  if (res != kAck) {
+    MS_LOG(EXCEPTION) << "Send tune single failed, res: " << res;
+  }
+  res = SendRequest(mode);
+  if (res != kSuccess) {
+    MS_LOG(EXCEPTION) << "PRE failed, res: " << res;
+  }
+
+  return true;
+}
+
+int AscendKernelBuildClient::TbeStart(const std::string &json, const std::string &mode) {
+  if (!init_flag) {
+    if (!TbePre(mode)) {
+      MS_LOG(EXCEPTION) << "START failed";
+    }
+    init_flag = true;
+  }
   // Start compiling..
   auto res = SendRequest(kTbeStart);
   if (res != kAck) {
@@ -53,7 +127,7 @@ bool AscendKernelBuildClient::TbeWait(int *task_id, std::string *task_result, st
   }
   // Request task id.
   *task_id = std::stoi(SendRequest(kContinue));
-  // Requst task result.
+  // Request task result.
   *task_result = SendRequest(kContinue);
   // Request prebuild result.
   *pre_build_result = SendRequest(kContinue);
@@ -62,58 +136,11 @@ bool AscendKernelBuildClient::TbeWait(int *task_id, std::string *task_result, st
 
 void AscendKernelBuildClient::TbeReset() {
   // Start compiling..
+  init_flag = false;
   auto res = SendRequest(kTbeReset);
   if (res != kAck) {
     MS_LOG(EXCEPTION) << "TBE/RESET response is: " << res;
   }
-}
-
-bool AscendKernelBuildClient::AkgStart(int process_num, int wait_time) {
-  // Start compiling..
-  auto res = SendRequest(kAkgStart);
-  if (res != kAck) {
-    MS_LOG(ERROR) << "AKG/START failed, res: " << res;
-    return false;
-  }
-  std::string process_num_str = std::to_string(process_num);
-  res = SendRequest(process_num_str);
-  if (res != kAck) {
-    MS_LOG(ERROR) << "AKG/START(process_num) responds failed, res: " << res;
-    return false;
-  }
-  std::string wait_time_str = std::to_string(wait_time);
-  res = SendRequest(wait_time_str);
-  if (res != kAck) {
-    MS_LOG(ERROR) << "AKG/START(wait_time) responds failed, res: " << res;
-    return false;
-  }
-  return true;
-}
-
-bool AscendKernelBuildClient::AkgSendData(const std::vector<std::string> &jsons) {
-  auto res = SendRequest(kAkgData);
-  if (res != kAck) {
-    MS_LOG(ERROR) << "AKG/DATA failed, res: " << res;
-    return false;
-  }
-  for (auto &json : jsons) {
-    res = SendRequest(json);
-    if (res != kAck) {
-      MS_LOG(ERROR) << "AKG/DATA.. responds failed, res: " << res << ", when sending [" << json << "]";
-      return false;
-    }
-  }
-  return true;
-}
-
-// Fetch the result of AKG compiling.
-bool AscendKernelBuildClient::AkgWait() {
-  auto res = SendRequest(kAkgWait);
-  if (res != kTrue) {
-    MS_LOG(ERROR) << "AKG/WAIT failed, res: " << res;
-    return false;
-  }
-  return true;
 }
 
 std::string AscendKernelBuildClient::SelectFormat(const std::string &json) {

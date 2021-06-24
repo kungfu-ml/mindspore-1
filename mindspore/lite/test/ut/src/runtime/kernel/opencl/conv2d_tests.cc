@@ -23,7 +23,7 @@ class TestOpenCL_Conv2D : public CommonTest {};
 namespace {
 // PrimitiveType_Conv2D: src/ops/populate/conv2d_populate.cc
 ConvParameter *CreateParameter(const std::string &attr, ActType act_type) {
-  auto *param = test::CreateParameter<ConvParameter>(schema::PrimitiveType_Conv2D);
+  auto *param = test::CreateParameter<ConvParameter>(schema::PrimitiveType_Conv2DFusion);
   param->act_type_ = act_type;
   sscanf(attr.c_str(),
          "inputNHWC_%dx%dx%dx%d_outputNHWC_%dx%dx%dx%d_kernelHW_%dx%d_strideHW_%dx%d_padTopBottomLeftRight_%dx%dx%dx%d_"
@@ -39,6 +39,7 @@ ConvParameter *CreateParameter(const std::string &attr, ActType act_type) {
 void TestMain_Conv2D(const std::string &attr, float *input_data, float *weight_data, float *bias_data,
                      float *output_data, ActType act_type, bool fp16_enable, float atol = 1e-9) {
   auto *param = CreateParameter(attr, act_type);
+  param->group_ = 1;  // group conv is not supported in this test
   std::vector<int> input_shape = {param->input_batch_, param->input_h_, param->input_w_, param->input_channel_};
   std::vector<int> weight_shape = {param->output_channel_, param->kernel_h_, param->kernel_w_, param->input_channel_};
   std::vector<int> bias_shape = {param->output_channel_};

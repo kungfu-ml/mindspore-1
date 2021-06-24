@@ -36,9 +36,9 @@ cfg = edict({
         'warmup_steps': 10000,
     }),
     'Lamb': edict({
-        'learning_rate': 3e-5,
+        'learning_rate': 3e-4,
         'end_learning_rate': 0.0,
-        'power': 5.0,
+        'power': 2.0,
         'warmup_steps': 10000,
         'weight_decay': 0.01,
         'decay_filter': lambda x: 'layernorm' not in x.name.lower() and 'bias' not in x.name.lower(),
@@ -47,6 +47,20 @@ cfg = edict({
     'Momentum': edict({
         'learning_rate': 2e-5,
         'momentum': 0.9,
+    }),
+    'Thor': edict({
+        'lr_max': 0.0034,
+        'lr_min': 3.244e-5,
+        'lr_power': 1.0,
+        'lr_total_steps': 30000,
+        'damping_max': 5e-2,
+        'damping_min': 1e-6,
+        'damping_power': 1.0,
+        'damping_total_steps': 30000,
+        'momentum': 0.9,
+        'weight_decay': 5e-4,
+        'loss_scale': 1.0,
+        'frequency': 100,
     }),
 })
 
@@ -60,7 +74,7 @@ if cfg.bert_network == 'base':
     cfg.batch_size = 64
     bert_net_cfg = BertConfig(
         seq_length=128,
-        vocab_size=21128,
+        vocab_size=30522,
         hidden_size=768,
         num_hidden_layers=12,
         num_attention_heads=12,

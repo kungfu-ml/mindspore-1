@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "debug/debugger/proto_exporter.h"
 
 #include <fstream>
 #include <map>
@@ -22,99 +23,90 @@
 #include <utility>
 #include <algorithm>
 
+#include "debug/common.h"
 #include "debug/debugger/debugger.h"
+#include "debug/data_dump/dump_json_parser.h"
 #include "proto/debug_graph.pb.h"
 #include "ir/graph_utils.h"
 #include "utils/symbolic.h"
+#include "utils/trace_base.h"
 
 namespace mindspore {
-class DebuggerProtoExporter {
- public:
-  DebuggerProtoExporter() {}
-  ~DebuggerProtoExporter() {}
 
-  std::string GetFuncGraphProtoString(const FuncGraphPtr &func_graph);
-  debugger::ModelProto GetFuncGraphProto(const FuncGraphPtr &func_graph);
+using TypeInfoToProtoTypeMap = std::vector<std::pair<const char *, debugger::DataType>>;
 
- private:
-  void InitModelInfo();
-  void GetOpNodeTypeAndAttrs(const FuncGraphPtr &func_graph, const AnfNodePtr &node, debugger::NodeProto *node_proto);
-  std::string GetOpNodeInputId(const FuncGraphPtr &func_graph, const AnfNodePtr &node,
-                               const std::map<AnfNodePtr, size_t> &apply_map,
-                               std::map<AnfNodePtr, size_t> *const_map_ptr);
-  void SetValueToProto(const ValuePtr &attr_value, debugger::ValueProto *value_proto);
-  void SetScalarToProto(const ScalarPtr &val, debugger::ValueProto *value_proto);
-  void SetSequenceToProto(const ValueSequeuePtr &val, debugger::ValueProto *value_proto);
-  void SetDictionaryToProto(const ValueDictionaryPtr &val, debugger::ValueProto *value_proto);
-  void SetNodeOutputType(const AnfNodePtr &node, debugger::TypeProto *type_proto);
-  void SetNodeOutputType(const TypePtr &node, const BaseShapePtr &shape, debugger::TypeProto *type_proto);
+static void SetOutputType(const TypePtr &node, const BaseShapePtr &shape, debugger::TypeProto *type_proto);
 
-  void ExportFuncGraph(const FuncGraphPtr &func_graph, debugger::GraphProto *graph_proto);
-  void ExportParameters(const FuncGraphPtr &func_graph, debugger::GraphProto *graph_proto);
-  void ExportCNodes(const FuncGraphPtr &func_graph, debugger::GraphProto *graph_proto,
-                    std::map<AnfNodePtr, size_t> *const_map_ptr);
-  void ExportCNode(const FuncGraphPtr &func_graph, const CNodePtr &node, std::map<AnfNodePtr, size_t> *apply_map_ptr,
-                   std::map<AnfNodePtr, size_t> *const_map_ptr, debugger::GraphProto *graph_proto);
-  void ExportFuncGraphOutput(const FuncGraphPtr &func_graph, const CNodePtr &ret_node,
-                             const std::map<AnfNodePtr, size_t> &apply_map, std::map<AnfNodePtr, size_t> *const_map_ptr,
-                             debugger::GraphProto *graph_proto);
-  void ExportValueNodes(const std::map<AnfNodePtr, size_t> &const_map, debugger::GraphProto *graph_proto);
+void CheckIfValidType(const TypePtr &type, debugger::TypeProto *const type_proto) {
+  if (!(type->isa<Number>() || type->isa<TensorType>() || type->isa<Tuple>() || type->isa<TypeType>() ||
+        type->isa<List>() || type->isa<TypeAnything>() || type->isa<RefKeyType>() || type->isa<RefType>() ||
+        type->isa<Function>() || type->isa<TypeNone>() || type->isa<String>() || type->isa<SymbolicKeyType>() ||
+        type->isa<UMonadType>() || type->isa<IOMonadType>())) {
+    MS_LOG(EXCEPTION) << "Unknown type: " << type->type_name();
+  }
+  if (type->isa<Number>()) {
+    type_proto->set_data_type(GetDebuggerNumberDataType(type));
+  }
+}
 
-  static std::string GetConstNodeId(size_t idx) { return std::string("cst") + std::to_string(idx); }
+static void SetTensorTypeProto(const TypePtr &type, const BaseShapePtr &shape, debugger::TypeProto *type_proto) {
+  TypePtr elem_type = dyn_cast<TensorType>(type)->element();
+  type_proto->mutable_tensor_type()->set_elem_type(GetDebuggerNumberDataType(elem_type));
+  if (shape != nullptr && shape->isa<abstract::Shape>()) {
+    abstract::ShapePtr shape_info = dyn_cast<abstract::Shape>(shape);
+    for (const auto &elem : shape_info->shape()) {
+      type_proto->mutable_tensor_type()->mutable_shape()->add_dim()->set_size(elem);
+    }
+  }
+}
 
-  debugger::ModelProto model_;
-};
+static void SetTupleTypeProto(const TypePtr &type, debugger::TypeProto *type_proto) {
+  TuplePtr tuple_type = dyn_cast<Tuple>(type);
+  for (const auto &elem_type : tuple_type->elements()) {
+    SetOutputType(elem_type, nullptr, type_proto->mutable_sequence_type()->add_elem_types());
+  }
+}
 
-void DebuggerProtoExporter::SetNodeOutputType(const TypePtr &type, const BaseShapePtr &shape,
-                                              debugger::TypeProto *type_proto) {
+static void SetListTypeProto(const TypePtr &type, debugger::TypeProto *type_proto) {
+  ListPtr list_type = dyn_cast<List>(type);
+  for (const auto &elem_type : list_type->elements()) {
+    SetOutputType(elem_type, nullptr, type_proto->mutable_sequence_type()->add_elem_types());
+  }
+}
+
+static TypeInfoToProtoTypeMap type_info_to_proto_type = {
+  {typeid(TensorType).name(), debugger::DT_TENSOR},     {typeid(Tuple).name(), debugger::DT_TUPLE},
+  {typeid(TypeType).name(), debugger::DT_TYPE},         {typeid(List).name(), debugger::DT_LIST},
+  {typeid(TypeAnything).name(), debugger::DT_ANYTHING}, {typeid(RefKeyType).name(), debugger::DT_REFKEY},
+  {typeid(RefType).name(), debugger::DT_REF},           {typeid(Function).name(), debugger::DT_GRAPH},
+  {typeid(TypeNone).name(), debugger::DT_NONE},         {typeid(String).name(), debugger::DT_STRING},
+  {typeid(UMonadType).name(), debugger::DT_UMONAD},     {typeid(IOMonadType).name(), debugger::DT_IOMONAD}};
+
+static void SetOutputType(const TypePtr &type, const BaseShapePtr &shape, debugger::TypeProto *type_proto) {
   if (type_proto == nullptr) {
     return;
   }
-
   if (type == nullptr) {
     type_proto->set_data_type(debugger::DT_UNDEFINED);
-  } else if (type->isa<Number>()) {
-    type_proto->set_data_type(GetDebuggerNumberDataType(type));
-  } else if (type->isa<TensorType>()) {
-    TypePtr elem_type = dyn_cast<TensorType>(type)->element();
-    type_proto->mutable_tensor_type()->set_elem_type(GetDebuggerNumberDataType(elem_type));
-    type_proto->set_data_type(debugger::DT_TENSOR);
-    if (shape != nullptr && shape->isa<abstract::Shape>()) {
-      abstract::ShapePtr shape_info = dyn_cast<abstract::Shape>(shape);
-      for (const auto &elem : shape_info->shape()) {
-        type_proto->mutable_tensor_type()->mutable_shape()->add_dim()->set_size(elem);
-      }
+    return;
+  }
+  CheckIfValidType(type, type_proto);
+  for (auto &it : type_info_to_proto_type) {
+    if (type->IsFromTypeId(Base::GetTypeId(it.first))) {
+      type_proto->set_data_type(it.second);
+      break;
     }
-  } else if (type->isa<Tuple>()) {
-    TuplePtr tuple_type = dyn_cast<Tuple>(type);
-    type_proto->set_data_type(debugger::DT_TUPLE);
-    for (const auto &elem_type : tuple_type->elements()) {
-      SetNodeOutputType(elem_type, nullptr, type_proto->mutable_sequence_type()->add_elem_types());
-    }
-  } else if (type->isa<TypeType>()) {
-    type_proto->set_data_type(debugger::DT_TYPE);
-  } else if (type->isa<List>()) {
-    ListPtr list_type = dyn_cast<List>(type);
-    type_proto->set_data_type(debugger::DT_LIST);
-    for (const auto &elem_type : list_type->elements()) {
-      SetNodeOutputType(elem_type, nullptr, type_proto->mutable_sequence_type()->add_elem_types());
-    }
-  } else if (type->isa<TypeAnything>()) {
-    type_proto->set_data_type(debugger::DT_ANYTHING);
-  } else if (type->isa<RefKeyType>()) {
-    type_proto->set_data_type(debugger::DT_REFKEY);
-  } else if (type->isa<RefType>()) {
-    type_proto->set_data_type(debugger::DT_REF);
-  } else if (type->isa<Function>()) {
-    type_proto->set_data_type(debugger::DT_GRAPH);
-  } else if (type->isa<TypeNone>()) {
-    type_proto->set_data_type(debugger::DT_NONE);
-  } else if (type->isa<String>()) {
-    type_proto->set_data_type(debugger::DT_STRING);
-  } else if (type->isa<SymbolicKeyType>()) {
-    // Do Nothing.
-  } else {
-    MS_LOG(EXCEPTION) << "Unknown type: " << type->type_name();
+  }
+  if (type->isa<TensorType>()) {
+    SetTensorTypeProto(type, shape, type_proto);
+    return;
+  }
+  if (type->isa<Tuple>()) {
+    SetTupleTypeProto(type, type_proto);
+    return;
+  }
+  if (type->isa<List>()) {
+    SetListTypeProto(type, type_proto);
   }
 }
 
@@ -122,7 +114,7 @@ void DebuggerProtoExporter::SetNodeOutputType(const AnfNodePtr &node, debugger::
   if (node == nullptr || type_proto == nullptr) {
     return;
   }
-  SetNodeOutputType(node->Type(), node->Shape(), type_proto);
+  SetOutputType(node->Type(), node->Shape(), type_proto);
 }
 
 void DebuggerProtoExporter::SetValueToProto(const ValuePtr &val, debugger::ValueProto *value_proto) {
@@ -321,14 +313,15 @@ std::string DebuggerProtoExporter::GetOpNodeInputId(const FuncGraphPtr &, const 
   MS_LOG(EXCEPTION) << "Unknown node type. node is '" << node->ToString() << "'";
 }
 
-std::string DebuggerProtoExporter::GetFuncGraphProtoString(const FuncGraphPtr &func_graph) {
+std::string DebuggerProtoExporter::GetFuncGraphProtoString(const FuncGraphPtr &func_graph,
+                                                           LocDebugDumpMode dump_location) {
   if (func_graph == nullptr) {
     return "";
   }
 
   InitModelInfo();
   debugger::GraphProto *graph_proto = model_.mutable_graph();
-  ExportFuncGraph(func_graph, graph_proto);
+  ExportFuncGraph(func_graph, graph_proto, dump_location);
   return model_.SerializeAsString();
 }
 
@@ -343,7 +336,8 @@ debugger::ModelProto DebuggerProtoExporter::GetFuncGraphProto(const FuncGraphPtr
   return model_;
 }
 
-void DebuggerProtoExporter::ExportFuncGraph(const FuncGraphPtr &func_graph, debugger::GraphProto *graph_proto) {
+void DebuggerProtoExporter::ExportFuncGraph(const FuncGraphPtr &func_graph, debugger::GraphProto *const graph_proto,
+                                            LocDebugDumpMode dump_location) {
   if (func_graph == nullptr || graph_proto == nullptr) {
     return;
   }
@@ -358,7 +352,7 @@ void DebuggerProtoExporter::ExportFuncGraph(const FuncGraphPtr &func_graph, debu
 
   ExportParameters(func_graph, graph_proto);
 
-  ExportCNodes(func_graph, graph_proto, &const_map);
+  ExportCNodes(func_graph, graph_proto, &const_map, dump_location);
 
   ExportValueNodes(const_map, graph_proto);
 }
@@ -379,13 +373,13 @@ void DebuggerProtoExporter::ExportParameters(const FuncGraphPtr &func_graph, deb
 
     const ParameterPtr param_ptr = dyn_cast<Parameter>(param);
     if (param_ptr == nullptr) {
-      MS_LOG(EXCEPTION) << "Parameter '" << param->ToString() << "' could not cast to parameter.";
+      MS_LOG(INFO) << "Parameter '" << param->ToString() << "' could not cast to parameter.";
     }
   }
 }
 
-void DebuggerProtoExporter::ExportCNodes(const FuncGraphPtr &func_graph, debugger::GraphProto *graph_proto,
-                                         std::map<AnfNodePtr, size_t> *const_map_ptr) {
+void DebuggerProtoExporter::ExportCNodes(const FuncGraphPtr &func_graph, debugger::GraphProto *const graph_proto,
+                                         std::map<AnfNodePtr, size_t> *const_map_ptr, LocDebugDumpMode dump_location) {
   if (func_graph == nullptr || graph_proto == nullptr || const_map_ptr == nullptr) {
     return;
   }
@@ -399,7 +393,7 @@ void DebuggerProtoExporter::ExportCNodes(const FuncGraphPtr &func_graph, debugge
     }
     auto cnode = node->cast<CNodePtr>();
     if (cnode != func_graph->get_return()) {
-      ExportCNode(func_graph, cnode, &apply_map, const_map_ptr, graph_proto);
+      ExportCNode(func_graph, cnode, &apply_map, const_map_ptr, graph_proto, dump_location);
     } else {
       ExportFuncGraphOutput(func_graph, cnode, apply_map, const_map_ptr, graph_proto);
     }
@@ -409,7 +403,7 @@ void DebuggerProtoExporter::ExportCNodes(const FuncGraphPtr &func_graph, debugge
 void DebuggerProtoExporter::ExportCNode(const FuncGraphPtr &func_graph, const CNodePtr &node,
                                         std::map<AnfNodePtr, size_t> *apply_map_ptr,
                                         std::map<AnfNodePtr, size_t> *const_map_ptr,
-                                        debugger::GraphProto *graph_proto) {
+                                        debugger::GraphProto *const graph_proto, LocDebugDumpMode dump_location) {
   if (func_graph == nullptr || node == nullptr || apply_map_ptr == nullptr || const_map_ptr == nullptr ||
       graph_proto == nullptr) {
     return;
@@ -436,7 +430,14 @@ void DebuggerProtoExporter::ExportCNode(const FuncGraphPtr &func_graph, const CN
     // add full_name for debugger
     node_proto->set_full_name(node->fullname_with_scope());
     MS_LOG(INFO) << "full_name: " << node->fullname_with_scope();
-
+    if (dump_location == kDebugWholeStack) {
+      std::ostringstream buffer;
+      auto traces = mindspore::trace::GetSourceLineList(node);
+      for (auto &trace : traces) {
+        buffer << "      # " << trace;
+      }
+      node_proto->set_source_address(buffer.str());
+    }
     // process OP inputs
     for (size_t i = 1; i < inputs.size(); ++i) {
       debugger::InputProto *input_proto = node_proto->add_input();
@@ -542,4 +543,63 @@ debugger::DataType GetDebuggerNumberDataType(const TypePtr &type) {
   }
 }
 
+#ifdef ENABLE_DUMP_IR
+void DumpIRProtoWithSrcInfo(const FuncGraphPtr &func_graph, const std::string &suffix, const std::string &target_dir,
+                            LocDebugDumpMode dump_location) {
+  DebuggerProtoExporter exporter;
+  std::string graph_proto = exporter.GetFuncGraphProtoString(func_graph, dump_location);
+  if (func_graph == nullptr) {
+    MS_LOG(ERROR) << "Func graph is nullptr";
+    return;
+  }
+  std::string file_path = target_dir + "/" + "ms_output_" + suffix + ".pb";
+  bool status = Common::CreateNotExistDirs(target_dir);
+  if (!status) {
+    MS_LOG(ERROR) << "Failed at CreateNotExistDirs in dump_proto";
+    return;
+  }
+  if (file_path.size() > PATH_MAX) {
+    MS_LOG(ERROR) << "File path " << file_path << " is too long.";
+    return;
+  }
+  char real_path[PATH_MAX] = {0};
+  char *real_path_ret = nullptr;
+#if defined(_WIN32) || defined(_WIN64)
+  real_path_ret = _fullpath(real_path, file_path.c_str(), PATH_MAX);
+#else
+  real_path_ret = realpath(file_path.c_str(), real_path);
+#endif
+  if (nullptr == real_path_ret) {
+    MS_LOG(DEBUG) << "dir " << file_path << " does not exit.";
+  } else {
+    std::string path_string = real_path;
+    if (chmod(common::SafeCStr(path_string), S_IRUSR | S_IWUSR) == -1) {
+      MS_LOG(ERROR) << "Modify file:" << real_path << " to rw fail.";
+      return;
+    }
+  }
+
+  // write to pb file
+  std::ofstream ofs(real_path);
+  if (!ofs.is_open()) {
+    MS_LOG(ERROR) << "Open file '" << real_path << "' failed!";
+    return;
+  }
+  ofs << graph_proto;
+  ofs.close();
+  // set file mode to read only by user
+  ChangeFileMode(file_path, S_IRUSR);
+}
+#else
+void DumpIRProtoWithSrcInfo(const FuncGraphPtr &, const std::string &, const std::string &, LocDebugDumpMode) {
+  static bool already_printed = false;
+  if (already_printed) {
+    return;
+  }
+  already_printed = true;
+  MS_LOG(WARNING) << "The functionality of dumping function graph IR in protobuf format is disabled,"
+                  << "because ENABLE_DEBUGGER option is off"
+                  << "please recompile source to enable it. See help of building script.";
+}
+#endif
 }  // namespace mindspore

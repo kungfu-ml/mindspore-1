@@ -37,7 +37,7 @@ In the current model, we use CenterNet to estimate multi-person pose. The DLA(De
 
 Note that you can run the scripts based on the dataset mentioned in original paper or widely used in relevant domain/network architecture. In the following sections, we will introduce how to run the scripts using the related dataset below.
 
-Dataset used: [COCO2017](<https://cocodataset.org/>)
+Dataset used: [COCO2017](https://cocodataset.org/)
 
 - Dataset size：26G
     - Train：19G，118000 images  
@@ -77,12 +77,12 @@ Dataset used: [COCO2017](<https://cocodataset.org/>)
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-    - Prepare hardware environment with Ascend processor. If you want to try Ascend, please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend processor.
 - Framework
-    - [MindSpore](https://cmc-szv.clouddragon.huawei.com/cmcversion/index/search?searchKey=Do-MindSpore%20V100R001C00B622)
+    - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
-    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/zh-CN/master/index.html)
-    - [MindSpore API](https://www.mindspore.cn/api/zh-CN/master/index.html)
+    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
+    - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
 - Download the dataset COCO2017.
 - We use COCO2017 as training dataset in this example by default, and you can also use your own datasets.
 
@@ -157,8 +157,8 @@ bash scripts/run_standalone_eval_cpu.sh [RUN_MODE] [DATA_DIR] [LOAD_CHECKPOINT_P
         ├── scripts
         │   ├── ascend_distributed_launcher
         │   │    ├──__init__.py
-        │   │    ├──hyper_parameter_config.ini         // hyper parameter for distributed pretraining
-        │   │    ├──get_distribute_pretrain_cmd.py     // script for distributed pretraining
+        │   │    ├──hyper_parameter_config.ini         // hyper parameter for distributed training
+        │   │    ├──get_distribute_train_cmd.py     // script for distributed training
         │   │    ├──README.md
         │   ├──convert_dataset_to_mindrecord.sh        // shell script for converting coco type dataset to mindrecord
         │   ├──run_standalone_train_ascend.sh          // shell script for standalone training on ascend
@@ -300,7 +300,6 @@ Parameters for dataset (Training/Evaluation):
     aug_rot                         properbility of image rotation during data augmenation: N, default is 0.0
     rotate                          maximum value of rotation angle during data augmentation: N, default is 0.0
     flip_prop                       properbility of image flip during data augmenation: N, default is 0.5
-    color_aug                       whether use color augmentation: True | False, default is False
     mean                            mean value of RGB image
     std                             variance of RGB image
     flip_idx                        the corresponding point index of keypoints when flip the image
@@ -401,7 +400,7 @@ epoch: 0.0, current epoch percent: 0.00, step: 5, time of per steps: 45.213 s, o
 #### Running on Ascend
 
 ```bash
-bash scripts/run_distributed_pretrain_ascend.sh /path/mindrecord_dataset /path/hccl.json /path/load_ckpt(optional)
+bash scripts/run_distributed_train_ascend.sh /path/mindrecord_dataset /path/hccl.json /path/load_ckpt(optional)
 ```
 
 The command above will run in the background, you can view training logs in LOG*/training_log.txt and LOG*/ms_log/. After training finished, you will get some checkpoint files under the LOG*/ckpt_0 folder by default. The loss value will be displayed as follows:

@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,28 +13,21 @@
 # limitations under the License.
 # ===========================================================================
 """generate json desc for LogSoftmax"""
-from mindspore._extends.graph_kernel.model import model_builder as builder
+from mindspore._extends.graph_kernel.model.model import DataFormat as DF
+from ._utils import Expander, ExpanderInfoValidator as VLD
 
 
-def expand_logsoftmax(expand_info):
+@VLD.add_format(DF.DEFAULT, DF.DEFAULT)
+@VLD.check_attrs('axis')
+class LogSoftmax(Expander):
     """LogSoftmax expander"""
-    # get op info.
-    input_desc = expand_info['input_desc'][0]
-    attrs = expand_info['attr']
-    axis = None
-    for item in attrs:
-        if 'axis' in item:
-            axis = item['axis']
-    graph_builder = builder.GraphBuilder()
-    if isinstance(axis, int):
-        axis = (axis,)
-    # generate a graph.
-    with graph_builder.graph_scope('main') as graph_scope:
-        # create tensor input.
-        input_x = graph_builder.tensor(input_desc['shape'], input_desc['data_type'], input_desc['format'])
-        graph_scope.set_input(input_x)
 
-        # cal logsoftmax.
+    def _expand(self, graph_builder):
+        input_x = self.inputs[0]
+        axis = self.attrs['axis']
+        if isinstance(axis, int):
+            axis = (axis,)
+
         max_x = graph_builder.emit('ReduceMax', [input_x], attrs={'reduce_axis': axis, 'keep_dims': True})
         data_sub = graph_builder.emit('Sub', [input_x, max_x])
         data_exp = graph_builder.emit('Exp', [data_sub])
@@ -42,8 +35,4 @@ def expand_logsoftmax(expand_info):
         log_expsum = graph_builder.emit('Log', [data_expsum])
         result = graph_builder.emit('Sub', [data_sub, log_expsum])
 
-        # set graph output.
-        graph_scope.set_output(result)
-
-    graph = graph_builder.get()[0]
-    return graph
+        return result

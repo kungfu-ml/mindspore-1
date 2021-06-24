@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ STATUS TopologicalSortPass::Run(schema::MetaGraphT *graph) {
   std::vector<size_t> sinked_tensor_idxes;
   // put all const tensor index into sinked_tensor_idxes
   for (size_t i = 0; i < graph->allTensors.size(); i++) {
-    if (graph->allTensors.at(i)->nodeType == schema::NodeType::NodeType_ValueNode) {
+    if (graph->allTensors.at(i)->nodeType == NodeType_ValueNode) {
       sinked_tensor_idxes.insert(sinked_tensor_idxes.end(), i);
     }
   }
@@ -69,7 +69,7 @@ STATUS TopologicalSortPass::Run(schema::MetaGraphT *graph) {
     graph->subGraph[i]->nodeIndices.swap(new_subgraph_node_indices);
   }
   if (new_nodes.size() != old_nodes.size()) {
-    MS_LOG(ERROR) << "Unknow error in TopologicalSort, old_nodes size: " << old_nodes.size()
+    MS_LOG(ERROR) << "Unknown error in TopologicalSort, old_nodes size: " << old_nodes.size()
                   << ", new_nodes size: " << new_nodes.size();
     return RET_ERROR;
   }

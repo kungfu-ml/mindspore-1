@@ -274,7 +274,7 @@ def test_coco_case_exception():
             pass
         assert False
     except RuntimeError as e:
-        assert "json.exception.parse_error" in str(e)
+        assert "failed to open json file" in str(e)
 
     try:
         sampler = ds.PKSampler(3)
@@ -284,6 +284,166 @@ def test_coco_case_exception():
         assert False
     except ValueError as e:
         assert "CocoDataset doesn't support PKSampler" in str(e)
+
+    def exception_func(item):
+        raise Exception("Error occur!")
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Detection")
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Detection")
+        data1 = data1.map(operations=vision.Decode(), input_columns=["image"], num_parallel_workers=1)
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Detection")
+        data1 = data1.map(operations=exception_func, input_columns=["bbox"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Detection")
+        data1 = data1.map(operations=exception_func, input_columns=["category_id"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Stuff")
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Stuff")
+        data1 = data1.map(operations=vision.Decode(), input_columns=["image"], num_parallel_workers=1)
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Stuff")
+        data1 = data1.map(operations=exception_func, input_columns=["segmentation"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=ANNOTATION_FILE, task="Stuff")
+        data1 = data1.map(operations=exception_func, input_columns=["iscrowd"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=KEYPOINT_FILE, task="Keypoint")
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=KEYPOINT_FILE, task="Keypoint")
+        data1 = data1.map(operations=vision.Decode(), input_columns=["image"], num_parallel_workers=1)
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=KEYPOINT_FILE, task="Keypoint")
+        data1 = data1.map(operations=exception_func, input_columns=["keypoints"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=KEYPOINT_FILE, task="Keypoint")
+        data1 = data1.map(operations=exception_func, input_columns=["num_keypoints"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=PANOPTIC_FILE, task="Panoptic")
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=PANOPTIC_FILE, task="Panoptic")
+        data1 = data1.map(operations=vision.Decode(), input_columns=["image"], num_parallel_workers=1)
+        data1 = data1.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=PANOPTIC_FILE, task="Panoptic")
+        data1 = data1.map(operations=exception_func, input_columns=["bbox"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=PANOPTIC_FILE, task="Panoptic")
+        data1 = data1.map(operations=exception_func, input_columns=["category_id"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data1 = ds.CocoDataset(DATA_DIR, annotation_file=PANOPTIC_FILE, task="Panoptic")
+        data1 = data1.map(operations=exception_func, input_columns=["area"], num_parallel_workers=1)
+        for _ in data1.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
 
 
 if __name__ == '__main__':

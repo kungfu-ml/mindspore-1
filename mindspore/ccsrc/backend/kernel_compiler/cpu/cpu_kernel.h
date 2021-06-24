@@ -30,14 +30,14 @@ using mindspore::kernel::AddressPtr;
 using CTask = std::function<void(size_t, size_t)>;
 namespace mindspore {
 namespace kernel {
-const char KSIZE[] = "ksize";
+const char KERNEL_SIZE[] = "kernel_size";
 const char STRIDE[] = "stride";
 const char STRIDES[] = "strides";
 const char DILATION[] = "dilation";
+const char FORMAT[] = "format";
 const char PAD[] = "pad";
 const char PAD_LIST[] = "pad_list";
 const char PAD_MODE[] = "pad_mode";
-const char PADDING[] = "padding";
 const char PAD_MODE_LOWER_SAME[] = "same";
 const char PAD_MODE_LOWER_VALID[] = "valid";
 const char PAD_MODE_UPPER_SAME[] = "SAME";
@@ -67,6 +67,7 @@ enum OperateType {
   SQRT,
   POW,
   REALDIV,
+  FLOORDIV,
   MOD,
   NEG,
   LESS,
@@ -83,11 +84,33 @@ enum OperateType {
   EQUAL,
   NOTEQUAL,
   LESSEQUAL,
+  LOGICALAND,
+  LOGICALOR,
+  LOGICALNOT,
   FLOOR,
   SQUAREDDIFFERENCE,
   GREATER,
   GREATEREQUAL,
   RECIPROCAL,
+  GELU,
+  GELUGRAD,
+  ASIN,
+  ACOS,
+  ATAN,
+  ASINGRAD,
+  ACOSGRAD,
+  ATANGRAD,
+  SIN,
+  COS,
+  TAN,
+  SINH,
+  COSH,
+  ASINH,
+  ACOSH,
+  ATANH,
+  ASINHGRAD,
+  ACOSHGRAD,
+  ATAN2,
 };
 
 class CPUKernel : public kernel::KernelMod {
@@ -121,6 +144,50 @@ class CPUKernelUtils {
   static void GetElementNumEveryDim(const std::vector<size_t> &shape, std::vector<size_t> *element_num);
   static void ParallelFor(const CTask &task, size_t count);
   static std::vector<size_t> FlatShapeByAxis(const std::vector<size_t> &shape, int axis);
+};
+
+class BroadcastIterator {
+ public:
+  BroadcastIterator(std::vector<size_t> input_shape_a, std::vector<size_t> input_shape_b,
+                    std::vector<size_t> output_shape);
+  virtual ~BroadcastIterator() = default;
+  inline size_t GetInputPosA() const { return input_pos_[0]; }
+  inline size_t GetInputPosB() const { return input_pos_[1]; }
+  void SetPos(size_t pos);
+  void GenNextPos();
+
+ private:
+  void BroadcastShape();
+  void InitStrides();
+
+  std::vector<size_t> coordinates_;
+  std::vector<size_t> input_shape_a_;
+  std::vector<size_t> input_shape_b_;
+  std::vector<size_t> output_shape_;
+  std::vector<size_t> input_strides_a_;
+  std::vector<size_t> input_strides_b_;
+  std::vector<size_t> input_back_strides_a_;
+  std::vector<size_t> input_back_strides_b_;
+  std::array<size_t, 2> input_pos_{0};
+  int output_dimension_{0};
+};
+
+class TransposeIterator {
+ public:
+  TransposeIterator(std::vector<size_t> output_shape, std::vector<size_t> axes, const std::vector<size_t> &input_shape);
+  virtual ~TransposeIterator() = default;
+  inline size_t GetPos() const { return pos_; }
+  void SetPos(size_t pos);
+  void GenNextPos();
+
+ private:
+  int dimension_{0};
+  std::vector<size_t> coordinates_;
+  std::vector<size_t> shape_;
+  std::vector<size_t> strides_;
+  std::vector<size_t> back_strides_;
+  std::vector<size_t> axes_;
+  size_t pos_{0};
 };
 }  // namespace kernel
 }  // namespace mindspore

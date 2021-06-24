@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -104,6 +104,9 @@ table ListSessionMsg {
 
 table ListSessionsMsg {
     sessions:[ListSessionMsg];
+    num_workers:int32;
+    log_level:int8;
+    spill_dir:string;
 }
 
 table DataLocatorMsg {

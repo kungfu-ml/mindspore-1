@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 20202-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,10 @@ void TakeNode::Print(std::ostream &out) const { out << Name() + "(num_rows:" + s
 
 // Function to build the TakeOp
 Status TakeNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops) {
-  node_ops->push_back(std::make_shared<TakeOp>(take_count_, connector_que_size_));
+  auto op = std::make_shared<TakeOp>(take_count_, connector_que_size_);
+  op->set_total_repeats(GetTotalRepeats());
+  op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
+  node_ops->push_back(op);
   return Status::OK();
 }
 
@@ -71,15 +74,22 @@ Status TakeNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_g
 }
 
 // Visitor accepting method for IRNodePass
-Status TakeNode::Accept(IRNodePass *p, bool *modified) {
+Status TakeNode::Accept(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->Visit(shared_from_base<TakeNode>(), modified);
 }
 
 // Visitor accepting method for IRNodePass
-Status TakeNode::AcceptAfter(IRNodePass *p, bool *modified) {
+Status TakeNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->VisitAfter(shared_from_base<TakeNode>(), modified);
+}
+
+Status TakeNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["count"] = take_count_;
+  *out_json = args;
+  return Status::OK();
 }
 }  // namespace dataset
 }  // namespace mindspore

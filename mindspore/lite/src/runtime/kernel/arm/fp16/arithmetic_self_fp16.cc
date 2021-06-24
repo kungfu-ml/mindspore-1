@@ -16,7 +16,6 @@
 #include "src/runtime/kernel/arm/fp16/arithmetic_self_fp16.h"
 #include "src/runtime/kernel/arm/fp16/common_fp16.h"
 #include "src/kernel_registry.h"
-#include "nnacl/fp16/cast_fp16.h"
 #include "nnacl/fp16/arithmetic_self_fp16.h"
 
 using mindspore::lite::KernelRegistrar;
@@ -44,7 +43,8 @@ ArithmeticSelfFp16Func ArithmeticSelfFp16CPUKernel::GetArithmeticSelfFp16Fun(int
                                       {mindspore::schema::PrimitiveType_Ceil, ElementCeilFp16},
                                       {mindspore::schema::PrimitiveType_Round, ElementRoundFp16},
                                       {mindspore::schema::PrimitiveType_Neg, ElementNegativeFp16},
-                                      {mindspore::schema::PrimitiveType_Reciprocal, ElementReciprocalFp16}};
+                                      {mindspore::schema::PrimitiveType_Reciprocal, ElementReciprocalFp16},
+                                      {mindspore::schema::PrimitiveType_Erf, ElementErfFp16}};
   for (size_t i = 0; i < sizeof(type_func_table) / sizeof(TYPE_FUNC_INFO); i++) {
     if (type_func_table[i].primitive_type_ == primitive_type) {
       return type_func_table[i].func_;
@@ -72,36 +72,21 @@ int ArithmeticSelfFp16CPUKernel::DoExecute(int task_id) {
   return ret;
 }
 
-void ArithmeticSelfFp16CPUKernel::FreeInputAndOutput() {
-  if (in_tensors_.at(0)->data_type() == kNumberTypeFloat32) {
-    context_->allocator->Free(input_fp16_ptr_);
-    input_fp16_ptr_ = nullptr;
-  }
-  if (out_tensors_.at(0)->data_type() == kNumberTypeFloat32) {
-    context_->allocator->Free(output_fp16_ptr_);
-    output_fp16_ptr_ = nullptr;
-  }
-}
-
 int ArithmeticSelfFp16CPUKernel::Run() {
   auto input_tensor = in_tensors_.at(0);
   auto output_tensor = out_tensors_.at(0);
-  input_fp16_ptr_ = ConvertInputFp32toFp16(input_tensor, context_);
-  output_fp16_ptr_ = MallocOutputFp16(output_tensor, context_);
-  if (input_fp16_ptr_ == nullptr || output_fp16_ptr_ == nullptr) {
-    FreeInputAndOutput();
-    MS_LOG(ERROR) << "input or output is nullptr";
-    return RET_ERROR;
+
+  if (input_tensor->data_type() == kNumberTypeFloat32) {
+    input_fp16_ptr_ = ConvertInputFp32toFp16(input_tensor, context_);
+  } else {
+    input_fp16_ptr_ = reinterpret_cast<float16_t *>(input_tensor->data_c());
   }
+  output_fp16_ptr_ = reinterpret_cast<float16_t *>(output_tensor->data_c());
+
   auto ret = ParallelLaunch(this->context_->thread_pool_, ArithmeticSelfRun, this, op_parameter_->thread_num_);
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "ArithmeticSelfRun error error_code[" << ret << "]";
   }
-  if (out_tensors_.at(0)->data_type() == kNumberTypeFloat32) {
-    Float16ToFloat32(output_fp16_ptr_, reinterpret_cast<float *>(output_tensor->MutableData()),
-                     output_tensor->ElementsNum());
-  }
-  FreeInputAndOutput();
   return ret;
 }
 
@@ -118,4 +103,5 @@ REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Ceil, LiteKernelCreator<Arith
 REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Round, LiteKernelCreator<ArithmeticSelfFp16CPUKernel>)
 REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Neg, LiteKernelCreator<ArithmeticSelfFp16CPUKernel>)
 REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Reciprocal, LiteKernelCreator<ArithmeticSelfFp16CPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Erf, LiteKernelCreator<ArithmeticSelfFp16CPUKernel>)
 }  // namespace mindspore::kernel

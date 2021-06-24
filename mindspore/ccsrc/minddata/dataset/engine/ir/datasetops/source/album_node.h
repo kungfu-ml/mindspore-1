@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,6 +60,27 @@ class AlbumNode : public MappableSourceNode {
   /// \brief Get the shard id of node
   /// \return Status Status::OK() if get shard id successfully
   Status GetShardId(int32_t *shard_id) override;
+
+  /// \brief Base-class override for GetDatasetSize
+  /// \param[in] size_getter Shared pointer to DatasetSizeGetter
+  /// \param[in] estimate This is only supported by some of the ops and it's used to speed up the process of getting
+  ///     dataset size at the expense of accuracy.
+  /// \param[out] dataset_size the size of the dataset
+  /// \return Status of the function
+  Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
+                        int64_t *dataset_size) override;
+
+  /// \brief Getter functions
+  const std::string &DatasetDir() const { return dataset_dir_; }
+  const std::string &SchemaPath() const { return schema_path_; }
+  const std::vector<std::string> &ColumnNames() const { return column_names_; }
+  bool Decode() const { return decode_; }
+  /// \brief Sampler getter
+  /// \return SamplerObj of the current node
+  std::shared_ptr<SamplerObj> Sampler() override { return sampler_; }
+
+  /// \brief Sampler setter
+  void SetSampler(std::shared_ptr<SamplerObj> sampler) override { sampler_ = sampler; }
 
  private:
   std::string dataset_dir_;

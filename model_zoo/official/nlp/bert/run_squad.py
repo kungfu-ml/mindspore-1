@@ -30,12 +30,45 @@ from mindspore.nn.wrap.loss_scale import DynamicLossScaleUpdateCell
 from mindspore.nn.optim import AdamWeightDecay, Lamb, Momentum
 from mindspore.common.tensor import Tensor
 from mindspore.train.model import Model
-from mindspore.train.callback import CheckpointConfig, ModelCheckpoint, TimeMonitor
+from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint, TimeMonitor,
+                                      SummaryCollector, LossMonitor)
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
+import mindspore.communication.management as D
+from mindspore.context import ParallelMode
 
 _cur_dir = os.getcwd()
 
-def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoint_path="", epoch_num=1):
+""" seed """
+#  from mindspore.common import set_seed
+#  set_seed(1)
+
+
+def _set_bert_all_reduce_split():
+    context.set_auto_parallel_context(parameter_broadcast=True)
+#  def _set_bert_all_reduce_split():
+    #  """set bert all_reduce fusion split, support num_hidden_layers is 12 and 24."""
+    #  device_target = context.get_context('device_target')
+    #  enable_graph_kernel = context.get_context('enable_graph_kernel')
+    #  device_num = context.get_auto_parallel_context('device_num')
+    #  if bert_net_cfg.num_hidden_layers == 12:
+        #  if bert_net_cfg.use_relative_positions:
+            #  context.set_auto_parallel_context(all_reduce_fusion_config=[29, 58, 87, 116, 145, 174, 203, 217])
+        #  else:
+            #  context.set_auto_parallel_context(all_reduce_fusion_config=[28, 55, 82, 109, 136, 163, 190, 205])
+            #  print("here")
+            #  if device_target == 'GPU' and enable_graph_kernel and device_num == 8:
+                #  context.set_auto_parallel_context(all_reduce_fusion_config=[180, 205])
+            #  elif device_target == 'GPU' and enable_graph_kernel and device_num == 16:
+                #  context.set_auto_parallel_context(all_reduce_fusion_config=[120, 205])
+    #  elif bert_net_cfg.num_hidden_layers == 24:
+        #  if bert_net_cfg.use_relative_positions:
+            #  context.set_auto_parallel_context(all_reduce_fusion_config=[30, 90, 150, 210, 270, 330, 390, 421])
+        #  else:
+            #  context.set_auto_parallel_context(all_reduce_fusion_config=[38, 93, 148, 203, 258, 313, 368, 397])
+
+
+def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoint_path="",
+             epoch_num=1, distributed=False):
     """ do train """
     if load_checkpoint_path == "":
         raise ValueError("Pretrain model missed, finetune task must load pretrain model!")
@@ -68,7 +101,8 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
         raise Exception("Optimizer not supported. support: [AdamWeightDecay, Lamb, Momentum]")
 
     # load checkpoint into network
-    ckpt_config = CheckpointConfig(save_checkpoint_steps=steps_per_epoch, keep_checkpoint_max=1)
+    ckpt_config = CheckpointConfig(save_checkpoint_steps=250, keep_checkpoint_max=10)
+    #  ckpt_config = CheckpointConfig(save_checkpoint_steps=steps_per_epoch, keep_checkpoint_max=1)
     ckpoint_cb = ModelCheckpoint(prefix="squad",
                                  directory=None if save_checkpoint_path == "" else save_checkpoint_path,
                                  config=ckpt_config)
@@ -79,7 +113,17 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     netwithgrads = BertSquadCell(network, optimizer=optimizer, scale_update_cell=update_cell)
     model = Model(netwithgrads)
     callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
-    model.train(epoch_num, dataset, callbacks=callbacks)
+
+    """ callbacks """
+    if distributed:
+        rank = rank = D.get_rank()
+        summary_path = "./summary_{}".format(rank)
+    else:
+        summary_path = "./summary"
+    callbacks.append(SummaryCollector(summary_path))
+    callbacks.append(LossMonitor())
+
+    model.train(epoch_num, dataset, callbacks=callbacks, dataset_sink_mode=False)
 
 
 def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
@@ -123,6 +167,8 @@ def run_squad():
     parser = argparse.ArgumentParser(description="run squad")
     parser.add_argument("--device_target", type=str, default="Ascend", choices=["Ascend", "GPU"],
                         help="Device type, default is Ascend")
+    parser.add_argument("--distribute", type=str, default="false", choices=["true", "false"],
+                        help="Run distribute, default is false.")
     parser.add_argument("--do_train", type=str, default="false", choices=["true", "false"],
                         help="Eable train, default is false")
     parser.add_argument("--do_eval", type=str, default="false", choices=["true", "false"],
@@ -161,6 +207,25 @@ def run_squad():
         if args_opt.eval_json_path == "":
             raise ValueError("'tokenization_file_path' must be set when do evaluation task")
 
+    """ distributed """
+    if args_opt.distribute.lower() == "true":
+        distributed = True
+    else:
+        distributed = False
+    if distributed:
+        D.init()
+        device_num = D.get_group_size()
+        rank = D.get_rank()
+        save_finetune_checkpoint_path = os.path.join(save_finetune_checkpoint_path,
+                                                     "ckpt_" + str(rank))
+
+        context.reset_auto_parallel_context()
+        context.set_auto_parallel_context(parallel_mode=ParallelMode.DATA_PARALLEL, gradients_mean=True,
+                                          device_num=device_num)
+        _set_bert_all_reduce_split()
+    else:
+        device_num = 1
+        rank = 0
 
     target = args_opt.device_target
     if target == "Ascend":
@@ -179,8 +244,10 @@ def run_squad():
         ds = create_squad_dataset(batch_size=args_opt.train_batch_size, repeat_count=1,
                                   data_file_path=args_opt.train_data_file_path,
                                   schema_file_path=args_opt.schema_file_path,
-                                  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"))
-        do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path, epoch_num)
+                                  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
+                                  device_num=device_num, rank=rank)
+        do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,
+                epoch_num, distributed)
         if args_opt.do_eval.lower() == "true":
             if save_finetune_checkpoint_path == "":
                 load_finetune_checkpoint_dir = _cur_dir
@@ -208,10 +275,17 @@ def run_squad():
         ds = create_squad_dataset(batch_size=args_opt.eval_batch_size, repeat_count=1,
                                   data_file_path=eval_features,
                                   schema_file_path=args_opt.schema_file_path, is_training=False,
-                                  do_shuffle=(args_opt.eval_data_shuffle.lower() == "true"))
+                                  do_shuffle=(args_opt.eval_data_shuffle.lower() == "true"),
+                                  device_num=device_num, rank=rank)
         outputs = do_eval(ds, load_finetune_checkpoint_path, args_opt.eval_batch_size)
         all_predictions = write_predictions(eval_examples, eval_features, outputs, 20, 30, True)
-        SQuad_postprocess(args_opt.eval_json_path, all_predictions, output_metrics="output.json")
+
+        if distributed:
+            output_path = "./output_{}.json".format(rank)
+        else:
+            output_path = "./output.json"
+
+        SQuad_postprocess(args_opt.eval_json_path, all_predictions, output_metrics=output_path)
 
 
 if __name__ == "__main__":

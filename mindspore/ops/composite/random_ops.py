@@ -81,7 +81,7 @@ def laplace(shape, mean, lambda_param, seed=None):
         shape (tuple): The shape of random tensor to be generated.
         mean (Tensor): The mean μ distribution parameter, which specifies the location of the peak.
           With float32 data type.
-        lambda_param (Tensor): The parameter used for controling the variance of this random distribution. The
+        lambda_param (Tensor): The parameter used for controlling the variance of this random distribution. The
           variance of Laplace distribution is equal to twice the square of lambda_param. With float32 data type.
         seed (int): Seed is used as entropy source for Random number engines generating pseudo-random numbers.
           Default: None, which will be treated as 0.
@@ -91,7 +91,7 @@ def laplace(shape, mean, lambda_param, seed=None):
         The dtype is float32.
 
     Supported Platforms:
-        ``Ascend`` ``GPU`` ``CPU``
+        ``Ascend``
 
     Examples:
         >>> from mindspore import Tensor
@@ -192,8 +192,14 @@ def gamma(shape, alpha, beta, seed=None):
         of `alpha` and `beta`.
         The dtype is float32.
 
+    Raises:
+        TypeError: If `shape` is not a tuple.
+        TypeError: If neither `alpha` nor `beta` is a Tensor.
+        TypeError: If `seed` is not an int.
+        TypeError: If dtype of `alpha` and `beta` is not float32.
+
     Supported Platforms:
-        ``Ascend`` ``GPU`` ``CPU``
+        ``Ascend``
 
     Examples:
         >>> shape = (3, 1, 2)
@@ -211,8 +217,12 @@ def gamma(shape, alpha, beta, seed=None):
 
 
 def poisson(shape, mean, seed=None):
-    """
+    r"""
     Generates random numbers according to the Poisson random number distribution.
+
+    .. math::
+
+        \text{P}(i|μ) = \frac{\exp(-μ)μ^{i}}{i!}
 
     Args:
         shape (tuple): The shape of random tensor to be generated.
@@ -224,8 +234,13 @@ def poisson(shape, mean, seed=None):
         Tensor. The shape should be equal to the broadcasted shape between the input "shape" and shapes of `mean`.
         The dtype is float32.
 
+    Raises:
+        TypeError: If `shape` is not a tuple.
+        TypeError: If `mean` is not a Tensor whose dtype is not float32.
+        TypeError: If `seed` is not an int.
+
     Supported Platforms:
-        ``Ascend`` ``GPU`` ``CPU``
+        ``Ascend``
 
     Examples:
         >>> shape = (4, 1)
@@ -261,6 +276,11 @@ def multinomial(inputs, num_sample, replacement=True, seed=None):
     Outputs:
         Tensor, has the same rows with input. The number of sampled indices of each row is `num_samples`.
         The dtype is float32.
+
+    Raises:
+        TypeError: If `inputs` is not a Tensor whose dtype is not float32.
+        TypeError: If `num_sample` is not an int.
+        TypeError: If `seed` is neither an int nor a optional.
 
     Supported Platforms:
         ``GPU``

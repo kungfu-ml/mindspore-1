@@ -18,6 +18,7 @@
 #define MINDSPORE_LITE_SRC_RUNTIME_PARALLEL_EXECUTOR_H_
 
 #include <vector>
+#include <thread>
 #include <unordered_map>
 #include "src/runtime/allocator.h"
 #include "src/lite_kernel.h"
@@ -32,8 +33,8 @@ class ParallelExecutor : public Executor {
 
   int Prepare(const std::vector<kernel::LiteKernel *> &kernels) override;
 
-  int Run(std::vector<Tensor *> &in_tensors, std::vector<Tensor *> &out_tensors,
-          std::vector<kernel::LiteKernel *> &kernels, Allocator *allocator = nullptr,
+  int Run(const std::vector<Tensor *> &in_tensors, const std::vector<Tensor *> &out_tensors,
+          const std::vector<kernel::LiteKernel *> &kernels, mindspore::Allocator *allocator = nullptr,
           const KernelCallBack &before = nullptr, const KernelCallBack &after = nullptr) override;
   inline kernel::LiteKernel *GetReadyKernel(const int index) const { return readyKernels.at(index); }
   inline void SetResult(const int index, const int result) { results.at(index) = result; }
@@ -43,6 +44,7 @@ class ParallelExecutor : public Executor {
   std::vector<kernel::LiteKernel *> readyKernels;
   std::vector<int> results;
   struct ThreadPool *thread_pool_ = nullptr;
+  int max_thread_num_ = std::thread::hardware_concurrency();
 };
 
 }  // namespace mindspore::lite

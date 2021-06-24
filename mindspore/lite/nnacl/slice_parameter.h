@@ -18,19 +18,24 @@
 #define MINDSPORE_LITE_NNACL_SLICE_PARAMETER_H_
 
 #include "nnacl/op_base.h"
-#include "nnacl/quantization/quantize.h"
 
-#define SLICE_SHAPE_MAX_SIZE 4
+typedef struct SliceQuantArg {
+  QuantArg in_args_;
+  QuantArg out_args_;
+  int output_activation_min_;
+  int output_activation_max_;
+} SliceQuantArg;
 
 typedef struct SliceParameter {
   // primitive parameter
   OpParameter op_parameter_;
 
   // shape correlative
-  int32_t shape_[SLICE_SHAPE_MAX_SIZE];
-  int32_t begin_[SLICE_SHAPE_MAX_SIZE];
-  int32_t end_[SLICE_SHAPE_MAX_SIZE];
-  int32_t size_[SLICE_SHAPE_MAX_SIZE];
+  int32_t shape_[COMM_SHAPE_SIZE];
+  int32_t begin_[COMM_SHAPE_SIZE];
+  int32_t end_[COMM_SHAPE_SIZE];
+  int32_t size_[COMM_SHAPE_SIZE];
+  int32_t axis_[COMM_SHAPE_SIZE];
 
   // other parameter
   SliceQuantArg quant_arg_;

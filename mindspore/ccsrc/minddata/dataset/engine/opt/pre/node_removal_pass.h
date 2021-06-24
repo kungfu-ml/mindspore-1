@@ -31,7 +31,7 @@ class DatasetOp;
 ///     nodes should be removed, and then removes them.
 class NodeRemovalPass : public IRTreePass {
   /// \class RemovalNodes
-  /// \brief This is a NodePass who's job is to identify which nodes should be removed.
+  /// \brief This is a NodePass whose job is to identify which nodes should be removed.
   ///     It works in conjunction with the removal_pass.
   class RemovalNodes : public IRNodePass {
    public:
@@ -42,48 +42,29 @@ class NodeRemovalPass : public IRTreePass {
     /// \brief Destructor
     ~RemovalNodes() = default;
 
-    /// \brief Identifies the subtree below this node as a cached descendant tree.
-    /// \param[in] node The node being visited
-    /// \param[inout] modified Indicator if the node was changed at all
-    /// \return Status The status code returned
-    Status Visit(std::shared_ptr<DatasetNode> node, bool *modified) override;
-
-    /// \brief Resets the tracking of the cache within the tree
-    /// \param[in] node The node being visited
-    /// \param[inout] modified Indicator if the node was changed at all
-    /// \return Status The status code returned
-    Status VisitAfter(std::shared_ptr<DatasetNode> node, bool *modified) override;
-
     /// \brief Perform RepeatNode removal check
     /// \param[in] node The node being visited
-    /// \param[inout] modified Indicator if the node was changed at all
+    /// \param[in, out] modified Indicator if the node was changed at all
     /// \return Status The status code returned
-    Status Visit(std::shared_ptr<RepeatNode> node, bool *modified) override;
-
-    /// \brief Perform ShuffleNode removal check
-    /// \param[in] node The node being visited
-    /// \param[inout] modified Indicator if the node was changed at all
-    /// \return Status The status code returned
-    Status Visit(std::shared_ptr<ShuffleNode> node, bool *modified) override;
+    Status Visit(std::shared_ptr<RepeatNode> node, bool *const modified) override;
 
     /// \brief Perform SkipNode removal check
     /// \param[in] node The node being visited
-    /// \param[inout] modified Indicator if the node was changed at all
+    /// \param[in, out] modified Indicator if the node was changed at all
     /// \return Status The status code returned
-    Status Visit(std::shared_ptr<SkipNode> node, bool *modified) override;
+    Status Visit(std::shared_ptr<SkipNode> node, bool *const modified) override;
 
     /// \brief Perform TakeNode removal check
     /// \param[in] node The node being visited
-    /// \param[inout] modified Indicator if the node was changed at all
+    /// \param[in, out] modified Indicator if the node was changed at all
     /// \return Status The status code returned
-    Status Visit(std::shared_ptr<TakeNode> node, bool *modified) override;
+    Status Visit(std::shared_ptr<TakeNode> node, bool *const modified) override;
 
     /// \brief Getter
     /// \return All the nodes to be removed
     std::vector<std::shared_ptr<DatasetNode>> nodes_to_remove() { return nodes_to_remove_; }
 
    private:
-    bool is_caching_;
     std::vector<std::shared_ptr<DatasetNode>> nodes_to_remove_;
   };
 
@@ -95,10 +76,10 @@ class NodeRemovalPass : public IRTreePass {
   ~NodeRemovalPass() = default;
 
   /// \brief Runs a removal_nodes pass first to find out which nodes to remove, then removes them.
-  /// \param[inout] tree The tree to operate on.
-  /// \param[inout] Indicate of the tree was modified.
+  /// \param[in, out] tree The tree to operate on.
+  /// \param[in, out] Indicate of the tree was modified.
   /// \return Status The status code returned
-  Status RunOnTree(std::shared_ptr<DatasetNode> root_ir, bool *modified) override;
+  Status RunOnTree(std::shared_ptr<DatasetNode> root_ir, bool *const modified) override;
 };
 }  // namespace dataset
 }  // namespace mindspore

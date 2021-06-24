@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -6,7 +6,7 @@
 #
 # http://www.apache.org/licenses/LICENSE-2.0
 #
-# less required by applicable law or agreed to in writing, software
+# Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
@@ -19,10 +19,11 @@ import os
 import time
 import argparse
 import ast
+import numpy as np
 
 import mindspore.common.dtype as mstype
-from mindspore import context, Tensor
-from mindspore.communication.management import init
+from mindspore import context, Tensor, Parameter
+from mindspore.communication.management import init, get_rank, get_group_size
 from mindspore.train.callback import CheckpointConfig, ModelCheckpoint, TimeMonitor
 from mindspore.train import Model
 from mindspore.context import ParallelMode
@@ -42,20 +43,30 @@ parser = argparse.ArgumentParser(description="FasterRcnn training")
 parser.add_argument("--run_distribute", type=ast.literal_eval, default=False, help="Run distribute, default: false.")
 parser.add_argument("--dataset", type=str, default="coco", help="Dataset name, default: coco.")
 parser.add_argument("--pre_trained", type=str, default="", help="Pretrained file path.")
+parser.add_argument("--device_target", type=str, default="Ascend",
+                    help="device where the code will be implemented, default is Ascend")
 parser.add_argument("--device_id", type=int, default=0, help="Device id, default: 0.")
 parser.add_argument("--device_num", type=int, default=1, help="Use device nums, default: 1.")
 parser.add_argument("--rank_id", type=int, default=0, help="Rank id, default: 0.")
 args_opt = parser.parse_args()
 
-context.set_context(mode=context.GRAPH_MODE, device_target="Ascend", device_id=args_opt.device_id)
+context.set_context(mode=context.GRAPH_MODE, device_target=args_opt.device_target, device_id=args_opt.device_id)
 
 if __name__ == '__main__':
     if args_opt.run_distribute:
-        rank = args_opt.rank_id
-        device_num = args_opt.device_num
-        context.set_auto_parallel_context(device_num=device_num, parallel_mode=ParallelMode.DATA_PARALLEL,
-                                          gradients_mean=True)
-        init()
+        if args_opt.device_target == "Ascend":
+            rank = args_opt.rank_id
+            device_num = args_opt.device_num
+            context.set_auto_parallel_context(device_num=device_num, parallel_mode=ParallelMode.DATA_PARALLEL,
+                                              gradients_mean=True)
+            init()
+        else:
+            init("nccl")
+            context.reset_auto_parallel_context()
+            rank = get_rank()
+            device_num = get_group_size()
+            context.set_auto_parallel_context(device_num=device_num, parallel_mode=ParallelMode.DATA_PARALLEL,
+                                              gradients_mean=True)
     else:
         rank = 0
         device_num = 1
@@ -113,22 +124,49 @@ if __name__ == '__main__':
     load_path = args_opt.pre_trained
     if load_path != "":
         param_dict = load_checkpoint(load_path)
+
+        key_mapping = {'down_sample_layer.1.beta': 'bn_down_sample.beta',
+                       'down_sample_layer.1.gamma': 'bn_down_sample.gamma',
+                       'down_sample_layer.0.weight': 'conv_down_sample.weight',
+                       'down_sample_layer.1.moving_mean': 'bn_down_sample.moving_mean',
+                       'down_sample_layer.1.moving_variance': 'bn_down_sample.moving_variance',
+                       }
+        for oldkey in list(param_dict.keys()):
+            if not oldkey.startswith(('backbone', 'end_point', 'global_step', 'learning_rate', 'moments', 'momentum')):
+                data = param_dict.pop(oldkey)
+                newkey = 'backbone.' + oldkey
+                param_dict[newkey] = data
+                oldkey = newkey
+            for k, v in key_mapping.items():
+                if k in oldkey:
+                    newkey = oldkey.replace(k, v)
+                    param_dict[newkey] = param_dict.pop(oldkey)
+                    break
+
         for item in list(param_dict.keys()):
             if not item.startswith('backbone'):
                 param_dict.pop(item)
+
+        for key, value in param_dict.items():
+            tensor = value.asnumpy().astype(np.float32)
+            param_dict[key] = Parameter(tensor, key)
         load_param_into_net(net, param_dict)
 
+    device_type = "Ascend" if context.get_context("device_target") == "Ascend" else "Others"
+    if device_type == "Ascend":
+        net.to_float(mstype.float16)
+
     loss = LossNet()
-    lr = Tensor(dynamic_lr(config, rank_size=device_num), mstype.float32)
+    lr = Tensor(dynamic_lr(config, dataset_size), mstype.float32)
 
     opt = SGD(params=net.trainable_params(), learning_rate=lr, momentum=config.momentum,
               weight_decay=config.weight_decay, loss_scale=config.loss_scale)
     net_with_loss = WithLossCell(net, loss)
     if args_opt.run_distribute:
-        net = TrainOneStepCell(net_with_loss, net, opt, sens=config.loss_scale, reduce_flag=True,
+        net = TrainOneStepCell(net_with_loss, opt, sens=config.loss_scale, reduce_flag=True,
                                mean=True, degree=device_num)
     else:
-        net = TrainOneStepCell(net_with_loss, net, opt, sens=config.loss_scale)
+        net = TrainOneStepCell(net_with_loss, opt, sens=config.loss_scale)
 
     time_cb = TimeMonitor(data_size=dataset_size)
     loss_cb = LossCallBack(rank_id=rank)

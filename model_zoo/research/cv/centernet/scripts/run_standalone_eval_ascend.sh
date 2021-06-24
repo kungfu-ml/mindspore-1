@@ -15,7 +15,7 @@
 # ============================================================================
 
 echo "=============================================================================================================="
-echo "Please run the scipt as: "
+echo "Please run the script as: "
 echo "bash run_standalone_eval_ascend.sh DEVICE_ID RUN_MODE DATA_DIR LOAD_CHECKPOINT_PATH"
 echo "for example of validation: bash run_standalone_eval_ascend.sh 0 val /path/coco_dataset /path/load_ckpt"
 echo "for example of test: bash run_standalone_eval_ascend.sh 0 test /path/coco_dataset /path/load_ckpt"
@@ -37,10 +37,10 @@ then
 else
     echo "NMS module was not found, install it now..."
     git clone https://github.com/xingyizhou/CenterNet.git
-    cd CenterNet/src/lib/external/
+    cd CenterNet/src/lib/external/ || exit
     make
     python setup.py install
-    cd -
+    cd - || exit
     rm -rf CenterNet
 fi
 

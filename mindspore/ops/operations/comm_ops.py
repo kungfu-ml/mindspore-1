@@ -29,10 +29,10 @@ class ReduceOp:
 
     There are four kinds of operation options, "SUM", "MAX", "MIN", and "PROD".
 
-        - SUM: Take the sum.
-        - MAX: Take the maximum.
-        - MIN: Take the minimum.
-        - PROD: Take the product.
+    - SUM: Take the sum.
+    - MAX: Take the maximum.
+    - MIN: Take the minimum.
+    - PROD: Take the product.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -64,17 +64,17 @@ class AllReduce(PrimitiveWithInfer):
                   like sum, max, and min. Default: ReduceOp.SUM.
         group (str): The communication group to work on. Default: "hccl_world_group".
 
-    Raises:
-        TypeError: If any of operation and group is not a string,
-                   or fusion is not an integer, or the input's dtype is bool.
-        ValueError: If the operation is "prod".
-
     Inputs:
         - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
 
     Outputs:
         Tensor, has the same shape of the input, i.e., :math:`(x_1, x_2, ..., x_R)`.
         The contents depend on the specified operation.
+
+    Raises:
+        TypeError: If any of `op` and `group` is not a str,
+                   or fusion is not an integer, or the input's dtype is bool.
+        ValueError: If the `op` is "prod".
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -133,11 +133,6 @@ class AllGather(PrimitiveWithInfer):
     Args:
         group (str): The communication group to work on. Default: "hccl_world_group".
 
-    Raises:
-        TypeError: If group is not a string.
-        ValueError: If the local rank id of the calling process in the group
-                    is larger than the group's rank size.
-
     Inputs:
         - **input_x** (Tensor) - The shape of tensor is :math:`(x_1, x_2, ..., x_R)`.
 
@@ -145,11 +140,16 @@ class AllGather(PrimitiveWithInfer):
         Tensor. If the number of devices in the group is N,
         then the shape of output is :math:`(N, x_1, x_2, ..., x_R)`.
 
+    Raises:
+        TypeError: If `group` is not a str.
+        ValueError: If the local rank id of the calling process in the group
+                    is larger than the group's rank size.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
     Examples:
-        >>> # This example should be run with two devices. Refer to the tutorial > Distirbuted Training on mindspore.cn.
+        >>> # This example should be run with two devices. Refer to the tutorial > Distributed Training on mindspore.cn.
         >>> import numpy as np
         >>> import mindspore.ops.operations as ops
         >>> import mindspore.nn as nn
@@ -198,6 +198,38 @@ class AllGather(PrimitiveWithInfer):
 
     def __call__(self, tensor):
         raise NotImplementedError
+
+
+class _MiniStepAllGather(PrimitiveWithInfer):
+    """
+    Auto parallel virtual operator. Do nothing in forward, do reducescatter in backward in mini-step. It is only for
+    internal use of parallel modules and cannot be called by users.
+
+    Args:
+        group (str): The communication group to work on. Default: None.
+        grad_accumulation_step (int): The grad accumulation step. Default: None.
+    """
+    @prim_attr_register
+    def __init__(self, group=GlobalComm.WORLD_COMM_GROUP, grad_accumulation_step=None, mean_flag=None):
+        validator.check_value_type('group', _get_group(group), (str,), self.name)
+        self.rank = get_rank(_get_group(group))
+        self.rank_size = get_group_size(_get_group(group))
+        validator.check('rank', self.rank, 'rank_size', self.rank_size, Rel.LT, self.name)
+        self.add_prim_attr('rank_size', self.rank_size)
+        self.add_prim_attr('group', _get_group(group))
+        self.add_prim_attr('fusion', 1)
+        self.grad_accumulation_step = grad_accumulation_step
+        self.mean_flag = mean_flag
+
+    def infer_shape(self, x_shape, z_shape):
+        validator.check_positive_int(len(x_shape), "x shape", self.name)
+        if x_shape[0] > 0:
+            x_shape[0] = x_shape[0] * self.rank_size
+        return x_shape
+
+    def infer_dtype(self, x_dtype, z_shape):
+        validator.check_tensor_dtype_valid('x', x_dtype, target_dtypes, self.name)
+        return x_dtype
 
 
 class _HostAllGather(PrimitiveWithInfer):
@@ -253,7 +285,7 @@ class _HostAllGather(PrimitiveWithInfer):
 
 class ReduceScatter(PrimitiveWithInfer):
     """
-     Reduces and scatters tensors from the specified communication group.
+    Reduces and scatters tensors from the specified communication group.
 
     Note:
         The back propagation of the op is not supported yet. Stay tuned for more.
@@ -272,7 +304,7 @@ class ReduceScatter(PrimitiveWithInfer):
         ``Ascend`` ``GPU``
 
     Examples:
-        >>> # This example should be run with two devices. Refer to the tutorial > Distirbuted Training on mindspore.cn.
+        >>> # This example should be run with two devices. Refer to the tutorial > Distributed Training on mindspore.cn.
         >>> from mindspore import Tensor, context
         >>> from mindspore.communication import init
         >>> from mindspore.ops.operations.comm_ops import ReduceOp
@@ -396,15 +428,19 @@ class Broadcast(PrimitiveWithInfer):
         TypeError: If root_rank is not a integer or group is not a string.
 
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
+        >>> # This example should be run with multiple processes.
+        >>> # Please refer to the tutorial > Distributed Training on mindspore.cn.
         >>> from mindspore import Tensor
+        >>> from mindspore import context
         >>> from mindspore.communication import init
         >>> import mindspore.nn as nn
         >>> import mindspore.ops.operations as ops
         >>> import numpy as np
         >>>
+        >>> context.set_context(mode=context.GRAPH_MODE)
         >>> init()
         >>> class Net(nn.Cell):
         ...     def __init__(self):
@@ -586,10 +622,10 @@ class _MirrorMiniStepOperator(PrimitiveWithInfer):
         self.mean_flag = mean_flag
         self.grad_accumulation_step = grad_accumulation_step
 
-    def infer_shape(self, x_shape, y_shape, z_shape):
+    def infer_shape(self, x_shape, z_shape):
         return x_shape
 
-    def infer_dtype(self, x_dtype, y_shape, z_shape):
+    def infer_dtype(self, x_dtype, z_shape):
         return x_dtype
 
 
@@ -615,6 +651,19 @@ class _VirtualDiv(PrimitiveWithInfer):
 
 
 virtual_div = _VirtualDiv()
+
+
+class _VirtualAdd(PrimitiveWithInfer):
+    """Auto parallel virtual operator. Do nothing in forward, do Add in backward."""
+    @prim_attr_register
+    def __init__(self):
+        """init"""
+
+    def infer_shape(self, x_shape, y_shape):
+        return x_shape
+
+    def infer_dtype(self, x_dtype, y_dtype):
+        return x_dtype
 
 
 class _VirtualDataset(PrimitiveWithInfer):

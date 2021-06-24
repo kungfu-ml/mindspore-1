@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -78,7 +78,7 @@ class ResidualBlock(nn.Cell):
         self.conv_down_sample = conv1x1(in_channels, out_channels,
                                         stride=stride, padding=0)
         self.bn_down_sample = nn.BatchNorm2d(out_channels)
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x):
         """
@@ -400,7 +400,7 @@ def test_max_pool_with_arg_max():
         def __init__(self):
             """ ComparisonNet definition """
             super(NetMaxPoolWithArgMax, self).__init__()
-            self.max_pool_with_arg_max = P.MaxPoolWithArgmax(padding="valid", ksize=2, strides=1)
+            self.max_pool_with_arg_max = P.MaxPoolWithArgmax(pad_mode="valid", kernel_size=2, strides=1)
 
         def construct(self, x):
             ret = self.max_pool_with_arg_max(x)
@@ -675,39 +675,19 @@ test_cases_for_verify_exception = [
         'desc_inputs': [0],
     }),
     ('MaxPoolWithArgmax_ValueError_1', {
-        'block': (lambda _: P.MaxPoolWithArgmax(padding='sane'), {'exception': ValueError}),
+        'block': (lambda _: P.MaxPoolWithArgmax(pad_mode='sane'), {'exception': ValueError}),
         'desc_inputs': [0],
     }),
     ('MaxPoolWithArgmax_ValueError_2', {
-        'block': (lambda _: P.MaxPoolWithArgmax(ksize='1'), {'exception': TypeError}),
+        'block': (lambda _: P.MaxPoolWithArgmax(kernel_size='1'), {'exception': TypeError}),
         'desc_inputs': [0],
     }),
     ('MaxPoolWithArgmax_ValueError_3', {
-        'block': (lambda _: P.MaxPoolWithArgmax(ksize=-2), {'exception': ValueError}),
+        'block': (lambda _: P.MaxPoolWithArgmax(kernel_size=-2), {'exception': ValueError}),
         'desc_inputs': [0],
     }),
     ('MaxPoolWithArgmax_ValueError_4', {
         'block': (lambda _: P.MaxPoolWithArgmax(strides=-1), {'exception': ValueError}),
-        'desc_inputs': [0],
-    }),
-    ('FusedBatchNorm_ValueError_1', {
-        'block': (lambda _: P.FusedBatchNorm(mode="1", epsilon=1e-5, momentum=0.1), {'exception': TypeError}),
-        'desc_inputs': [0],
-    }),
-    ('FusedBatchNorm_ValueError_2', {
-        'block': (lambda _: P.FusedBatchNorm(mode=2, epsilon=1e-5, momentum=0.1), {'exception': ValueError}),
-        'desc_inputs': [0],
-    }),
-    ('FusedBatchNorm_ValueError_3', {
-        'block': (lambda _: P.FusedBatchNorm(mode=0, epsilon=-1e-5, momentum=0.1), {'exception': ValueError}),
-        'desc_inputs': [0],
-    }),
-    ('FusedBatchNorm_ValueError_4', {
-        'block': (lambda _: P.FusedBatchNorm(mode=0, epsilon=1e-5, momentum=-0.1), {'exception': ValueError}),
-        'desc_inputs': [0],
-    }),
-    ('FusedBatchNorm_ValueError_5', {
-        'block': (lambda _: P.FusedBatchNorm(mode=1, epsilon=-0.001, momentum=0.0), {'exception': ValueError}),
         'desc_inputs': [0],
     }),
     ('Softmax_ValueError_1', {

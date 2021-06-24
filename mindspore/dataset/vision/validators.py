@@ -17,11 +17,11 @@
 import numbers
 from functools import wraps
 import numpy as np
-from mindspore._c_dataengine import TensorOp
+from mindspore._c_dataengine import TensorOp, TensorOperation
 
 from mindspore.dataset.core.validator_helpers import check_value, check_uint8, FLOAT_MAX_INTEGER, check_pos_float32, \
     check_float32, check_2tuple, check_range, check_positive, INT32_MAX, parse_user_args, type_check, type_check_list, \
-    check_tensor_op, UINT8_MAX, check_value_normalize_std
+    check_c_tensor_op, UINT8_MAX, check_value_normalize_std, check_value_cutoff, check_value_ratio
 from .utils import Inter, Border, ImageBatchFormat
 
 
@@ -58,6 +58,7 @@ def check_resize_size(size):
         check_value(size, (1, FLOAT_MAX_INTEGER))
     elif isinstance(size, (tuple, list)) and len(size) == 2:
         for i, value in enumerate(size):
+            type_check(value, (int,), "size at dim {0}".format(i))
             check_value(value, (1, INT32_MAX), "size at dim {0}".format(i))
     else:
         raise TypeError("Size should be a single integer or a list/tuple (h, w) of length 2.")
@@ -124,10 +125,12 @@ def check_degrees(degrees):
     """Check if the degrees is legal."""
     type_check(degrees, (numbers.Number, list, tuple), "degrees")
     if isinstance(degrees, numbers.Number):
-        check_value(degrees, (0, float("inf")), "degrees")
+        check_pos_float32(degrees, "degrees")
     elif isinstance(degrees, (list, tuple)):
         if len(degrees) == 2:
             type_check_list(degrees, (numbers.Number,), "degrees")
+            for value in degrees:
+                check_float32(value, "degrees")
             if degrees[0] > degrees[1]:
                 raise ValueError("degrees should be in (min,max) format. Got (max,min).")
         else:
@@ -140,14 +143,18 @@ def check_random_color_adjust_param(value, input_name, center=1, bound=(0, FLOAT
     if isinstance(value, numbers.Number):
         if value < 0:
             raise ValueError("The input value of {} cannot be negative.".format(input_name))
-    elif isinstance(value, (list, tuple)) and len(value) == 2:
-        check_range(value, bound)
+    elif isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise TypeError("If {0} is a sequence, the length must be 2.".format(input_name))
         if value[0] > value[1]:
-            raise ValueError("value should be in (min,max) format. Got (max,min).")
+            raise ValueError("{0} value should be in (min,max) format. Got ({1}, {2}).".format(input_name,
+                                                                                               value[0], value[1]))
+        check_range(value, bound)
 
 
 def check_erasing_value(value):
-    if not (isinstance(value, (numbers.Number, str, bytes)) or
+    if not (isinstance(value, (numbers.Number,)) or
+            (isinstance(value, (str,)) and value == "random") or
             (isinstance(value, (tuple, list)) and len(value) == 3)):
         raise ValueError("The value for erasing should be either a single value, "
                          "or a string 'random', or a sequence of 3 elements for RGB respectively.")
@@ -194,9 +201,10 @@ def check_resize_interpolation(method):
     @wraps(method)
     def new_method(self, *args, **kwargs):
         [size, interpolation], _ = parse_user_args(method, *args, **kwargs)
+        if interpolation is None:
+            raise KeyError("Interpolation should not be None")
         check_resize_size(size)
-        if interpolation is not None:
-            type_check(interpolation, (Inter,), "interpolation")
+        type_check(interpolation, (Inter,), "interpolation")
 
         return method(self, *args, **kwargs)
 
@@ -440,6 +448,8 @@ def check_random_perspective(method):
     def new_method(self, *args, **kwargs):
         [distortion_scale, prob, interpolation], _ = parse_user_args(method, *args, **kwargs)
 
+        type_check(distortion_scale, (float,), "distortion_scale")
+        type_check(prob, (float,), "prob")
         check_value(distortion_scale, [0., 1.], "distortion_scale")
         check_value(prob, [0., 1.], "prob")
         type_check(interpolation, (Inter,), "interpolation")
@@ -472,6 +482,18 @@ def check_random_erasing(method):
     def new_method(self, *args, **kwargs):
         [prob, scale, ratio, value, inplace, max_attempts], _ = parse_user_args(method, *args, **kwargs)
 
+        type_check(prob, (float, int,), "prob")
+        type_check_list(scale, (float, int,), "scale")
+        if len(scale) != 2:
+            raise TypeError("scale should be a list or tuple of length 2.")
+        type_check_list(ratio, (float, int,), "ratio")
+        if len(ratio) != 2:
+            raise TypeError("ratio should be a list or tuple of length 2.")
+        type_check(value, (int, list, tuple, str), "value")
+        type_check(inplace, (bool,), "inplace")
+        type_check(max_attempts, (int,), "max_attempts")
+        check_erasing_value(value)
+
         check_value(prob, [0., 1.], "prob")
         if scale[0] > scale[1]:
             raise ValueError("scale should be in (min,max) format. Got (max,min).")
@@ -479,11 +501,14 @@ def check_random_erasing(method):
         check_positive(scale[1], "scale[1]")
         if ratio[0] > ratio[1]:
             raise ValueError("ratio should be in (min,max) format. Got (max,min).")
-        check_range(ratio, [0, FLOAT_MAX_INTEGER])
-        check_positive(ratio[0], "ratio[0]")
-        check_positive(ratio[1], "ratio[1]")
-        check_erasing_value(value)
-        type_check(inplace, (bool,), "inplace")
+        check_value_ratio(ratio[0], [0, FLOAT_MAX_INTEGER])
+        check_value_ratio(ratio[1], [0, FLOAT_MAX_INTEGER])
+        if isinstance(value, int):
+            check_value(value, (0, 255))
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                type_check(item, (int,), "value")
+                check_value(item, [0, 255], "value")
         check_value(max_attempts, (1, FLOAT_MAX_INTEGER))
 
         return method(self, *args, **kwargs)
@@ -497,7 +522,8 @@ def check_cutout(method):
     @wraps(method)
     def new_method(self, *args, **kwargs):
         [length, num_patches], _ = parse_user_args(method, *args, **kwargs)
-
+        type_check(length, (int,), "length")
+        type_check(num_patches, (int,), "num_patches")
         check_value(length, (1, FLOAT_MAX_INTEGER))
         check_value(num_patches, (1, FLOAT_MAX_INTEGER))
 
@@ -605,7 +631,16 @@ def check_uniform_augment_cpp(method):
 
         if num_ops > len(transforms):
             raise ValueError("num_ops is greater than transforms list size.")
-        type_check_list(transforms, (TensorOp,), "tensor_ops")
+        parsed_transforms = []
+        for op in transforms:
+            if op and getattr(op, 'parse', None):
+                parsed_transforms.append(op.parse())
+            else:
+                parsed_transforms.append(op)
+        type_check(parsed_transforms, (list, tuple,), "transforms")
+        for index, arg in enumerate(parsed_transforms):
+            if not isinstance(arg, (TensorOp, TensorOperation)):
+                raise TypeError("Type of Transforms[{0}] must be c_transform, but got {1}".format(index, type(arg)))
 
         return method(self, *args, **kwargs)
 
@@ -620,7 +655,9 @@ def check_bounding_box_augment_cpp(method):
         [transform, ratio], _ = parse_user_args(method, *args, **kwargs)
         type_check(ratio, (float, int), "ratio")
         check_value(ratio, [0., 1.], "ratio")
-        type_check(transform, (TensorOp,), "transform")
+        if transform and getattr(transform, 'parse', None):
+            transform = transform.parse()
+        type_check(transform, (TensorOp, TensorOperation), "transform")
         return method(self, *args, **kwargs)
 
     return new_method
@@ -633,7 +670,7 @@ def check_auto_contrast(method):
     def new_method(self, *args, **kwargs):
         [cutoff, ignore], _ = parse_user_args(method, *args, **kwargs)
         type_check(cutoff, (int, float), "cutoff")
-        check_value(cutoff, [0, 100], "cutoff")
+        check_value_cutoff(cutoff, [0, 50], "cutoff")
         if ignore is not None:
             type_check(ignore, (list, tuple, int), "ignore")
         if isinstance(ignore, int):
@@ -710,7 +747,7 @@ def check_random_select_subpolicy_op(method):
                 raise ValueError("policy[{0}] can not be empty.".format(sub_ind))
             for op_ind, tp in enumerate(sub):
                 check_2tuple(tp, "policy[{0}][{1}]".format(sub_ind, op_ind))
-                check_tensor_op(tp[0], "op of (op, prob) in policy[{0}][{1}]".format(sub_ind, op_ind))
+                check_c_tensor_op(tp[0], "op of (op, prob) in policy[{0}][{1}]".format(sub_ind, op_ind))
                 check_value(tp[1], (0, 1), "prob of (op, prob) policy[{0}][{1}]".format(sub_ind, op_ind))
 
         return method(self, *args, **kwargs)

@@ -156,7 +156,7 @@ class CenterfaceMobilev2(nn.Cell):
 
 class CenterFaceLoss(nn.Cell):
     """
-    Loss method defination.
+    Loss method definition.
     """
     def __init__(self, wh_weight, reg_offset, off_weight, hm_weight, lm_weight):
         super(CenterFaceLoss, self).__init__()
@@ -171,7 +171,6 @@ class CenterFaceLoss(nn.Cell):
         self.reg_loss = SmoothL1LossNew()
         self.reg_loss_cmask = SmoothL1LossNewCMask()
         self.print = P.Print()
-        # self.reduce_sum = P.ReduceSum()
 
     def construct(self, output_hm, output_wh, output_off, output_kps, hm, reg_mask, ind, wh, wight_mask, hm_offset,
                   hps_mask, landmarks):
@@ -190,7 +189,6 @@ class CenterFaceLoss(nn.Cell):
         F.depend(loss, F.sqrt(F.cast(wight_mask, mstype.float32)))
         F.depend(loss, F.sqrt(F.cast(reg_mask, mstype.float32)))
         # add print when you want to see loss detail and do debug
-        #self.print('hm_loss=', hm_loss, 'wh_loss=', wh_loss, 'off_loss=', off_loss, 'lm_loss=', lm_loss, 'loss=', loss)
         return loss
 
 
@@ -260,8 +258,10 @@ class TrainingWrapper(nn.Cell):
 
         # init overflow buffer
         init = self.alloc_status()
+        init = F.depend(init, loss)
         # clear overflow buffer
-        self.clear_status(init)
+        clear_status = self.clear_status(init)
+        loss = F.depend(loss, clear_status)
 
         #sens = sens_input #P.Fill()(P.DType()(loss), P.Shape()(loss), sens_input) # user can contral loss scale by add a sens_input
         sens = P.Fill()(P.DType()(loss), P.Shape()(loss), self.sens)
@@ -272,7 +272,9 @@ class TrainingWrapper(nn.Cell):
             grads = self.grad_reducer(grads)
 
         # get the overflow buffer
-        self.get_status(init)
+        init = F.depend(init, grads)
+        get_status = self.get_status(init)
+        init = F.depend(init, get_status)
         # sum overflow buffer elements, 0:not overflow , >0:overflow
         flag_sum = self.reduce_sum(init, (0,))
         if self.is_distributed:
@@ -295,7 +297,7 @@ class CenterFaceWithNms(nn.Cell):
         self.centerface_network = network
         self.config = ConfigCenterface()
         # two type of maxpool self.maxpool2d = nn.MaxPool2d(kernel_size=3, stride=1, pad_mode='same')
-        self.maxpool2d = P.MaxPoolWithArgmax(ksize=3, strides=1, padding='same')
+        self.maxpool2d = P.MaxPoolWithArgmax(kernel_size=3, strides=1, pad_mode='same')
         self.topk = P.TopK(sorted=True)
         self.reshape = P.Reshape()
         self.print = P.Print()

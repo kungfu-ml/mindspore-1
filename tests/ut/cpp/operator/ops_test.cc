@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include "pybind_api/ir/primitive_py.h"
 #include "pipeline/jit/parse/python_adapter.h"
 #include "frontend/operator/ops.h"
+#include "base/core_ops.h"
 
 namespace mindspore {
 namespace prim {
@@ -34,52 +35,52 @@ class TestOps : public UT::Common {
 
 // Arithmetic
 TEST_F(TestOps, ScalarAddTest) {
-  auto prim = std::make_shared<Primitive>("scalar_add");
+  auto prim = std::make_shared<Primitive>(prim::kScalarAdd);
   ASSERT_EQ(prim->name(), kPrimScalarAdd->name());
 }
 
 TEST_F(TestOps, ScalarSubTest) {
-  auto prim = std::make_shared<Primitive>("scalar_sub");
+  auto prim = std::make_shared<Primitive>(prim::kScalarSub);
   ASSERT_EQ(prim->name(), kPrimScalarSub->name());
 }
 
 TEST_F(TestOps, ScalarMulTest) {
-  auto prim = std::make_shared<Primitive>("scalar_mul");
+  auto prim = std::make_shared<Primitive>(prim::kScalarMul);
   ASSERT_EQ(prim->name(), kPrimScalarMul->name());
 }
 
 TEST_F(TestOps, ScalarDivTest) {
-  auto prim = std::make_shared<Primitive>("scalar_div");
+  auto prim = std::make_shared<Primitive>(prim::kScalarDiv);
   ASSERT_EQ(prim->name(), kPrimScalarDiv->name());
 }
 
 TEST_F(TestOps, ScalarModTest) {
-  auto prim = std::make_shared<Primitive>("scalar_mod");
+  auto prim = std::make_shared<Primitive>(prim::kScalarMod);
   ASSERT_EQ(prim->name(), kPrimScalarMod->name());
 }
 
 TEST_F(TestOps, ScalarPowTest) {
-  auto prim = std::make_shared<Primitive>("scalar_pow");
+  auto prim = std::make_shared<Primitive>(prim::kScalarPow);
   ASSERT_EQ(prim->name(), kPrimScalarPow->name());
 }
 
 TEST_F(TestOps, ScalarTruncTest) {
-  auto prim = std::make_shared<Primitive>("scalar_trunc");
+  auto prim = std::make_shared<Primitive>(prim::kScalarTrunc);
   ASSERT_EQ(prim->name(), kPrimScalarTrunc->name());
 }
 
 TEST_F(TestOps, ScalarFloorTest) {
-  auto prim = std::make_shared<Primitive>("scalar_floor");
+  auto prim = std::make_shared<Primitive>(prim::kScalarFloor);
   ASSERT_EQ(prim->name(), kPrimScalarFloor->name());
 }
 
 TEST_F(TestOps, ScalarUaddTest) {
-  auto prim = std::make_shared<Primitive>("scalar_uadd");
+  auto prim = std::make_shared<Primitive>(prim::kScalarUadd);
   ASSERT_EQ(prim->name(), kPrimScalarUadd->name());
 }
 
 TEST_F(TestOps, ScalarUsubTest) {
-  auto prim = std::make_shared<Primitive>("scalar_usub");
+  auto prim = std::make_shared<Primitive>(prim::kScalarUsub);
   ASSERT_EQ(prim->name(), kPrimScalarUsub->name());
 }
 
@@ -172,7 +173,7 @@ TEST_F(TestOps, HasTypeTest) {
 
 // Data structures
 TEST_F(TestOps, MakeTupleTest) {
-  auto prim = std::make_shared<Primitive>("make_tuple");
+  auto prim = std::make_shared<Primitive>("MakeTuple");
   ASSERT_EQ(prim->name(), kPrimMakeTuple->name());
 }
 
@@ -187,7 +188,7 @@ TEST_F(TestOps, MakeRecordTest) {
 }
 
 TEST_F(TestOps, TupleGetItemTest) {
-  auto prim = std::make_shared<Primitive>("tuple_getitem");
+  auto prim = std::make_shared<Primitive>(kTupleGetItem);
   ASSERT_EQ(prim->name(), kPrimTupleGetItem->name());
 }
 
@@ -287,11 +288,6 @@ TEST_F(TestOps, TransposeTest) {
   ASSERT_EQ(prim->name(), kPrimTranspose->name());
 }
 
-TEST_F(TestOps, DotTest) {
-  auto prim = std::make_shared<Primitive>("dot");
-  ASSERT_EQ(prim->name(), kPrimDot->name());
-}
-
 TEST_F(TestOps, Im2ColTest) {
   auto prim = std::make_shared<Primitive>("im2col");
   ASSERT_EQ(prim->name(), kPrimIm2Col->name());
@@ -314,12 +310,12 @@ TEST_F(TestOps, Col2ImV1Test) {
 
 // Statements
 TEST_F(TestOps, SwitchTest) {
-  auto prim = std::make_shared<Primitive>("switch");
+  auto prim = std::make_shared<Primitive>("Switch");
   ASSERT_EQ(prim->name(), kPrimSwitch->name());
 }
 
 TEST_F(TestOps, ReturnTest) {
-  auto prim = std::make_shared<Primitive>("return");
+  auto prim = std::make_shared<Primitive>("Return");
   ASSERT_EQ(prim->name(), kPrimReturn->name());
 }
 
@@ -416,25 +412,6 @@ TEST_F(TestOps, Conv2dBackpropFilterTest) {
 TEST_F(TestOps, ReluTest) {
   auto prim = std::make_shared<Primitive>("ReLU");
   ASSERT_EQ(prim->name(), kPrimRelu->name());
-}
-
-TEST_F(TestOps, FusedBatchNormTest) {
-  auto prim = std::make_shared<Primitive>("FusedBatchNorm");
-  ASSERT_EQ(prim->name(), kPrimFusedBatchNorm->name());
-}
-
-TEST_F(TestOps, FusedBatchNormAttrTest) {
-  Primitive prim("FusedBatchNorm");
-  prim.SetAttrs({
-    {"epsilon", MakeValue(0.001f)},
-    {"momentum", MakeValue(0.1f)},
-  });
-  ASSERT_EQ(prim.name(), kPrimFusedBatchNorm->name());
-
-  FP32Imm epsilon(0.001f);
-  FP32Imm momentum(0.1f);
-  ASSERT_EQ(*prim.GetAttr("epsilon"), epsilon);
-  ASSERT_EQ(*prim.GetAttr("momentum"), momentum);
 }
 
 TEST_F(TestOps, PoolingTest) {

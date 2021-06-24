@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 from functools import reduce
 import numpy as np
 import mindspore as ms
+from mindspore import nn
 from mindspore.ops import _selected_grad_ops as SG
 from .. import functional as F
 from .. import operations as P
@@ -155,12 +156,38 @@ def bprop_batchmatmul(self):
     return bprop
 
 
-@bprop_getters.register(P.TensorAdd)
-def get_bprop_tensor_add(self):
-    """Grad definition for `TensorAdd` operation."""
+@bprop_getters.register(P.Add)
+def get_bprop_add(self):
+    """Grad definition for `Add` operation."""
 
     def bprop(x, y, out, dout):
         return binop_grad_common(x, y, dout, dout)
+
+    return bprop
+
+
+@bprop_getters.register(P.TensorAdd)
+def get_bprop_tensor_add(self):
+    """Grad definition for `Add` operation."""
+
+    def bprop(x, y, out, dout):
+        return binop_grad_common(x, y, dout, dout)
+
+    return bprop
+
+
+@bprop_getters.register(P.MatrixInverse)
+def get_bprop_matrix_inverse(self):
+    """Grad definition for `MatrixInverse` operation."""
+    matmul_x1 = nn.MatMul(transpose_x1=True)
+    matmul_x2 = nn.MatMul(transpose_x2=True)
+    neg = P.Neg()
+
+    def bprop(x, out, dout):
+        dx = matmul_x2(dout, out)
+        dx = matmul_x1(out, dx)
+        dx = neg(dx)
+        return (dx,)
 
     return bprop
 
@@ -448,22 +475,11 @@ def get_bprop_rsqrt(self):
 @bprop_getters.register(P.Reciprocal)
 def get_bprop_reciprocal(self):
     """Grad definition for `Reciprocal` operation."""
-    if self.target == "GPU":
-        neg = P.Neg()
-        mul = P.Mul()
-        square = P.Square()
-        reciprocal = P.Reciprocal()
+    reciprocal_grad = G.ReciprocalGrad()
 
-        def bprop(x, out, dout):
-            g = neg(reciprocal(square(x)))
-            dx = mul(dout, g)
-            return (dx,)
-    else:
-        reciprocal_grad = G.ReciprocalGrad()
-
-        def bprop(x, out, dout):
-            dx = reciprocal_grad(out, dout)
-            return (dx,)
+    def bprop(x, out, dout):
+        dx = reciprocal_grad(out, dout)
+        return (dx,)
 
     return bprop
 
@@ -774,6 +790,16 @@ def get_bprop_reduce_mean(self):
         div_shape = F.shape_mul(shape_op(x)) / F.shape_mul(shape_op(out))
         dx = div_op(grad, cast(F.scalar_to_array(div_shape), dtype(grad)))
         return dx, zeros_like(axis)
+
+    return bprop
+
+
+@bprop_getters.register(P.IsFinite)
+def get_bprop_isfinite(self):
+    """Grad definition for `IsFinite` operation."""
+
+    def bprop(x, out, dout):
+        return (zeros_like(x),)
 
     return bprop
 
@@ -1273,5 +1299,17 @@ def get_bprop_lin_space(self):
 
     def bprop(start, stop, num, out, dout):
         return zeros_like(start), zeros_like(stop), zeros_like(num)
+
+    return bprop
+
+
+@bprop_getters.register(P.IndexAdd)
+def get_bprop_index_add(self):
+    """Generate bprop for IndexAdd"""
+    gather = P.Gather()
+    _axis = self.axis
+
+    def bprop(input_x, indices, input_y, out, dout):
+        return dout, zeros_like(indices), gather(dout, indices, _axis)
 
     return bprop

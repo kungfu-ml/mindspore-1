@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,12 +18,23 @@ import numpy as np
 import mindspore.dataset as ds
 import mindspore.dataset.text as text
 import mindspore.common.dtype as mstype
+from mindspore import log as logger
 
 # this file contains "home is behind the world head" each word is 1 line
 DATA_FILE = "../data/dataset/testVocab/words.txt"
 VOCAB_FILE = "../data/dataset/testVocab/vocab_list.txt"
 SIMPLE_VOCAB_FILE = "../data/dataset/testVocab/simple_vocab_list.txt"
 
+
+def test_lookup_callable():
+    """
+    Test lookup is callable
+    """
+    logger.info("test_lookup_callable")
+    vocab = text.Vocab.from_list(['深', '圳', '欢', '迎', '您'])
+    lookup = text.Lookup(vocab)
+    word = "迎"
+    assert lookup(word) == 3
 
 def test_from_list_tutorial():
     vocab = text.Vocab.from_list("home IS behind the world ahead !".split(" "), ["<pad>", "<unk>"], True)
@@ -108,6 +119,31 @@ def test_from_list():
     assert "is not of type" in test_config("w1", ["w1", "w2"], ["s1"], True, 123)
 
 
+def test_from_list_lookup_empty_string():
+    # "" is a valid word in vocab, which can be looked up by LookupOp
+    vocab = text.Vocab.from_list("home IS behind the world ahead !".split(" "), ["<pad>", ""], True)
+    lookup = text.Lookup(vocab, "")
+    data = ds.TextFileDataset(DATA_FILE, shuffle=False)
+    data = data.map(operations=lookup, input_columns=["text"])
+    ind = 0
+    res = [2, 1, 4, 5, 6, 7]
+    for d in data.create_dict_iterator(num_epochs=1, output_numpy=True):
+        assert d["text"] == res[ind], ind
+        ind += 1
+
+    # unknown_token of LookUp is None, it will convert to std::nullopt in C++,
+    # so it has nothing to do with "" in vocab and C++ will skip looking up unknown_token
+    vocab = text.Vocab.from_list("home IS behind the world ahead !".split(" "), ["<pad>", ""], True)
+    lookup = text.Lookup(vocab)
+    data = ds.TextFileDataset(DATA_FILE, shuffle=False)
+    data = data.map(operations=lookup, input_columns=["text"])
+    try:
+        for _ in data.create_dict_iterator(num_epochs=1, output_numpy=True):
+            pass
+    except RuntimeError as e:
+        assert "token: \"is\" doesn't exist in vocab and no unknown token is specified" in str(e)
+
+
 def test_from_file():
     def gen(texts):
         for word in texts.split(" "):
@@ -166,10 +202,12 @@ def test_lookup_cast_type():
     assert test_config("unk") == np.dtype("int32")
     # test exception, data_type isn't the correct type
     assert "tldr is not of type (<class 'mindspore._c_expression.typing.Type'>,)" in test_config("unk", "tldr")
-    assert "Lookup doesn't support string to string lookup" in test_config("w1", mstype.string)
+    assert "Lookup does not support a string to string mapping, data_type can only be numeric." in \
+           test_config("w1", mstype.string)
 
 
 if __name__ == '__main__':
+    test_lookup_callable()
     test_from_dict_exception()
     test_from_list_tutorial()
     test_from_file_tutorial()

@@ -29,7 +29,7 @@ using mindspore::kernel::KERNEL_ARCH::kGPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_SoftMax;
+using mindspore::schema::PrimitiveType_Softmax;
 
 namespace mindspore::kernel {
 
@@ -47,14 +47,11 @@ int SoftmaxOpenCLKernel::CheckSpecs() {
     MS_LOG(ERROR) << "in size: " << in_tensors_.size() << ", out size: " << out_tensors_.size();
     return RET_ERROR;
   }
-  axis_ = parameter_->axis_;
+  SoftmaxParameter *parameter = reinterpret_cast<SoftmaxParameter *>(op_parameter_);
+  axis_ = parameter->axis_;
   auto in_shape = in_tensors_[0]->shape();
   if (in_shape.size() > 4) {
-    MS_LOG(ERROR) << "Init `Softmax` kernel failed: Unsupported shape size: " << in_shape.size();
-    return RET_ERROR;
-  }
-  if (in_shape[0] > 1) {
-    MS_LOG(ERROR) << "Init `Softmax` kernel failed: Unsupported multi-batch.";
+    MS_LOG(ERROR) << "Init Softmax kernel failed: Unsupported shape size: " << in_shape.size();
     return RET_ERROR;
   }
   if (axis_ < 0) {
@@ -62,18 +59,18 @@ int SoftmaxOpenCLKernel::CheckSpecs() {
   }
   axis_ += 4 - in_shape.size();
   if (axis_ != 1 && axis_ != 2 && axis_ != 3) {
-    MS_LOG(ERROR) << "Init `Softmax` kernel failed: softmax axis should be H W or C";
+    MS_LOG(ERROR) << "Init Softmax kernel failed: softmax axis should be H W or C";
     return RET_ERROR;
   }
   return RET_OK;
 }
 
 int SoftmaxOpenCLKernel::Prepare() {
-  std::string kernel_name = "SoftMax";
+  std::string kernel_name = "Softmax";
 
-  out_shape = GpuTensorInfo(out_tensors_[0]);
+  out_shape_ = GpuTensorInfo(out_tensors_[0]);
   std::string source = softmax_source;
-  if (out_shape.H == 1 && out_shape.W == 1 && axis_ == 3) {
+  if (out_shape_.H == 1 && out_shape_.W == 1 && axis_ == 3) {
     // support 4d tensor
     onexone_flag_ = true;
     kernel_name += "1x1";
@@ -85,9 +82,15 @@ int SoftmaxOpenCLKernel::Prepare() {
 #ifdef PROGRAM_WITH_IL
   kernel_ = ocl_runtime->GetKernelFromBinary(kernel_name);
 #else
-  std::string program_name = "SoftMax";
+  std::string program_name = "Softmax";
   ocl_runtime_->LoadSource(program_name, source);
-  ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name);
+  std::vector<std::string> ext_build_opt;
+  if (out_tensors_[0]->data_type() == kNumberTypeFloat32) {
+    ext_build_opt.push_back("-DOUT_FLT4=convert_float4 -DWRITE_IMAGEOUT=write_imagef");
+  } else {
+    ext_build_opt.push_back("-DOUT_FLT4=convert_half4 -DWRITE_IMAGEOUT=write_imageh");
+  }
+  ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name, ext_build_opt);
 #endif
   SetConstArgs();
   SetGlobalLocal();
@@ -97,24 +100,24 @@ int SoftmaxOpenCLKernel::Prepare() {
 
 void SoftmaxOpenCLKernel::SetGlobalLocal() {
   if (onexone_flag_) {
-    local_size_ = {32};
-    global_size_ = {32};
+    local_size_ = {32, 1};
+    global_size_ = {32, out_shape_.N};
   } else {
     size_t global_x, global_y;
     if (axis_ == 1) {
-      global_x = out_shape.Slice;
-      global_y = out_shape.W;
+      global_x = out_shape_.Slice;
+      global_y = out_shape_.W;
     } else if (axis_ == 2) {
-      global_x = out_shape.Slice;
-      global_y = out_shape.H;
+      global_x = out_shape_.Slice;
+      global_y = out_shape_.H;
     } else if (axis_ == 3) {
-      global_x = out_shape.W;
-      global_y = out_shape.H;
+      global_x = out_shape_.W;
+      global_y = out_shape_.H;
     } else {
       global_x = 1;
       global_y = 1;
     }
-    global_size_ = {global_x, global_y};
+    global_size_ = {global_x, global_y, out_shape_.N};
     local_size_ = {};
   }
   AlignGlobalLocal(global_size_, local_size_);
@@ -129,12 +132,12 @@ int SoftmaxOpenCLKernel::Tune() {
 
 void SoftmaxOpenCLKernel::SetConstArgs() {
   int arg_idx = 2;
-  int channel = out_shape.C;
-  int c4 = out_shape.Slice;
+  int channel = out_shape_.C;
+  int c4 = out_shape_.Slice;
   auto mask_ = GetMaskForLastChannel(channel);
   cl_float4 mask = {mask_[0], mask_[1], mask_[2], mask_[3]};
   ocl_runtime_->SetKernelArg(kernel_, arg_idx++, mask);
-  cl_int4 input_shape = {static_cast<int>(out_shape.N), static_cast<int>(out_shape.H), static_cast<int>(out_shape.W),
+  cl_int4 input_shape = {static_cast<int>(out_shape_.N), static_cast<int>(out_shape_.H), static_cast<int>(out_shape_.W),
                          c4};
   ocl_runtime_->SetKernelArg(kernel_, arg_idx, input_shape);
 }
@@ -148,6 +151,6 @@ int SoftmaxOpenCLKernel::Run() {
   return lite::RET_OK;
 }
 
-REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_SoftMax, OpenCLKernelCreator<SoftmaxOpenCLKernel>)
-REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_SoftMax, OpenCLKernelCreator<SoftmaxOpenCLKernel>)
+REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_Softmax, OpenCLKernelCreator<SoftmaxOpenCLKernel>)
+REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_Softmax, OpenCLKernelCreator<SoftmaxOpenCLKernel>)
 }  // namespace mindspore::kernel

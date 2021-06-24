@@ -15,13 +15,13 @@
 """
 BGCF training script.
 """
-import os
 import time
 
 from mindspore import Tensor
 import mindspore.context as context
 from mindspore.common import dtype as mstype
 from mindspore.train.serialization import save_checkpoint
+from mindspore.common import set_seed
 
 from src.bgcf import BGCF
 from src.config import parser_args
@@ -29,6 +29,7 @@ from src.utils import convert_item_id
 from src.callback import TrainBGCF
 from src.dataset import load_graph, create_dataset
 
+set_seed(1)
 
 def train():
     """Train"""
@@ -102,12 +103,15 @@ def train():
 
 
 if __name__ == "__main__":
+    parser = parser_args()
+
     context.set_context(mode=context.GRAPH_MODE,
-                        device_target="Ascend",
+                        device_target=parser.device_target,
                         save_graphs=False)
 
-    parser = parser_args()
-    os.environ['DEVICE_ID'] = parser.device
+    if parser.device_target == "Ascend":
+        context.set_context(device_id=int(parser.device))
+
     train_graph, _, sampled_graph_list = load_graph(parser.datapath)
     train_ds = create_dataset(train_graph, sampled_graph_list, parser.workers, batch_size=parser.batch_pairs,
                               num_samples=parser.raw_neighs, num_bgcn_neigh=parser.gnew_neighs, num_neg=parser.num_neg)

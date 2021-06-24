@@ -20,8 +20,8 @@
 #include <set>
 #include <vector>
 #include "src/runtime/kernel/opencl/opencl_kernel.h"
-#include "src/runtime/opencl/opencl_allocator.h"
-#include "src/runtime/opencl/opencl_executor.h"
+#include "src/runtime/gpu/opencl/opencl_allocator.h"
+#include "src/runtime/gpu/opencl/opencl_executor.h"
 #include "src/sub_graph_kernel.h"
 
 namespace mindspore::kernel {
@@ -36,6 +36,9 @@ class OpenCLSubGraph : public SubGraphKernel {
     subgraph_type_ = kGpuSubGraph;
     this->name_ = "GpuSubGraph";
     nodes_set_.insert(nodes.begin(), nodes.end());
+    all_kernels_infer_done_ = std::all_of(nodes_.begin(), nodes_.end(), [](const kernel::LiteKernel *kernel) {
+      return kernel && kernel->op_parameter() && kernel->op_parameter()->infer_flag_;
+    });
   }
   ~OpenCLSubGraph() override;
 
@@ -44,12 +47,14 @@ class OpenCLSubGraph : public SubGraphKernel {
   int Prepare() override;
   int Init() override;
   int ReSize() override;
+  int ReSize(bool interrupt);
   int Run() override;
-  int Run(const KernelCallBack &before, const KernelCallBack &after) override { return this->Run(); };
+  int Run(const KernelCallBack &before, const KernelCallBack &after) override;
+  int InsertOpsPass();
 
  private:
   void UnInit();
-  void UpdateTensorDataType();
+  int UpdateTensorDataTypePass();
   void ReplaceOutTensorAndKernelToNull(const std::vector<lite::Tensor *> &in_tensors,
                                        const std::vector<std::vector<kernel::LiteKernel *>> &in_kernels,
                                        lite::opencl::MemType mem_type);
@@ -64,7 +69,10 @@ class OpenCLSubGraph : public SubGraphKernel {
   void GetKernelFromToTensor(const std::vector<lite::Tensor *> &in_tensors,
                              const std::vector<kernel::LiteKernel *> &in_kernels,
                              std::vector<std::vector<kernel::LiteKernel *>> *out_kernels, bool is_from);
-  void Fusion();
+  int FusionPass();
+
+ public:
+  using PassFunc = int (OpenCLSubGraph::*)(void);
 
  private:
   lite::opencl::OpenCLAllocator *allocator_{nullptr};
@@ -77,6 +85,7 @@ class OpenCLSubGraph : public SubGraphKernel {
   std::set<LiteKernel *> nodes_set_;
   lite::opencl::OpenCLRuntimeWrapper ocl_runtime_wrap_;
   lite::opencl::OpenCLRuntime *ocl_runtime_{nullptr};
+  bool all_kernels_infer_done_ = false;
 };
 }  // namespace mindspore::kernel
 

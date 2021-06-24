@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include "src/runtime/kernel/npu/unsqueeze_npu.h"
 #include <memory>
 #include "src/kernel_registry.h"
-#include "src/runtime/agent/npu/npu_converter_utils.h"
 using mindspore::kernel::KERNEL_ARCH::kNPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::schema::PrimitiveType_Unsqueeze;
@@ -44,11 +43,11 @@ int UnsqueezeNPUKernel::SetNPUInputs(const std::vector<lite::Tensor *> &inputs,
   ge::TensorDesc desc(ge::Shape({size}), ge::FORMAT_NCHW, ge::DT_INT32);
   ge::TensorPtr tensor = std::make_shared<hiai::Tensor>(desc);
   tensor->SetData(reinterpret_cast<uint8_t *>(axis_.data()), size * sizeof(int));
-  auto axis = new hiai::op::Const(name_ + "_axis");
-  axis->set_attr_value(tensor);
+  axis_const_ = new hiai::op::Const(name_ + "_axis");
+  axis_const_->set_attr_value(tensor);
 
   op_->set_input_x(*npu_inputs[0]);
-  op_->set_input_axis(*axis);
+  op_->set_input_axis(*axis_const_);
 
   return RET_OK;
 }
@@ -59,6 +58,10 @@ UnsqueezeNPUKernel::~UnsqueezeNPUKernel() {
   if (op_ != nullptr) {
     delete op_;
     op_ = nullptr;
+  }
+  if (axis_const_ != nullptr) {
+    delete axis_const_;
+    axis_const_ = nullptr;
   }
 }
 

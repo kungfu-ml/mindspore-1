@@ -16,13 +16,14 @@
 #ifndef MINDSPORE_CCSRC_MINDDATA_DATASET_CORE_CONFIG_MANAGER_H_
 #define MINDSPORE_CCSRC_MINDDATA_DATASET_CORE_CONFIG_MANAGER_H_
 
+#include <atomic>
 #include <ostream>
 #include <sstream>
 #include <string>
 
 #include <nlohmann/json.hpp>
 
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/util/path.h"
 #include "minddata/dataset/util/status.h"
 
@@ -86,6 +87,10 @@ class ConfigManager {
   int32_t op_connector_size() const { return op_connector_size_; }
 
   // getter function
+  // @return The sending batches that will send to device
+  int64_t sending_batches() const { return sending_batches_; }
+
+  // getter function
   // @return The internal worker-to-master connector queue size
   int32_t worker_connector_size() const { return worker_connector_size_; }
 
@@ -128,6 +133,10 @@ class ConfigManager {
   void set_op_connector_size(int32_t connector_size);
 
   // setter function
+  // @param sending_batches - The setting to apply to the config
+  void set_sending_batches(int64_t sending_batches);
+
+  // setter function
   // @param cache_host - The hostname of cache server
   void set_cache_host(std::string cache_host);
 
@@ -142,6 +151,16 @@ class ConfigManager {
   /// setter function
   /// \param prefetch_size
   void set_prefetch_size(int32_t prefetch_size);
+
+  /// setter function
+  /// \param numa_switch
+  void set_numa_enable(bool numa_enable);
+
+  /// getter function
+  /// Now we want to separate the numa link to _c_dataengine in the CMakeLists,
+  /// so we want user to choose whether to open numa switch.
+  /// @return Get the current numa switch state.
+  bool numa_enable() const { return numa_enable_; }
 
   // getter function
   // This rank_id is for numa and device_queue, one process work with only one rank_id
@@ -167,6 +186,22 @@ class ConfigManager {
   // getter function
   // @return The interval of monitor sampling
   int32_t monitor_sampling_interval() const { return monitor_sampling_interval_; }
+
+  // setter function
+  // @param stop_profiler - The setting to apply to the config
+  void stop_dataset_profiler(bool stop_profiler);
+
+  // getter function
+  // @return The status of stop profiler
+  bool stop_profiler_status() const { return stop_profiler_; }
+
+  // setter function
+  // @param file_ready - The setting to apply to the config
+  void set_profiler_file_status(bool file_ready);
+
+  // getter function
+  // @return The status of profiler file, whether generated
+  bool get_profiler_file_status() const { return file_ready_; }
 
   // setter function
   // @param auto_num_workers - whether assign threads to each op automatically
@@ -207,16 +242,20 @@ class ConfigManager {
   int32_t num_parallel_workers_;
   int32_t worker_connector_size_;
   int32_t op_connector_size_;
+  int64_t sending_batches_;
   // This rank_id is for numa and device_queue, one process work with only one rank_id,
   // for standalone scenario, this rank_id may come from env 'CUDA_VISIBLE_DEVICES',
   // but for distribute scenario, this rank_id come from _get_global_rank() in python
   int32_t rank_id_;
   uint32_t seed_;
   uint32_t monitor_sampling_interval_;
+  std::atomic_bool stop_profiler_;
+  std::atomic_bool file_ready_;
   uint32_t callback_timout_;
   std::string cache_host_;
   int32_t cache_port_;
   int32_t num_connections_;
+  bool numa_enable_;
   int32_t prefetch_size_;
   bool auto_num_workers_;
   const int32_t num_cpu_threads_;

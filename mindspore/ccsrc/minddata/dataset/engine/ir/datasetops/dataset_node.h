@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,13 +24,28 @@
 #include <utility>
 #include <vector>
 
-#include "minddata/dataset/include/datasets.h"
+#include "minddata/dataset/core/config_manager.h"
 #include "minddata/dataset/engine/consumers/tree_consumer.h"
+#include "minddata/dataset/engine/data_schema.h"
+#include "minddata/dataset/engine/datasetops/dataset_op.h"
+#include "minddata/dataset/engine/datasetops/filter_op.h"
+#include "minddata/dataset/engine/datasetops/map_op/map_op.h"
+#include "minddata/dataset/engine/datasetops/project_op.h"
+#include "minddata/dataset/engine/datasetops/repeat_op.h"
+#include "minddata/dataset/engine/datasetops/shuffle_op.h"
+#include "minddata/dataset/engine/datasetops/skip_op.h"
+#include "minddata/dataset/engine/datasetops/take_op.h"
+#include "minddata/dataset/engine/ir/cache/dataset_cache.h"
+#include "minddata/dataset/engine/ir/datasetops/source/samplers/samplers_ir.h"
+#include "minddata/dataset/include/datasets.h"
+#include "minddata/dataset/util/path.h"
+#include "minddata/dataset/util/status.h"
 
 namespace mindspore {
 namespace dataset {
 
 class Dataset;
+class DatasetCache;
 class SamplerObj;
 class IRNodePass;
 class DatasetSizeGetter;
@@ -40,6 +55,9 @@ constexpr char kBatchNode[] = "Batch";
 constexpr char kBucketBatchByLengthNode[] = "BucketBatchByLength";
 constexpr char kBuildSentencePieceVocabNode[] = "BuildSentencePieceVocab";
 constexpr char kBuildVocabNode[] = "BuildVocab";
+constexpr char kCacheLookupNode[] = "CacheLookup";
+constexpr char kCacheMergeNode[] = "CacheMerge";
+constexpr char kCacheNode[] = "Cache";
 constexpr char kConcatNode[] = "Concat";
 constexpr char kEpochCtrlNode[] = "EpochCtrl";
 constexpr char kFilterNode[] = "Filter";
@@ -108,6 +126,9 @@ std::shared_ptr<SamplerObj> SelectSampler(int64_t num_samples, bool shuffle, int
 
 // The base class of all IR nodes
 class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
+  // Allow DeepCopyPass to access internal members
+  friend class DeepCopyPass;
+
  public:
   /// \brief Constructor
   DatasetNode();
@@ -127,7 +148,7 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   /// \param out - The output stream to write output to
   virtual void Print(std::ostream &out) const = 0;
 
-  /// \brief Pure virtual function to make a new copy of the node
+  /// \brief Pure virtual function to clone a new copy of the node
   /// \return The new copy of the node
   virtual std::shared_ptr<DatasetNode> Copy() = 0;
 
@@ -156,7 +177,7 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
 
   /// \brief Pure virtual function for derived class to get the shard id of specific node
   /// \return Status Status::OK() if get shard id successfully
-  virtual Status GetShardId(int32_t *shard_id);
+  virtual Status GetShardId(int32_t *const shard_id);
 
   /// \brief Gets the dataset size
   /// \param[in] size_getter Shared pointer to DatasetSizeGetter
@@ -170,30 +191,19 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   /// \return Child nodes
   const std::vector<std::shared_ptr<DatasetNode>> Children() const { return children_; }
 
-  /// \brief Getter function for the parent node
-  /// \return The parent node (of a node from a cloned IR tree)
-  DatasetNode *Parent() const { return parent_; }
-
-  /// \brief Establish a parent-child relationship between this node and the input node.
-  ///    Used when building the IR tree.
-  void AddChild(std::shared_ptr<DatasetNode> child);
-
   /// \brief Establish a parent-child relationship between this node and the input node.
   ///    Used during the cloning of the user-input IR tree (temporary use)
-  void AppendChild(std::shared_ptr<DatasetNode> child);
+  Status AppendChild(std::shared_ptr<DatasetNode> child);
 
-  /// \brief Establish the child-parent relationship between this node and the input node (future use)
+  /// \brief Insert the input <node> above this node
   Status InsertAbove(std::shared_ptr<DatasetNode> node);
 
-  /// \brief Insert the input node below this node. This node's children becomes the children of the inserted node.
-  Status InsertBelow(std::shared_ptr<DatasetNode> node);
-
   /// \brief Add the input node as the next sibling (future use)
-  Status InsertAfter(std::shared_ptr<DatasetNode> node);
+  Status InsertChildAt(int32_t pos, std::shared_ptr<DatasetNode> node);
 
   /// \brief detach this node from its parent, add its child (if any) to its parent
   /// \return error code, return error if node has more than 1 children
-  Status Remove();
+  Status Drop();
 
   /// \brief Check if this node has cache
   /// \return True if the data of this node will be cached
@@ -203,13 +213,25 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   /// \return True if this is a leaf node.
   const bool IsLeaf() const { return children_.empty(); }
 
+  /// \brief Check if this node is a unary operator node.
+  /// \return True if this node is semantically a unary operator node
+  const bool IsUnaryOperator() const { return (mappable_ == kNotADataSource && !nary_op_); }
+
+  /// \brief Check if this node is a n-ary operator node.
+  /// \return True if this node is semantically a n-ary operator node
+  const bool IsNaryOperator() const { return (mappable_ == kNotADataSource && nary_op_); }
+
   /// \brief Check if this node is a mappable dataset. Only applicable to leaf nodes
   /// \return True if this node is a mappable dataset
-  const bool IsMappable() const { return (mappable_ == kMappableSource); }
+  const bool IsMappableDataSource() const { return (mappable_ == kMappableSource); }
 
   /// \brief Check if this node is a non-mappable dataset. Only applicable to leaf nodes
   /// \return True if this node is a non-mappable dataset
-  const bool IsNonMappable() const { return (mappable_ == kNonMappableSource); }
+  const bool IsNonMappableDataSource() const { return (mappable_ == kNonMappableSource); }
+
+  /// \brief Check if this node is a data source node.
+  /// \return True if this node is a data source node
+  const bool IsDataSource() const { return (mappable_ == kMappableSource || mappable_ == kNonMappableSource); }
 
   /// \brief Check if this node is not a data source node.
   /// \return True if this node is not a data source node
@@ -219,16 +241,30 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   /// \return True if a cache-enabled operator is an ancestor of this node
   const bool IsDescendantOfCache() const { return descendant_of_cache_; }
 
+  /// \brief Check if this node is an orphan node
+  /// \return True if this node isn't nullptr nor does it have any children and a parent
+  static bool IsOrphanNode(std::shared_ptr<DatasetNode> node) {
+    return node != nullptr && node->parent_ == nullptr && node->Children().empty();
+  }
+
   /// \brief Mark to indicate this node is a descendant of an operator with cache. Currently used in leaf nodes
   void HasCacheAbove() { descendant_of_cache_ = true; }
 
   /// \brief Getter of the number of workers
   int32_t num_workers() { return num_workers_; }
 
+  /// \brief Getter of dataset cache
+  std::shared_ptr<DatasetCache> GetDatasetCache() { return cache_; }
+
   /// \brief Setter function for runtime number of workers
   /// \param[in] num_workers The number of threads in this operator
   /// \return Shared pointer to the original object
   std::shared_ptr<DatasetNode> SetNumWorkers(int32_t num_workers);
+
+  /// \brief Setter function for DatasetCache
+  /// \param[in] cache Shared pointer to DatasetCache
+  /// \return Shared pointer to the original object
+  std::shared_ptr<DatasetNode> SetDatasetCache(const std::shared_ptr<DatasetCache> &cache);
 
   /// \brief A helper templated function for casting "this" pointer to shared_ptr<derived>
   ///     Similar to shared_from_this, except this one will give you the derived class as shared_ptr
@@ -246,7 +282,7 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  virtual Status Accept(IRNodePass *p, bool *modified);
+  virtual Status Accept(IRNodePass *const p, bool *const modified);
 
   /// \brief Base method for IRNodePass visit on the way back up the tree after its descendants are visited.
   /// \notes Subclass needs to override this if it requires special node visit access.
@@ -254,9 +290,32 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  virtual Status AcceptAfter(IRNodePass *p, bool *modified);
+  virtual Status AcceptAfter(IRNodePass *const p, bool *const modified);
 
   virtual bool IsSizeDefined() { return true; }
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  virtual Status to_json(nlohmann::json *out_json);
+
+  /// \brief Setter function, set the number of total repeats for the operator
+  void SetTotalRepeats(int32_t total_repeats) { total_repeats_ = total_repeats; }
+
+  /// \brief Setter function, set the number of epochs for the operator
+  void SetNumEpochs(int32_t num_epochs) { num_epochs_ = num_epochs; }
+
+  /// \brief Getter function
+  /// \return The number of required repeats for the operator
+  int32_t GetTotalRepeats() const { return total_repeats_; }
+
+  /// \brief Getter function
+  /// \return The number of epochs for the operator
+  int32_t GetNumEpochs() const { return num_epochs_; }
+
+  /// \brief Getter function
+  /// \return The number of repeats per epoch for the operator
+  int32_t GetNumRepeatsPerEpoch() const { return total_repeats_ / num_epochs_; }
 
  protected:
   std::vector<std::shared_ptr<DatasetNode>> children_;
@@ -267,11 +326,16 @@ class DatasetNode : public std::enable_shared_from_this<DatasetNode> {
   int32_t rows_per_buffer_;
   int32_t connector_que_size_;
   int32_t worker_connector_size_;
+  int32_t total_repeats_;  // Number of times required to run this operator
+  int32_t num_epochs_;     // Number of epochs
+  // Establish a parent-child relationship between this node and the input node.
+  // Used only in the constructor of the class and its derived classes.
+  void AddChild(std::shared_ptr<DatasetNode> child);
   std::string PrintColumns(const std::vector<std::string> &columns) const;
-  Status AddCacheOp(std::vector<std::shared_ptr<DatasetOp>> *node_ops);
   void PrintNode(std::ostream &out, int *level) const;
   enum DataSource { kNotADataSource = 0, kNonMappableSource = 1, kMappableSource = 2 };
   enum DataSource mappable_;
+  bool nary_op_;  // an indicator of whether the current node supports multiple children, true for concat/zip node
   bool descendant_of_cache_;
 };
 
@@ -289,7 +353,7 @@ class MappableSourceNode : public DatasetNode {
     descendant_of_cache_ = false;
   }
 
-  Status Accept(IRNodePass *p, bool *modified) override;
+  Status Accept(IRNodePass *const p, bool *const modified) override;
 
   /// \brief Destructor
   ~MappableSourceNode() = default;
@@ -297,6 +361,13 @@ class MappableSourceNode : public DatasetNode {
   /// \brief Node name getter
   /// \return Name of the current node
   virtual std::string Name() const = 0;
+
+  /// \brief Sampler getter
+  /// \return SamplerObj of the current node
+  virtual std::shared_ptr<SamplerObj> Sampler() = 0;
+
+  /// \brief Sampler setter
+  virtual void SetSampler(std::shared_ptr<SamplerObj> sampler) = 0;
 };
 
 // NonMappableSourceNode represents the leaf nodes that can not be randomly accessed.
@@ -313,7 +384,7 @@ class NonMappableSourceNode : public DatasetNode {
     descendant_of_cache_ = false;
   }
 
-  Status Accept(IRNodePass *p, bool *modified) override;
+  Status Accept(IRNodePass *const p, bool *const modified) override;
 
   /// \brief Destructor
   ~NonMappableSourceNode() = default;
@@ -321,6 +392,20 @@ class NonMappableSourceNode : public DatasetNode {
   /// \brief Node name getter
   /// \return Name of the current node
   virtual std::string Name() const = 0;
+
+  /// \brief By default non-mappable dataset does not support sampling. However, if a cache operator
+  ///     is injected at some other place higher in the tree, that cache can inherit this sampler
+  ///     from the leaf, providing sampling support from the caching layer.
+  ///     This function sets up the sampler for a leaf node that does not use sampling.
+  /// \param[in] sampler The sampler to setup
+  /// \return Status of the function
+  virtual Status SetupSamplerForCache(std::shared_ptr<SamplerObj> *sampler) = 0;
+
+  /// \brief If a cache has been added into the ascendant tree over this non-mappable source node, then the cache will
+  ///     be executing a sampler for fetching the data. As such, any options in the source node need to be reset to its
+  ///     defaults so that this source node will produce the full set of data into the cache.
+  /// \return Status of the function
+  virtual Status MakeSimpleProducer() = 0;
 };
 }  // namespace dataset
 }  // namespace mindspore

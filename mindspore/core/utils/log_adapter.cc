@@ -23,37 +23,7 @@
 // namespace to support utils module definition
 namespace mindspore {
 #ifdef USE_GLOG
-static std::string GetTime() {
-#define BUFLEN 80
-  static char buf[BUFLEN];
-#if defined(_WIN32) || defined(_WIN64)
-  time_t time_seconds = time(0);
-  struct tm now_time;
-  localtime_s(&now_time, &time_seconds);
-  sprintf_s(buf, BUFLEN, "%d-%d-%d %d:%d:%d", now_time.tm_year + 1900, now_time.tm_mon + 1, now_time.tm_mday,
-            now_time.tm_hour, now_time.tm_min, now_time.tm_sec);
-#else
-  struct timeval cur_time;
-  (void)gettimeofday(&cur_time, nullptr);
-
-  struct tm now;
-  (void)localtime_r(&cur_time.tv_sec, &now);
-  (void)strftime(buf, BUFLEN, "%Y-%m-%d-%H:%M:%S", &now);  // format date and time
-  // set micro-second
-  buf[27] = '\0';
-  int idx = 26;
-  auto num = cur_time.tv_usec;
-  for (int i = 5; i >= 0; i--) {
-    buf[idx--] = static_cast<char>(num % 10 + '0');
-    num /= 10;
-    if (i % 3 == 0) {
-      buf[idx--] = '.';
-    }
-  }
-#endif
-  return std::string(buf);
-}
-
+#define google mindspore_private
 static std::string GetProcName() {
 #if defined(__APPLE__) || defined(__FreeBSD__)
   const char *appname = getprogname();
@@ -102,6 +72,22 @@ static int GetGlogLevel(MsLogLevel level) {
       return google::GLOG_ERROR;
   }
 }
+
+// get threshold level
+static int GetThresholdLevel(std::string threshold) {
+  if (threshold.empty()) {
+    return google::GLOG_WARNING;
+  } else if (threshold == std::to_string(DEBUG) || threshold == std::to_string(INFO)) {
+    return google::GLOG_INFO;
+  } else if (threshold == std::to_string(WARNING)) {
+    return google::GLOG_WARNING;
+  } else if (threshold == std::to_string(ERROR)) {
+    return google::GLOG_ERROR;
+  } else {
+    return google::GLOG_WARNING;
+  }
+}
+#undef google
 #else
 
 #undef Dlog
@@ -126,74 +112,47 @@ static int GetSlogLevel(MsLogLevel level) {
 }
 #endif
 
-static std::string ExceptionTypeToString(ExceptionType type) {
-#define _TO_STRING(x) #x
-  // clang-format off
-  static const char *const type_names[] = {
-      _TO_STRING(NoExceptionType),
-      _TO_STRING(UnknownError),
-      _TO_STRING(ArgumentError),
-      _TO_STRING(NotSupportError),
-      _TO_STRING(NotExistsError),
-      _TO_STRING(AlreadyExistsError),
-      _TO_STRING(UnavailableError),
-      _TO_STRING(DeviceProcessError),
-      _TO_STRING(AbortedError),
-      _TO_STRING(TimeOutError),
-      _TO_STRING(ResourceUnavailable),
-      _TO_STRING(NoPermissionError),
-      _TO_STRING(IndexError),
-      _TO_STRING(ValueError),
-      _TO_STRING(TypeError),
-      _TO_STRING(KeyError),
-      _TO_STRING(AttributeError),
-  };
-  // clang-format on
-#undef _TO_STRING
-  if (type < UnknownError || type > AttributeError) {
-    type = UnknownError;
-  }
-  return std::string(type_names[type]);
-}
-
 static const char *GetSubModuleName(SubModuleId module_id) {
   static const char *sub_module_names[NUM_SUBMODUES] = {
-    "UNKNOWN",    // SM_UNKNOWN
-    "CORE",       // SM_CORE
-    "ANALYZER",   // SM_ANALYZER
-    "COMMON",     // SM_COMMON
-    "DEBUG",      // SM_DEBUG
-    "DEVICE",     // SM_DEVICE
-    "GE_ADPT",    // SM_GE_ADPT
-    "IR",         // SM_IR
-    "KERNEL",     // SM_KERNEL
-    "MD",         // SM_MD
-    "ME",         // SM_ME
-    "EXPRESS",    // SM_EXPRESS
-    "OPTIMIZER",  // SM_OPTIMIZER
-    "PARALLEL",   // SM_PARALLEL
-    "PARSER",     // SM_PARSER
-    "PIPELINE",   // SM_PIPELINE
-    "PRE_ACT",    // SM_PRE_ACT
-    "PYNATIVE",   // SM_PYNATIVE
-    "SESSION",    // SM_SESSION
-    "UTILS",      // SM_UTILS
-    "VM",         // SM_VM
-    "PROFILER",   // SM_PROFILER
-    "PS",         // SM_PS
-    "LITE",       // SM_LITE
-    "HCCL_ADPT"   // SM_HCCL_ADPT
+    "UNKNOWN",     // SM_UNKNOWN
+    "CORE",        // SM_CORE
+    "ANALYZER",    // SM_ANALYZER
+    "COMMON",      // SM_COMMON
+    "DEBUG",       // SM_DEBUG
+    "DEVICE",      // SM_DEVICE
+    "GE_ADPT",     // SM_GE_ADPT
+    "IR",          // SM_IR
+    "KERNEL",      // SM_KERNEL
+    "MD",          // SM_MD
+    "ME",          // SM_ME
+    "EXPRESS",     // SM_EXPRESS
+    "OPTIMIZER",   // SM_OPTIMIZER
+    "PARALLEL",    // SM_PARALLEL
+    "PARSER",      // SM_PARSER
+    "PIPELINE",    // SM_PIPELINE
+    "PRE_ACT",     // SM_PRE_ACT
+    "PYNATIVE",    // SM_PYNATIVE
+    "SESSION",     // SM_SESSION
+    "UTILS",       // SM_UTILS
+    "VM",          // SM_VM
+    "PROFILER",    // SM_PROFILER
+    "PS",          // SM_PS
+    "LITE",        // SM_LITE
+    "HCCL_ADPT",   // SM_HCCL_ADPT
+    "MINDQUANTUM"  // SM_MINDQUANTUM
   };
 
   return sub_module_names[module_id % NUM_SUBMODUES];
 }
 void LogWriter::OutputLog(const std::ostringstream &msg) const {
 #ifdef USE_GLOG
+#define google mindspore_private
   auto submodule_name = GetSubModuleName(submodule_);
   google::LogMessage("", 0, GetGlogLevel(log_level_)).stream()
     << "[" << GetLogLevel(log_level_) << "] " << submodule_name << "(" << getpid() << "," << GetProcName()
-    << "):" << GetTime() << " "
+    << "):" << GetTimeString() << " "
     << "[" << location_.file_ << ":" << location_.line_ << "] " << location_.func_ << "] " << msg.str() << std::endl;
+#undef google
 #else
   auto str_msg = msg.str();
   auto slog_module_id = (submodule_ == SM_MD ? MD : ME);
@@ -215,10 +174,6 @@ void LogWriter::operator^(const LogStream &stream) const {
 
   std::ostringstream oss;
   oss << location_.file_ << ":" << location_.line_ << " " << location_.func_ << "] ";
-  if (exception_type_ != NoExceptionType && exception_type_ != IndexError && exception_type_ != TypeError &&
-      exception_type_ != ValueError && exception_type_ != KeyError && exception_type_ != AttributeError) {
-    oss << ExceptionTypeToString(exception_type_) << " ";
-  }
   oss << msg.str();
 
   if (trace_provider_ != nullptr) {
@@ -425,7 +380,7 @@ class LogConfigParser {
 bool ParseLogLevel(const std::string &str_level, MsLogLevel *ptr_level) {
   if (str_level.size() == 1) {
     int ch = str_level.c_str()[0];
-    ch = ch - '0';  // substract ASCII code of '0', which is 48
+    ch = ch - '0';  // subtract ASCII code of '0', which is 48
     if (ch >= DEBUG && ch <= ERROR) {
       if (ptr_level != nullptr) {
         *ptr_level = static_cast<MsLogLevel>(ch);
@@ -444,7 +399,7 @@ static MsLogLevel GetGlobalLogLevel() {
   auto str_level = GetEnv("GLOG_v");
   if (str_level.size() == 1) {
     int ch = str_level.c_str()[0];
-    ch = ch - '0';  // substract ASCII code of '0', which is 48
+    ch = ch - '0';  // subtract ASCII code of '0', which is 48
     if (ch >= DEBUG && ch <= ERROR) {
       log_level = ch;
     }
@@ -513,6 +468,11 @@ void common_log_init(void) {
     FLAGS_logtostderr = true;
     MS_LOG(WARNING) << "`GLOG_log_dir` is not set, output log to screen.";
   }
+
+  // default GLOG_stderrthreshold level to WARNING
+  auto threshold = mindspore::GetEnv("GLOG_stderrthreshold");
+  FLAGS_stderrthreshold = mindspore::GetThresholdLevel(threshold);
+
 #endif
   mindspore::InitSubModulesLogLevel();
 }
@@ -524,6 +484,7 @@ __attribute__((constructor)) void mindspore_log_init(void) {
 void mindspore_log_init(void) {
 #endif
 #ifdef USE_GLOG
+#define google mindspore_private
   static bool is_glog_initialzed = false;
   if (!is_glog_initialzed) {
 #if !defined(_WIN32) && !defined(_WIN64)
@@ -531,6 +492,7 @@ void mindspore_log_init(void) {
 #endif
     is_glog_initialzed = true;
   }
+#undef google
 #endif
   common_log_init();
 }

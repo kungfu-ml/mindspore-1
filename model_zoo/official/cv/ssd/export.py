@@ -19,15 +19,16 @@ import numpy as np
 import mindspore
 from mindspore import context, Tensor
 from mindspore.train.serialization import load_checkpoint, load_param_into_net, export
-from src.ssd import SSD300, ssd_mobilenet_v2, ssd_mobilenet_v1_fpn
+from src.ssd import SSD300, SsdInferWithDecoder, ssd_mobilenet_v2, ssd_mobilenet_v1_fpn, ssd_resnet50_fpn, ssd_vgg16
 from src.config import config
+from src.box_utils import default_boxes
 
 parser = argparse.ArgumentParser(description='SSD export')
 parser.add_argument("--device_id", type=int, default=0, help="Device id")
 parser.add_argument("--batch_size", type=int, default=1, help="batch size")
 parser.add_argument("--ckpt_file", type=str, required=True, help="Checkpoint file path.")
 parser.add_argument("--file_name", type=str, default="ssd", help="output file name.")
-parser.add_argument('--file_format', type=str, choices=["AIR", "ONNX", "MINDIR"], default='AIR', help='file format')
+parser.add_argument('--file_format', type=str, choices=["AIR", "MINDIR"], default='AIR', help='file format')
 parser.add_argument("--device_target", type=str, choices=["Ascend", "GPU", "CPU"], default="Ascend",
                     help="device target")
 args = parser.parse_args()
@@ -39,8 +40,15 @@ if args.device_target == "Ascend":
 if __name__ == '__main__':
     if config.model == "ssd300":
         net = SSD300(ssd_mobilenet_v2(), config, is_training=False)
-    else:
+    elif config.model == "ssd_vgg16":
+        net = ssd_vgg16(config=config)
+    elif config.model == "ssd_mobilenet_v1_fpn":
         net = ssd_mobilenet_v1_fpn(config=config)
+    elif config.model == "ssd_resnet50_fpn":
+        net = ssd_resnet50_fpn(config=config)
+    else:
+        raise ValueError(f'config.model: {config.model} is not supported')
+    net = SsdInferWithDecoder(net, Tensor(default_boxes), config)
 
     param_dict = load_checkpoint(args.ckpt_file)
     net.init_parameters_data()

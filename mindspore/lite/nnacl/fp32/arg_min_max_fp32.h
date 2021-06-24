@@ -16,14 +16,13 @@
 #ifndef MINDSPORE_LITE_NNACL_FP32_ARG_MIN_MAX_H_
 #define MINDSPORE_LITE_NNACL_FP32_ARG_MIN_MAX_H_
 
+#include "nnacl/nnacl_common.h"
 #include "nnacl/arg_min_max_parameter.h"
-
-typedef int (*COMPARE_FUNCTION)(const void *a, const void *b);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-void ArgMinMaxFp32(const float *input, float *output, float *output_value, const int *in_shape,
+void ArgMinMaxFp32(const float *input, void *output, float *output_value, const int *in_shape,
                    const ArgMinMaxParameter *param);
 #ifdef __cplusplus
 }

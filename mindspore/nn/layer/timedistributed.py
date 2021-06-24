@@ -15,9 +15,9 @@
 """Time Distributed."""
 
 from mindspore.ops.primitive import constexpr, Primitive
-from mindspore.ops import Reshape, Transpose, Pack, Unpack
-from mindspore.common.dtype import tensor
+from mindspore.ops import Reshape, Transpose, Stack, Unstack
 from mindspore.common import Tensor
+from mindspore._checkparam import Validator
 from ..cell import Cell
 
 __all__ = ['TimeDistributed']
@@ -41,7 +41,7 @@ def _check_expand_dims_axis(time_axis, ndim):
 def _generate_perm(axis_a, axis_b, length):
     perm = tuple(range(length))
     axis_a, axis_b = (axis_a, axis_b) if axis_a < axis_b else (axis_b, axis_a)
-    return perm[:axis_a] + perm[axis_a + 1: axis_b + 1] + (perm[axis_a],) + perm[axis_b + 1:]
+    return perm[:axis_a] + (perm[axis_b],) + perm[axis_a: axis_b] + perm[axis_b + 1:]
 
 
 @constexpr
@@ -70,24 +70,24 @@ class TimeDistributed(Cell):
     Args:
         layer(Union[Cell, Primitive]): The Cell or Primitive which will be wrapped.
         time_axis(int): The axis of time_step.
-        reshape_with_axis(int): The axis which time_axis will be reshaped with. Default: 'None'.
+        reshape_with_axis(int): The axis which will be reshaped with time_axis. Default: None.
 
-    Raises:
-        TypeError: If cell is not a Cell or Primitive.
-
-    inputs:
-        -**input**(Tensor)-Tensor of shape: math:'(N, T, *)'
+    Inputs:
+        - **input** (Tensor) - Tensor of shape :math:`(N, T, *)`.
 
     Outputs:
-        Tensor of shape: math:'(N, T, *)'
+        Tensor of shape :math:`(N, T, *)`
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
+    Raises:
+        TypeError: If layer is not a Cell or Primitive.
+
     Examples:
         >>> input = Tensor(np.random.random([32, 10, 3]), mindspore.float32)
         >>> dense = nn.Dense(3, 6)
-        >>> net = TimeDistributed(dense, time_axis=1, reshape_with_axis=0)
+        >>> net = nn.TimeDistributed(dense, time_axis=1, reshape_with_axis=0)
         >>> output = net(input)
         >>> print(output.shape)
         (32, 10, 6)
@@ -98,6 +98,9 @@ class TimeDistributed(Cell):
             raise TypeError("Please initialize TimeDistributed with mindspore.nn.Cell or "
                             "mindspore.ops.Primitive instance. You passed: {input}".format(input=layer))
         super(TimeDistributed, self).__init__()
+        Validator.check_is_int(time_axis)
+        if reshape_with_axis is not None:
+            Validator.check_is_int(reshape_with_axis)
         self.layer = layer
         self.time_axis = time_axis
         self.reshape_with_axis = reshape_with_axis
@@ -105,9 +108,7 @@ class TimeDistributed(Cell):
         self.reshape = Reshape()
 
     def construct(self, inputs):
-        is_capital_tensor = isinstance(inputs, Tensor)
-        is_tensor = True if is_capital_tensor else isinstance(inputs, tensor)
-        _check_data(is_tensor)
+        _check_data(isinstance(inputs, Tensor))
         _check_inputs_dim(inputs.shape)
         time_axis = self.time_axis % len(inputs.shape)
         if self.reshape_with_axis is not None:
@@ -122,24 +123,20 @@ class TimeDistributed(Cell):
             inputs_shape_new = inputs.shape
             inputs = self.reshape(inputs, inputs_shape_new[: reshape_pos] + (-1,) + inputs_shape_new[reshape_pos + 2:])
             outputs = self.layer(inputs)
-            is_capital_tensor = isinstance(outputs, Tensor)
-            is_tensor = True if is_capital_tensor else isinstance(outputs, tensor)
-            _check_data(is_tensor)
+            _check_data(isinstance(outputs, Tensor))
             _check_reshape_pos(reshape_pos, inputs.shape, outputs.shape)
             outputs_shape_new = outputs.shape[:reshape_pos] + inputs_shape_new[reshape_pos: reshape_pos + 2]
             if reshape_pos + 1 < len(outputs.shape):
                 outputs_shape_new += outputs.shape[reshape_pos + 1:]
             return self.reshape(outputs, outputs_shape_new)
 
-        unpack = Unpack(time_axis)
-        inputs = unpack(inputs)
+        unstack = Unstack(time_axis)
+        inputs = unstack(inputs)
         y = ()
         for item in inputs:
             outputs = self.layer(item)
-            is_capital_tensor = isinstance(outputs, Tensor)
-            is_tensor = True if is_capital_tensor else isinstance(outputs, tensor)
-            _check_data(is_tensor)
+            _check_data(isinstance(outputs, Tensor))
             _check_expand_dims_axis(time_axis, outputs.ndim)
             y += (outputs,)
-        y = Pack(time_axis)(y)
+        y = Stack(time_axis)(y)
         return y

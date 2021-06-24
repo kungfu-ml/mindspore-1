@@ -17,28 +17,43 @@
 #include "tools/converter/parser/caffe/caffe_reduce_parser.h"
 #include <memory>
 #include <vector>
+#include "ops/fusion/reduce_fusion.h"
 
 namespace mindspore {
 namespace lite {
-PrimitiveC *CaffeReduceParser::ParseLitePrimitive(const caffe::LayerParameter &proto,
-                                                  const caffe::LayerParameter &weight) {
-  std::unique_ptr<schema::PReLUT> attr = std::make_unique<schema::PReLUT>();
-  if (attr == nullptr) {
-    MS_LOG(ERROR) << "new op failed";
-    return nullptr;
-  }
+ops::PrimitiveC *CaffeReduceParser::Parse(const caffe::LayerParameter &proto, const caffe::LayerParameter &weight) {
+  auto prim = std::make_unique<ops::ReduceFusion>();
 
-  const caffe::PReLUParameter &pReluParam = proto.prelu_param();
-  if (pReluParam.has_channel_shared()) {
-    attr->channelShared = pReluParam.channel_shared();
+  prim->set_keep_dims(false);
+  prim->set_reduce_to_end(true);
+
+  const caffe::ReductionParameter &reduce_param = proto.reduction_param();
+  if (reduce_param.has_operation()) {
+    if (reduce_param.operation() == caffe::ReductionParameter_ReductionOp_MEAN) {
+      prim->set_mode(mindspore::ReduceMode::Reduce_Mean);
+    } else if (reduce_param.operation() == caffe::ReductionParameter_ReductionOp_SUM) {
+      prim->set_mode(mindspore::ReduceMode::Reduce_Sum);
+    } else if (reduce_param.operation() == caffe::ReductionParameter_ReductionOp_SUMSQ) {
+      prim->set_mode(mindspore::ReduceMode::Reduce_Sum_Square);
+    } else if (reduce_param.operation() == caffe::ReductionParameter_ReductionOp_ASUM) {
+      prim->set_mode(mindspore::ReduceMode::Reduce_ASum);
+    } else {
+      MS_LOG(ERROR) << "nsupported reduce mode: " << reduce_param.operation();
+      return nullptr;
+    }
   } else {
-    attr->channelShared = false;
+    prim->set_mode(mindspore::ReduceMode::Reduce_Sum);
   }
 
-  auto primitive = std::make_unique<schema::PrimitiveT>();
-  primitive->value.type = schema::PrimitiveType_Reduce;
-  primitive->value.value = attr.release();
-  return PrimitiveC::Create(primitive.release());
+  std::vector<int32_t> axes;
+  if (reduce_param.has_axis()) {
+    axes = std::vector<int>(1, reduce_param.axis());
+  } else {
+    axes = std::vector<int>(1, 0);
+  }
+  prim->AddAttr("axes", MakeValue(axes));
+
+  return prim.release();
 }
 
 CaffeNodeRegistrar g_caffeReduceParser("Reduction", new CaffeReduceParser());

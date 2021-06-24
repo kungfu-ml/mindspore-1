@@ -17,14 +17,20 @@
 #ifndef MINDSPORE_LITE_NNACL_SQUEEZE_PARAMETER_H_
 #define MINDSPORE_LITE_NNACL_SQUEEZE_PARAMETER_H_
 #include "nnacl/op_base.h"
-#include "nnacl/quantization/quantize.h"
+#include "nnacl/int8/quantize.h"
 
 #define SQUEEZE_OFFSET_MAX_SIZE 4
+
+typedef struct SqueezeQuantArg {
+  QuantArg *in_quant_args_;
+  QuantArg *out_quant_args_;
+} SqueezeQuantArg;
 
 typedef struct SqueezeParameter {
   // primitive parameter
   OpParameter op_parameter_;
-  int64_t axis_;
+  int axis_[8];
+  size_t axis_size_;
 
   // shape correlative
   const int *in_shape_;
@@ -33,11 +39,8 @@ typedef struct SqueezeParameter {
   int64_t offset_[SQUEEZE_OFFSET_MAX_SIZE];
   int64_t in_offset_[SQUEEZE_OFFSET_MAX_SIZE];
   int input_dim_;
-
   // other parameter
   SqueezeQuantArg quant_arg;
-  int thread_count_;
-  int thread_id_;
 } SqueezeParameter;
 
 #endif  // MINDSPORE_LITE_NNACL_SQUEEZE_PARAMETER_H_

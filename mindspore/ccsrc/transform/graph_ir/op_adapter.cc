@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "transform/graph_ir/op_adapter.h"
+#include "utils/check_convert_utils.h"
 
 namespace mindspore {
 namespace transform {
@@ -139,8 +140,7 @@ Status OpAdapterImpl::SetCustomOpInput(const CusOperatorPtr &op, int index, cons
 Status OpAdapterImpl::SetNormalOpInput(const OperatorPtr &op, int index, const OperatorPtr &input) {
   MS_EXCEPTION_IF_NULL(op);
   auto it = input_map_.find(index);
-  if (it != input_map_.end()) {
-    MS_EXCEPTION_IF_NULL(input);
+  if (input != nullptr && it != input_map_.end()) {
     MS_LOG(DEBUG) << "Link op " << input->GetName() << " to " << op->GetName() << ":" << it->second.name;
     it->second.set_op(op, input);
     return SUCCESS;
@@ -567,6 +567,9 @@ int OpAdapterImpl::SetNormalOpAttr(const OperatorPtr &op, const PrimitivePtr &pr
   for (auto &it : attr_map_) {
     auto value = prim->GetAttr(it.first);
     if (value != nullptr) {
+      // convert parts of attr to str eg. data_format or change ir attr to op attr eg. axis[0]
+      CheckAndConvertUtils::ConvertAttrValueToString(prim->name(), it.first, &value);
+      CheckAndConvertUtils::CheckIrAttrtoOpAttr(prim->name(), it.first, &value);
       // set attr from primitive
       int ret = setAttr(op, it.first, value);
       if (ret) {

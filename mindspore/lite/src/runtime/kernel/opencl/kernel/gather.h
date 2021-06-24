@@ -25,9 +25,7 @@ namespace mindspore::kernel {
 
 class GatherOpenCLKernel : public OpenCLKernel {
  public:
-  GatherOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
 
   ~GatherOpenCLKernel() override = default;
 
@@ -41,13 +39,10 @@ class GatherOpenCLKernel : public OpenCLKernel {
   int Tune() override { return lite::RET_OK; }
   int ConvertTensorToweight();
 
- protected:
-  int UpdateWeights();
-
  private:
   int32_t *indices_data_{nullptr};
   int axis_ = {0};
-  bool intensor1_is_tensor{false};
+  bool intensor1_is_tensor{true};
   bool enable_fp16_{false};
 };
 }  // namespace mindspore::kernel

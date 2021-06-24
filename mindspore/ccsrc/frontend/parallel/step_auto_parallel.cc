@@ -28,6 +28,7 @@
 #include <vector>
 #include <unordered_set>
 
+#include "base/core_ops.h"
 #include "frontend/optimizer/opt.h"
 #include "frontend/optimizer/optimizer.h"
 #include "frontend/parallel/auto_parallel/dp_algo_costmodel.h"
@@ -151,9 +152,9 @@ bool IsSplittableOperator(const std::string &op_name) {
   // clang-format off
   static const std::set<std::string> splittable_op =
     {MATMUL, TRANSPOSE, GELU, TANH, SOFTMAX, SUB, MUL, DIV, RESHAPE, GREATER, LOG_SOFTMAX, ACTIVATION, PRELU,
-     FLOORDIV, L2_NORMALIZE, TENSOR_ADD, MAXPOOL, MAXPOOLV2, VIRTUAL_DATA_SET, RELU, ONEHOT, DROPOUT_DO_MASK,
+     FLOORDIV, L2_NORMALIZE, ADD, MAXPOOL, MAXPOOLV2, VIRTUAL_DATA_SET, RELU, ONEHOT, DROPOUT_DO_MASK,
      REDUCE_MAX, REDUCE_MIN, ARGMAXWITHVALUE, ARGMINWITHVALUE, REDUCE_SUM, CONV2D, FUSE_BATCH_NORM, POOLING,
-     MAX_POOL_WITH_ARGMAX, SIMPLE_MEAN, FLATTEN, BATCH_NORM, LAYER_NORM, BIAS_ADD, ASSIGN_SUB, COS, ACOS, EXP, PACK,
+     MAX_POOL_WITH_ARGMAX, SIMPLE_MEAN, FLATTEN, BATCH_NORM, LAYER_NORM, BIAS_ADD, ASSIGN_SUB, COS, ACOS, EXP, STACK,
      LOG, REDUCE_MEAN, REAL_DIV, SIGMOID, POW, MAXIMUM, MINIMUM, EQUAL, NOT_EQUAL, LOGICALNOT, GATHERV2, SQRT, CONCAT,
      STRIDEDSLICE, GET_NEXT, CAST, NEG, SQUARE, BATCH_MATMUL, EXPAND_DIMS, SQUEEZE, SPARSE_GATHERV2, TILE, DROPOUT,
      SOFTMAX_CROSS_ENTROPY_WITH_LOGITS, SIGMOID_CROSS_ENTROPY_WITH_LOGITS, SPARSE_SOFTMAX_CROSS_ENTROPY_WITH_LOGITS,
@@ -233,6 +234,48 @@ void InitCostGraph() {
   entire_costgraph->Init();
 }
 
+void SetStrategyToOperator(const OperatorInfoPtr &operator_info, const PrimitivePtr &prim,
+                           const std::unordered_map<std::string, ValuePtr> &attrs, bool is_last_nodes,
+                           StrategyMap *stra_map, const std::string &strategy_key_name) {
+  // In this case, the configured strategy should be extracted to help setting cost
+  StrategyPtr strategyPtr;
+  if (is_last_nodes) {
+    bool full_batch = ParallelContext::GetInstance()->full_batch();
+    strategyPtr = GenerateBatchParallelStrategy(operator_info, prim);
+    if (full_batch) {
+      SetLastNodeStrategy(strategyPtr);
+    }
+  } else if (StrategyFound(attrs)) {
+    strategyPtr = parallel::ExtractStrategy(attrs);
+  } else {
+    strategyPtr = (*stra_map)[strategy_key_name];
+  }
+  if (strategyPtr != nullptr) {
+    if (prim->name() == RESHAPE) {
+      MS_LOG(EXCEPTION) << "Setting strategy for Reshape goes for nothing!";
+    }
+    // Set cost for this configured strategy
+    if (operator_info->SetCostUnderStrategy(strategyPtr) != SUCCESS) {
+      MS_LOG(EXCEPTION) << "Failure: operator " << prim->name() << " SetCostUnderStrategy failed";
+    } else if (FULLY_USE_DEVICES) {
+      // If configured to fully use devices, then checking for the user-specified strategy
+      int64_t used_devices = operator_info->used_devices();
+      MS_EXCEPTION_IF_NULL(g_device_manager);
+      auto total_device_num = g_device_manager->GetDeviceListByStageId(0).size();
+      // 'used_devices == 1' means that ALL-1 strategy, which is valid in auto-parallel
+      if (used_devices == 1) {
+        return;
+      }
+      // 'used_devices == -1' means that 'used_devices_' is not set
+      if ((used_devices == -1) || LongToSize(used_devices) != total_device_num) {
+        MS_LOG(EXCEPTION) << "In configuration 'FULLY_USE_DEVICES' = True, "
+                          << "but the specified strategy uses device: " << used_devices
+                          << ", total devices: " << total_device_num;
+      }
+    }
+  }
+}
+
 OperatorInfoPtr CreateTheOperatorInfo(const PrimitivePtr &prim, const CNodePtr &cnode, bool is_last_nodes,
                                       StrategyMap *stra_map) {
   MS_EXCEPTION_IF_NULL(prim);
@@ -289,9 +332,10 @@ OperatorInfoPtr CreateTheOperatorInfo(const PrimitivePtr &prim, const CNodePtr &
   bool load_strategy_from_ckpt =
     StrategyCheckpoint::GetInstance().LoadCheckPointOn() && stra_map->find(strategy_key_name) != stra_map->end();
   // If no strategy has been configured for this operator, then candidate strategies are generated for
-  // auto-strategy searching; if this primitive is CAST, we ignore the user-specified strategy.
-  // if strategy is set to load from checkpoint, it is prefer to load strategy from checkpoint .
-  if ((!StrategyFound(attrs) || prim->name() == CAST) && !load_strategy_from_ckpt && !is_last_nodes) {
+  // auto-strategy searching; if this primitive is CAST, we ignore the user-specified strategy;
+  // if strategy is set to load from checkpoint, it is preferred to load strategy from checkpoint.
+  bool is_gen_stra = (!StrategyFound(attrs) || prim->name() == CAST) && (!load_strategy_from_ckpt) && (!is_last_nodes);
+  if (is_gen_stra) {
     // Compute split_flag_list_, indicating which input has batch dimension. This is ONLY used for preparation for
     // BatchParallelInfo operator
     operator_info->ComputeBatchSplitFlagList();
@@ -306,43 +350,7 @@ OperatorInfoPtr CreateTheOperatorInfo(const PrimitivePtr &prim, const CNodePtr &
       MS_LOG(INFO) << "Approximated StrategyCost for: " << operator_info->name();
     }
   } else {
-    // In this case, the configured strategy should be extracted to help setting cost
-    StrategyPtr strategyPtr;
-    if (is_last_nodes) {
-      bool full_batch = ParallelContext::GetInstance()->full_batch();
-      strategyPtr = GenerateBatchParallelStrategy(operator_info, prim);
-      if (full_batch) {
-        SetLastNodeStrategy(strategyPtr);
-      }
-    } else if (StrategyFound(attrs)) {
-      strategyPtr = parallel::ExtractStrategy(attrs);
-    } else {
-      strategyPtr = (*stra_map)[strategy_key_name];
-    }
-    if (strategyPtr != nullptr) {
-      if (prim->name() == RESHAPE) {
-        MS_LOG(EXCEPTION) << "Setting strategy for Reshape goes for nothing!";
-      }
-      // Set cost for this configured strategy
-      if (operator_info->SetCostUnderStrategy(strategyPtr) != SUCCESS) {
-        MS_LOG(EXCEPTION) << "Failure: operator " << prim->name() << " SetCostUnderStrategy failed";
-      } else if (FULLY_USE_DEVICES) {
-        // If configured to fully use devices, then checking for the user-specified strategy
-        int64_t used_devices = operator_info->used_devices();
-        MS_EXCEPTION_IF_NULL(g_device_manager);
-        auto total_device_num = g_device_manager->GetDeviceListByStageId(0).size();
-        // 'used_devices == 1' means that ALL-1 strategy, which is valid in auto-parallel
-        if (used_devices == 1) {
-          return operator_info;
-        }
-        // 'used_devices == -1' means that 'used_devices_' is not set
-        if ((used_devices == -1) || LongToSize(used_devices) != total_device_num) {
-          MS_LOG(EXCEPTION) << "In configuration 'FULLY_USE_DEVICES' = True, "
-                            << "but the specified strategy uses device: " << used_devices
-                            << ", total devices: " << total_device_num;
-        }
-      }
-    }
+    SetStrategyToOperator(operator_info, prim, attrs, is_last_nodes, stra_map, strategy_key_name);
   }
   return operator_info;
 }
@@ -421,6 +429,7 @@ Status ConstructCostGraphNodesByUniqueId(const std::vector<AnfNodePtr> &all_node
       }
       // Needed by rec_parser
       operator_info->set_type(prim->name());
+      operator_info->set_last_node_flag(is_last_nodes);
       std::vector<std::string> inputs_tensor_name = ExtractInputsTensorName(cnode);
 
       entire_costgraph->AddOperator(operator_info);
@@ -447,6 +456,29 @@ Status ConstructCostGraphNodesByUniqueId(const std::vector<AnfNodePtr> &all_node
 
   MS_LOG(INFO) << "Constructing nodes for cost graph ends.";
   return SUCCESS;
+}
+
+void SetOperatorToCNode(const OperatorInfoPtr &current_op_ptr, const PrimitivePtr &prim, const CNodePtr &cnode) {
+  if (current_op_ptr == nullptr) {
+    MS_LOG(EXCEPTION) << "Find " << prim->name() << " from CostGraph failed.";
+  } else {
+    bool is_find_wrong = (current_op_ptr->name().find(VIRTUAL_DATA_SET_INFO) == std::string::npos) &&
+                         (current_op_ptr->name().find(BATCH_PARALLEL) == std::string::npos) &&
+                         (current_op_ptr->name().find(prim->name()) == std::string::npos);
+    if (is_find_wrong) {
+      MS_LOG(EXCEPTION) << "The OperatorInfo: " << current_op_ptr->name()
+                        << " does not match the Prim: " << prim->name();
+    }
+
+    // Needed by rec_parser
+    ModifyInputsTensorNameListIfOperatorInfoCreated(current_op_ptr->name(), cnode->UniqueId());
+
+    cnode->set_user_data<OperatorInfo>(current_op_ptr);
+    MS_LOG(INFO) << "The CNode with UniqueId: " << cnode->UniqueId()
+                 << " and UniqueIdThroughCopy: " << cnode->UniqueIdThroughCopy()
+                 << ", CNode fullname_with_scope: " << cnode->fullname_with_scope()
+                 << " is set OperatorInfo: " << current_op_ptr->name() << ", Primitive: " << prim->name();
+  }
 }
 
 // Using CNode's UniqueIdThroughCopys to construct nodes
@@ -495,7 +527,8 @@ Status ConstructCostGraphNodesByUniqueIdTC(const std::vector<AnfNodePtr> &all_no
     if (search_cnode == from_cnode_to_info.end()) {
       size_t loop_index = 0;
       bool is_in_loop = GetLoopIndexFromCNode(cnode, &loop_index);
-      if (DP_ALGO_SINGLE_LOOP && is_in_loop && (loop_to_ops[loop_index] < operators_in_forloop.size())) {
+      bool is_op_created = DP_ALGO_SINGLE_LOOP && is_in_loop && (loop_to_ops[loop_index] < operators_in_forloop.size());
+      if (is_op_created) {
         const auto &current_op_ptr = operators_in_forloop[loop_to_ops[loop_index]];
         bool is_find_wrong = (current_op_ptr->name().find(VIRTUAL_DATA_SET_INFO) == std::string::npos) &&
                              (current_op_ptr->name().find(BATCH_PARALLEL) == std::string::npos) &&
@@ -523,6 +556,7 @@ Status ConstructCostGraphNodesByUniqueIdTC(const std::vector<AnfNodePtr> &all_no
       }
       // Needed by rec_parser
       operator_info->set_type(prim->name());
+      operator_info->set_last_node_flag(is_last_nodes);
       std::vector<std::string> inputs_tensor_name = ExtractInputsTensorName(cnode);
 
       entire_costgraph->AddOperator(operator_info);
@@ -540,32 +574,52 @@ Status ConstructCostGraphNodesByUniqueIdTC(const std::vector<AnfNodePtr> &all_no
       // Needed by rec_parser
       entire_costgraph->add_inputs_tensor_name(inputs_tensor_name);
     } else {
-      auto current_op_ptr = search_cnode->second;
-      if (current_op_ptr == nullptr) {
-        MS_LOG(EXCEPTION) << "Find " << prim->name() << " from CostGraph failed.";
-      } else {
-        bool is_find_wrong = (current_op_ptr->name().find(VIRTUAL_DATA_SET_INFO) == std::string::npos) &&
-                             (current_op_ptr->name().find(BATCH_PARALLEL) == std::string::npos) &&
-                             (current_op_ptr->name().find(prim->name()) == std::string::npos);
-        if (is_find_wrong) {
-          MS_LOG(EXCEPTION) << "The OperatorInfo: " << current_op_ptr->name()
-                            << " does not match the Prim: " << prim->name();
-        }
-
-        // Needed by rec_parser
-        ModifyInputsTensorNameListIfOperatorInfoCreated(current_op_ptr->name(), cnode->UniqueId());
-
-        cnode->set_user_data<OperatorInfo>(current_op_ptr);
-        MS_LOG(INFO) << "The CNode with UniqueId: " << cnode->UniqueId()
-                     << " and UniqueIdThroughCopy: " << cnode->UniqueIdThroughCopy()
-                     << ", CNode fullname_with_scope: " << cnode->fullname_with_scope()
-                     << " is set OperatorInfo: " << current_op_ptr->name() << ", Primitive: " << prim->name();
-      }
+      SetOperatorToCNode(search_cnode->second, prim, cnode);
     }
   }
 
   MS_LOG(INFO) << "Constructing nodes for cost graph ends.";
   return SUCCESS;
+}
+
+void CreateEdgeBetweenTwoOps(const OperatorInfoPtr &prev_op_info, const OperatorInfoPtr &node_op_info,
+                             const CNodePtr &cnode, const CNodePtr &prev_cnode, const PrimitivePtr &prim,
+                             const PrimitivePtr &prev_prim, size_t output_index, size_t input_index,
+                             size_t *edge_count) {
+  std::string edge_name = prev_op_info->name() + OPERATOR_TO_OPERATOR_CONNECTOR + node_op_info->name();
+  // If the edge between these two operators already has been added, then the edge will not be added again.
+  if (entire_costgraph->IsEdgeInCostGraph(edge_name, output_index, input_index - 1)) {
+    return;
+  }
+  EdgePtr edge_ptr;
+  MS_LOG(INFO) << "Creating edge: " << edge_name;
+  if (IsOperatorsInTwoSeparateLoops(prev_cnode, cnode)) {
+    MS_LOG(INFO) << "prev_cnode_fullname: " << prev_cnode->fullname_with_scope()
+                 << ", cnode_fullname: " << cnode->fullname_with_scope();
+    MS_LOG(INFO) << "The two operators in two separate for-loops, thus skip the edge.";
+    return;
+  }
+  bool follow_strategy = (prim->name() == RESHAPE) || (prev_prim->name() == RESHAPE) ||
+                         (ELEMENTWISE_OP_STRA_FOLLOW && IsElementWiseOperator(prev_prim->name()));
+  if (follow_strategy) {
+    // Redistribution in not allowed on the edge.
+    // Elementwise operators have the same strategy as their previous operators.
+    edge_ptr =
+      std::make_shared<Edge>(edge_name, prev_op_info, node_op_info, output_index, input_index - 1, false, true);
+  } else {
+    edge_ptr = std::make_shared<Edge>(edge_name, prev_op_info, node_op_info, output_index, input_index - 1, false);
+  }
+
+  // Init costs for this edge
+  if (edge_ptr->InitEdgeCost() != SUCCESS) {
+    MS_LOG(EXCEPTION) << "Edge cost initialization failed";
+  }
+  node_op_info->AddPrevEdge(edge_ptr);
+  prev_op_info->AddSuccEdge(edge_ptr);
+  entire_costgraph->AddEdge(prev_op_info, node_op_info, edge_ptr);
+  MS_LOG(INFO) << "Successfully adding the edge between " << prev_op_info->name() << " and " << node_op_info->name();
+  (*edge_count)++;
+  return;
 }
 
 void ConstructCostGraphEdges(const std::vector<AnfNodePtr> &all_nodes) {
@@ -597,47 +651,14 @@ void ConstructCostGraphEdges(const std::vector<AnfNodePtr> &all_nodes) {
       PrimitivePtr prev_prim = prev_prim_anf_node->value()->cast<PrimitivePtr>();
       size_t output_index = 0;
 
-      bool bool_result =
-        (IsAutoParallelCareNode(prev_cnode)) || (prev_prim->name() == TUPLE_GETITEM) || (prev_prim->name() == DEPEND);
-      while (bool_result) {
+      while ((IsAutoParallelCareNode(prev_cnode)) || (prev_prim->name() == prim::kTupleGetItem) ||
+             (prev_prim->name() == DEPEND)) {
         if (IsAutoParallelCareNode(prev_cnode)) {
           auto prev_op_info = prev_cnode->user_data<OperatorInfo>();
-          std::string edge_name = prev_op_info->name() + OPERATOR_TO_OPERATOR_CONNECTOR + node_op_info->name();
-          // If the edge between these two operators already has been added, then the edge will not be added again.
-          if (entire_costgraph->IsEdgeInCostGraph(edge_name, output_index, i - 1)) {
-            break;
-          }
-          EdgePtr edge_ptr;
-          MS_LOG(INFO) << "Creating edge: " << edge_name;
-          if (IsOperatorsInTwoSeparateLoops(prev_cnode, cnode)) {
-            MS_LOG(INFO) << "prev_cnode_fullname: " << prev_cnode->fullname_with_scope()
-                         << ", cnode_fullname: " << cnode->fullname_with_scope();
-            MS_LOG(INFO) << "The two operators in two separate for-loops, thus skip the edge.";
-            break;
-          }
-          bool follow_strategy = (prim->name() == RESHAPE) || (prev_prim->name() == RESHAPE) ||
-                                 (ELEMENTWISE_OP_STRA_FOLLOW && IsElementWiseOperator(prev_prim->name()));
-          if (follow_strategy) {
-            // Redistribution in not allowed on the edge.
-            // Elementwise operators have the same strategy as their previous operators.
-            edge_ptr = std::make_shared<Edge>(edge_name, prev_op_info, node_op_info, output_index, i - 1, false, true);
-          } else {
-            edge_ptr = std::make_shared<Edge>(edge_name, prev_op_info, node_op_info, output_index, i - 1, false);
-          }
-
-          // Init costs for this edge
-          if (edge_ptr->InitEdgeCost() != SUCCESS) {
-            MS_LOG(EXCEPTION) << "Edge cost initialization failed";
-          }
-          node_op_info->AddPrevEdge(edge_ptr);
-          prev_op_info->AddSuccEdge(edge_ptr);
-          entire_costgraph->AddEdge(prev_op_info, node_op_info, edge_ptr);
-          MS_LOG(INFO) << "Successfully adding the edge between " << prev_op_info->name() << " and "
-                       << node_op_info->name();
-          edge_count++;
-
+          CreateEdgeBetweenTwoOps(prev_op_info, node_op_info, cnode, prev_cnode, prim, prev_prim, output_index, i,
+                                  &edge_count);
           break;
-        } else if (prev_prim->name() == TUPLE_GETITEM) {
+        } else if (prev_prim->name() == prim::kTupleGetItem) {
           // In this case, 'prev_anf_node' is 'tuple_getitem', the actual precursor node is node before
           // this 'tuple_getitem'
           MS_LOG(INFO) << "Jumping the 'tuple_getitem' operator.";
@@ -670,8 +691,6 @@ void ConstructCostGraphEdges(const std::vector<AnfNodePtr> &all_nodes) {
                        << "and creating an edge between the Operator before "
                        << "'depend' and the Operator after 'depend'.";
         }
-        bool_result =
-          (IsAutoParallelCareNode(prev_cnode)) || (prev_prim->name() == TUPLE_GETITEM) || (prev_prim->name() == DEPEND);
       }
     }
     MS_LOG(INFO) << "Successfully created " << edge_count << " edges for: " << node_op_info->name();
@@ -816,6 +835,9 @@ void ReshapeCostCompute(const std::vector<AnfNodePtr> &all_nodes) {
     MS_ASSERT(cnode->inputs().size() == 3);
     // get previous node's strategy_cost_
     auto pre_node = cnode->input(1);
+    if (IsPrimitiveCNode(pre_node, prim::kPrimLoad)) {
+      pre_node = pre_node->cast<CNodePtr>()->input(1);
+    }
     int64_t out_index = 0;
     OperatorInfoPtr pre_operator_info;
     std::vector<std::shared_ptr<StrategyWithCost>> pre_stra_costs;
@@ -826,7 +848,7 @@ void ReshapeCostCompute(const std::vector<AnfNodePtr> &all_nodes) {
       pre_operator_info = reshape_info;
       pre_stra_costs = reshape_info->strategy_cost();
     } else {
-      if (!FindReshapePreNodeStraCosts(pre_node, &pre_operator_info, &out_index)) {
+      if (!FindReshapePreNodeStraCosts(pre_node, &pre_operator_info, &out_index, 0)) {
         MS_LOG(EXCEPTION) << "FindReshapePreNodeStraCosts for reshape failed";
       }
       pre_stra_costs = pre_operator_info->strategy_cost();
@@ -835,7 +857,7 @@ void ReshapeCostCompute(const std::vector<AnfNodePtr> &all_nodes) {
     int64_t in_index = 0;
     OperatorInfoPtr next_operator_info;
     std::vector<std::shared_ptr<StrategyWithCost>> next_stra_costs;
-    bool find_next_node = FindReshapeNextNodeStraCosts(cnode, &next_operator_info, &in_index);
+    bool find_next_node = FindReshapeNextNodeStraCosts(cnode, &next_operator_info, &in_index, 0);
     if (!find_next_node) {
       MS_LOG(INFO) << "FindReshapeNextNodeStraCosts for reshape failed";
     }
@@ -852,7 +874,7 @@ void ReshapeCostCompute(const std::vector<AnfNodePtr> &all_nodes) {
     bool is_prev_param = pre_node->isa<Parameter>();
     if (reshape_info->GenetateStrategyCosts(pre_stra_costs, next_stra_costs, out_index, in_index, is_prev_param) !=
         SUCCESS) {
-      MS_LOG(EXCEPTION) << "reshape genetate strategy_costs failed!";
+      MS_LOG(EXCEPTION) << "reshape generate strategy_costs failed!";
     }
   }
 }
@@ -958,13 +980,13 @@ std::vector<std::vector<std::string>> RecInputTensorNames(const std::map<std::st
 
 CNodePtr GetInternalOperatorInfo(const CNodePtr &cnode, const ValueNodePtr &prim_anf_node) {
   PrimitivePtr prim = GetValueNode<PrimitivePtr>(prim_anf_node);
-  if (prim->name() == TUPLE_GETITEM || prim->name() == DEPEND) {
+  if (prim->name() == prim::kTupleGetItem || prim->name() == DEPEND) {
     auto prev_cnode = cnode->input(1)->cast<CNodePtr>();
     if (prev_cnode == nullptr || !IsValueNode<Primitive>(prev_cnode->input(0))) {
       return nullptr;
     }
     auto prev_prim = prev_cnode->input(0)->cast<ValueNodePtr>()->value()->cast<PrimitivePtr>();
-    while (prev_prim->name() == TUPLE_GETITEM || prev_prim->name() == DEPEND) {
+    while (prev_prim->name() == prim::kTupleGetItem || prev_prim->name() == DEPEND) {
       prev_cnode = prev_cnode->input(1)->cast<CNodePtr>();
       if (prev_cnode == nullptr || !IsValueNode<Primitive>(prev_cnode->input(0))) {
         return nullptr;
@@ -1037,7 +1059,11 @@ Status ParallelStrategyRecSearch(const std::vector<AnfNodePtr> &all_nodes, const
     return FAILED;
   }
 
-  GenerateStrategy(graph, ops, eli_list, input_tensor_names, index_list);
+  bool is_training = true;
+  if (!root->has_flag(TRAINING)) {
+    is_training = false;
+  }
+  GenerateStrategy(graph, ops, eli_list, input_tensor_names, index_list, is_training);
 
   if (entire_costgraph->InitSelectedStrategy() == SUCCESS) {
     MS_LOG(INFO) << "Init selected strategy succeeded.";

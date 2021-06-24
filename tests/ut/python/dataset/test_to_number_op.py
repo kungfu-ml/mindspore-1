@@ -33,6 +33,31 @@ def string_dataset_generator(strings):
         yield (np.array(string, dtype='S'),)
 
 
+def test_to_number_eager():
+    """
+    Test ToNumber op is callable
+    """
+    input_strings = [["1", "2", "3"], ["4", "5", "6"]]
+    op = text.ToNumber(mstype.int8)
+
+    # test input_strings as one 2D tensor
+    result1 = op(input_strings) # np array: [[1 2 3] [4 5 6]]
+    assert np.array_equal(result1, np.array([[1, 2, 3], [4, 5, 6]], dtype='i'))
+
+    # test input multiple tensors
+    with pytest.raises(RuntimeError) as info:
+        # test input_strings as two 1D tensor. It's error because to_number is an OneToOne op
+        _ = op(*input_strings)
+    assert "The op is OneToOne, can only accept one tensor as input." in str(info.value)
+
+    # test input invalid tensor
+    invalid_input = [["1", "2", "3"], ["4", "5"]]
+    with pytest.raises(TypeError) as info:
+        _ = op(invalid_input)
+    assert "Invalid user input. Got <class 'list'>: [['1', '2', '3'], ['4', '5']], cannot be converted into tensor" in \
+           str(info.value)
+
+
 def test_to_number_typical_case_integral():
     input_strings = [["-121", "14"], ["-2219", "7623"], ["-8162536", "162371864"],
                      ["-1726483716", "98921728421"]]
@@ -75,7 +100,7 @@ def out_of_bounds_error_message_check(dataset, np_type, value_to_cast):
     with pytest.raises(RuntimeError) as info:
         for _ in dataset.create_dict_iterator(num_epochs=1, output_numpy=True):
             pass
-    assert "String input " + value_to_cast + " will be out of bounds if casted to " + type_name in str(info.value)
+    assert "string input " + value_to_cast + " will be out of bounds if cast to " + type_name in str(info.value)
     assert "valid range is: [" + type_min + ", " + type_max + "]" in str(info.value)
 
 
@@ -112,7 +137,7 @@ def test_to_number_out_of_bounds_non_integral():
     with pytest.raises(RuntimeError) as info:
         for _ in dataset.create_dict_iterator(num_epochs=1, output_numpy=True):
             pass
-    assert "String input " + input_strings[0] + " will be out of bounds if casted to float32" in str(info.value)
+    assert "string input " + input_strings[0] + " will be out of bounds if cast to float32" in str(info.value)
 
     input_strings = [above_range[2]]
     dataset = ds.GeneratorDataset(string_dataset_generator(input_strings), "strings")
@@ -121,7 +146,7 @@ def test_to_number_out_of_bounds_non_integral():
     with pytest.raises(RuntimeError) as info:
         for _ in dataset.create_dict_iterator(num_epochs=1, output_numpy=True):
             pass
-    assert "String input " + input_strings[0] + " will be out of bounds if casted to float64" in str(info.value)
+    assert "string input " + input_strings[0] + " will be out of bounds if cast to float64" in str(info.value)
 
     below_range = [str(np.finfo(np.float16).min * 10), str(np.finfo(np.float32).min * 10), "-1.8e+308"]
 
@@ -141,7 +166,7 @@ def test_to_number_out_of_bounds_non_integral():
     with pytest.raises(RuntimeError) as info:
         for _ in dataset.create_dict_iterator(num_epochs=1, output_numpy=True):
             pass
-    assert "String input " + input_strings[0] + " will be out of bounds if casted to float32" in str(info.value)
+    assert "string input " + input_strings[0] + " will be out of bounds if cast to float32" in str(info.value)
 
     input_strings = [below_range[2]]
     dataset = ds.GeneratorDataset(string_dataset_generator(input_strings), "strings")
@@ -150,7 +175,7 @@ def test_to_number_out_of_bounds_non_integral():
     with pytest.raises(RuntimeError) as info:
         for _ in dataset.create_dict_iterator(num_epochs=1, output_numpy=True):
             pass
-    assert "String input " + input_strings[0] + " will be out of bounds if casted to float64" in str(info.value)
+    assert "string input " + input_strings[0] + " will be out of bounds if cast to float64" in str(info.value)
 
 
 def test_to_number_boundaries_integral():
@@ -183,7 +208,7 @@ def test_to_number_invalid_input():
     with pytest.raises(RuntimeError) as info:
         for _ in dataset.create_dict_iterator(num_epochs=1, output_numpy=True):
             pass
-    assert "It is invalid to convert " + input_strings[0] + " to a number" in str(info.value)
+    assert "it is invalid to convert \"" + input_strings[0] + "\" to a number" in str(info.value)
 
 
 def test_to_number_invalid_type():
@@ -194,6 +219,7 @@ def test_to_number_invalid_type():
 
 
 if __name__ == '__main__':
+    test_to_number_eager()
     test_to_number_typical_case_integral()
     test_to_number_typical_case_non_integral()
     test_to_number_boundaries_integral()

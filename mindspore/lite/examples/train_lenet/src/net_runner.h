@@ -21,10 +21,15 @@
 #include <iomanip>
 #include <map>
 #include <vector>
+#include <memory>
 #include <string>
-#include "include/train_session.h"
+#include "include/train/train_loop.h"
+#include "include/train/accuracy_metrics.h"
 #include "include/ms_tensor.h"
-#include "src/dataset.h"
+#include "include/datasets.h"
+
+using mindspore::dataset::Dataset;
+using mindspore::lite::AccuracyMetrics;
 
 class NetRunner {
  public:
@@ -37,25 +42,25 @@ class NetRunner {
   void InitAndFigureInputs();
   int InitDB();
   int TrainLoop();
-  std::vector<int> FillInputData(const std::vector<DataLabelTuple> &dataset, bool is_train_set = false) const;
-  float CalculateAccuracy(int max_tests = -1) const;
+  float CalculateAccuracy(int max_tests = 0);
   float GetLoss() const;
   mindspore::tensor::MSTensor *SearchOutputsForSize(size_t size) const;
 
-  DataSet ds_;
   mindspore::session::TrainSession *session_ = nullptr;
+  mindspore::session::TrainLoop *loop_ = nullptr;
+
+  std::shared_ptr<Dataset> train_ds_;
+  std::shared_ptr<Dataset> test_ds_;
+  std::shared_ptr<AccuracyMetrics> acc_metrics_;
 
   std::string ms_file_ = "";
   std::string data_dir_ = "";
-  size_t data_size_ = 0;
-  size_t batch_size_ = 0;
-  unsigned int cycles_ = 100;
-  int data_index_ = 0;
-  int label_index_ = -1;
-  int num_of_classes_ = 0;
+  unsigned int epochs_ = 10;
   bool verbose_ = false;
   int save_checkpoint_ = 0;
-  static unsigned int seed_;
+  int batch_size_ = 32;
+  int h_ = 32;
+  int w_ = 32;
 };
 
 #endif  // MINDSPORE_LITE_EXAMPLES_TRAIN_LENET_SRC_NET_RUNNER_H_

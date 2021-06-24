@@ -50,12 +50,12 @@ MaskRCNN是一个两级目标检测网络，作为FasterRCNN的扩展模型，�
     - 注释：241M；包括实例、字幕、人物关键点等
 
 - 数据格式：图像及JSON文件
-    - 注：数据在[dataset.py](http://dataset.py/)中处理。
+    - 注：数据在`dataset.py`中处理。
 
 # 环境要求
 
 - 硬件（昇腾处理器）
-    - 采用昇腾处理器搭建硬件环境。如需试用昇腾处理器，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx)至ascend@huawei.com，审核通过即可获得资源。
+    - 采用昇腾处理器搭建硬件环境。
 - 框架
     - [MindSpore](https://gitee.com/mindspore/mindspore)
 - 获取基础镜像
@@ -111,7 +111,7 @@ pip install mmcv=0.2.14
     注：
     1. 为加快数据预处理速度，MindSpore提供了MindRecord数据格式。因此，训练前首先需要生成基于COCO2017数据集的MindRecord文件。COCO2017原始数据集转换为MindRecord格式大概需要4小时。
     2. 进行分布式训练前，需要提前创建JSON格式的[hccl配置文件](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/utils/hccl_tools)。
-    3. PRETRAINED_CKPT是一个ResNet50检查点，通过ImageNet2012训练。
+    3. PRETRAINED_CKPT是一个ResNet50检查点，通过ImageNet2012训练。你可以使用ModelZoo中 [resnet50](https://gitee.com/qujianwei/mindspore/tree/master/model_zoo/official/cv/resnet) 脚本来训练, 然后使用src/convert_checkpoint.py把训练好的resnet50的权重文件转换为可加载的权重文件。
 
 4. 执行评估脚本。
    训练结束后，按照如下步骤启动评估：
@@ -199,6 +199,7 @@ bash run_eval.sh [VALIDATION_JSON_FILE] [CHECKPOINT_PATH]
       └─rpn.py                            # 区域候选网络
     ├─aipp.cfg                            #aipp 配置文件
     ├─config.py                           # 网络配置
+    ├─convert_checkpoint.py               # 转换预训练checkpoint文件
     ├─dataset.py                          # 数据集工具
     ├─lr_schedule.py                      # 学习率生成器
     ├─network_define.py                   # MaskRCNN的网络定义
@@ -454,6 +455,8 @@ sh run_eval.sh [VALIDATION_ANN_FILE_JSON] [CHECKPOINT_PATH]
 
 > 关于COCO2017数据集，VALIDATION_ANN_FILE_JSON参考数据集目录下的annotations/instances_val2017.json文件。  
 > 检查点可在训练过程中生成并保存，其文件夹名称以“train/checkpoint”或“train_parallel*/checkpoint”开头。
+>
+> 数据集中图片的数量要和VALIDATION_ANN_FILE_JSON文件中标记数量一致，否则精度结果展示格式可能出现异常。
 
 ### 评估结果
 
@@ -552,38 +555,38 @@ Accumulating evaluation results...
 
 ### 训练性能
 
-| 参数                 | MaskRCNN                                                  |
-
-| 模型版本              | V1                                                          |
-| 资源                   | Ascend 910；CPU： 2.60GHz，192核；内存：755G              |
-| 上传日期              | 2020-08-01                                 |
-| MindSpore版本          | 0.6.0-alpha                                                 |
-| 数据集                    | COCO2017                                                    |
-| 训练参数        | epoch=12，batch_size=2                                   |
-| 优化器                  | SGD                                                         |
-| 损失函数              | Softmax交叉熵，Sigmoid交叉熵，SmoothL1Loss   |
-| 速度                      | 单卡：250毫秒/步；8P: 260毫秒/步                        |
-| 总时长                 | 单卡：52小时；8卡：6.6小时                             |
-| 参数（M）             | 280                                                         |
-| 脚本                    | <https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/maskrcnn> |
+| 参数                  | MaskRCNN                                                  |
+| -------------------   | --------------------------------------------------------- |
+| 模型版本              | V1                                                        |
+| 资源                  | Ascend 910；CPU： 2.60GHz，192核；内存：755G              |
+| 上传日期              | 2020-08-01                                                |
+| MindSpore版本         | 0.6.0-alpha                                               |
+| 数据集                | COCO2017                                                  |
+| 训练参数              | epoch=12，batch_size=2                                    |
+| 优化器                | SGD                                                       |
+| 损失函数              | Softmax交叉熵，Sigmoid交叉熵，SmoothL1Loss                |
+| 速度                  | 单卡：250毫秒/步；8P: 260毫秒/步                          |
+| 总时长                | 单卡：52小时；8卡：6.6小时                                |
+| 参数（M）             | 280                                                       |
+| 脚本                  | <https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/maskrcnn> |
 
 ### 评估性能
 
-| 参数          | MaskRCNN                    |
-| ------------------- | --------------------------- |
-| 模型版本       | V1                          |
-| 资源            | Ascend 910                  |
-| 上传日期       | 2020-08-01 |
-| MindSpore版本   | 0.6.0-alpha                 |
-| 数据集             | COCO2017                    |
-| 批次大小          | 2                           |
-| 输出             | mAP                         |
-| 精确度            | 交并比（IoU）=0.50:0.95 32.4%         |
-| 推理模型 | 254M（.ckpt文件）           |
+| 参数                  | MaskRCNN                      |
+| --------------------- | ----------------------------- |
+| 模型版本              | V1                            |
+| 资源                  | Ascend 910                    |
+| 上传日期              | 2020-08-01                    |
+| MindSpore版本         | 0.6.0-alpha                   |
+| 数据集                | COCO2017                      |
+| 批次大小              | 2                             |
+| 输出                  | mAP                           |
+| 精确度                | 交并比（IoU）=0.50:0.95 32.4% |
+| 推理模型              | 254M（.ckpt文件）             |
 
 # 随机情况说明
 
-[dataset.py](http://dataset.py/)中设置了“create_dataset”函数内的种子，同时还使用[train.py](http://train.py/)中的随机种子进行权重初始化。
+`dataset.py`中设置了“create_dataset”函数内的种子，同时还使用`train.py`中的随机种子进行权重初始化。
 
 # ModelZoo主页
 

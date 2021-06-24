@@ -17,14 +17,49 @@
 #include "src/net_runner.h"
 #include <math.h>
 #include <getopt.h>
+#include <stdio.h>
 #include <cstring>
 #include <iostream>
 #include <fstream>
+#include <utility>
 #include "include/context.h"
+#include "include/train/loss_monitor.h"
+#include "include/train/ckpt_saver.h"
+#include "include/train/lr_scheduler.h"
+#include "include/train/accuracy_metrics.h"
+#include "include/train/classification_train_accuracy_monitor.h"
 #include "src/utils.h"
+#include "include/datasets.h"
+#include "include/vision_lite.h"
+#include "include/transforms.h"
 
-unsigned int NetRunner::seed_ = time(NULL);
-// Definition of callback function after forwarding operator.
+using mindspore::dataset::Dataset;
+using mindspore::dataset::Mnist;
+using mindspore::dataset::TensorOperation;
+using mindspore::dataset::transforms::TypeCast;
+using mindspore::dataset::vision::Normalize;
+using mindspore::dataset::vision::Resize;
+using mindspore::lite::AccuracyMetrics;
+using mindspore::session::TrainLoopCallBack;
+using mindspore::session::TrainLoopCallBackData;
+
+class Rescaler : public mindspore::session::TrainLoopCallBack {
+ public:
+  explicit Rescaler(float scale) : scale_(scale) {
+    if (scale_ == 0) scale_ = 1.0;
+  }
+  ~Rescaler() override = default;
+  void StepBegin(const mindspore::session::TrainLoopCallBackData &cb_data) override {
+    auto inputs = cb_data.session_->GetInputs();
+    auto *input_data = reinterpret_cast<float *>(inputs.at(0)->MutableData());
+    for (int k = 0; k < inputs.at(0)->ElementsNum(); k++) input_data[k] /= scale_;
+  }
+
+ private:
+  float scale_ = 1.0;
+};
+
+// Definition of verbose callback function after forwarding operator.
 bool after_callback(const std::vector<mindspore::tensor::MSTensor *> &after_inputs,
                     const std::vector<mindspore::tensor::MSTensor *> &after_outputs,
                     const mindspore::CallBackParam &call_param) {
@@ -54,136 +89,85 @@ bool after_callback(const std::vector<mindspore::tensor::MSTensor *> &after_inpu
 }
 
 NetRunner::~NetRunner() {
-  if (session_ != nullptr) delete session_;
+  if (loop_ != nullptr) delete loop_;
 }
 
 void NetRunner::InitAndFigureInputs() {
   mindspore::lite::Context context;
   context.device_list_[0].device_info_.cpu_device_info_.cpu_bind_mode_ = mindspore::lite::NO_BIND;
-  context.thread_num_ = 1;
+  context.device_list_[0].device_info_.cpu_device_info_.enable_float16_ = false;
+  context.device_list_[0].device_type_ = mindspore::lite::DT_CPU;
+  context.thread_num_ = 2;
 
   session_ = mindspore::session::TrainSession::CreateSession(ms_file_, &context);
   MS_ASSERT(nullptr != session_);
+  loop_ = mindspore::session::TrainLoop::CreateTrainLoop(session_);
+
+  acc_metrics_ = std::shared_ptr<AccuracyMetrics>(new AccuracyMetrics);
+
+  loop_->Init({acc_metrics_.get()});
 
   auto inputs = session_->GetInputs();
   MS_ASSERT(inputs.size() > 1);
-  data_index_ = 0;
-  label_index_ = 1;
-  batch_size_ = inputs[data_index_]->shape()[0];
-  data_size_ = inputs[data_index_]->Size() / batch_size_;  // in bytes
-  if (verbose_) {
-    std::cout << "data size: " << data_size_ << std::endl << "batch size: " << batch_size_ << std::endl;
-  }
+  auto nhwc_input_dims = inputs.at(0)->shape();
+  MS_ASSERT(nhwc_input_dims.size() == 4);
+  batch_size_ = nhwc_input_dims.at(0);
+  h_ = nhwc_input_dims.at(1);
+  w_ = nhwc_input_dims.at(2);
 }
 
-mindspore::tensor::MSTensor *NetRunner::SearchOutputsForSize(size_t size) const {
-  auto outputs = session_->GetOutputs();
-  for (auto it = outputs.begin(); it != outputs.end(); ++it) {
-    if (it->second->ElementsNum() == size) return it->second;
-  }
-  std::cout << "Model does not have an output tensor with size " << size << std::endl;
-  return nullptr;
-}
+float NetRunner::CalculateAccuracy(int max_tests) {
+  test_ds_ = Mnist(data_dir_ + "/test", "all");
+  TypeCast typecast_f("float32");
+  Resize resize({h_, w_});
+  test_ds_ = test_ds_->Map({&resize, &typecast_f}, {"image"});
 
-std::vector<int> NetRunner::FillInputData(const std::vector<DataLabelTuple> &dataset, bool serially) const {
-  std::vector<int> labels_vec;
-  static unsigned int idx = 1;
-  int total_size = dataset.size();
+  TypeCast typecast("int32");
+  test_ds_ = test_ds_->Map({&typecast}, {"label"});
+  test_ds_ = test_ds_->Batch(batch_size_, true);
 
-  auto inputs = session_->GetInputs();
-  char *input_data = reinterpret_cast<char *>(inputs.at(data_index_)->MutableData());
-  auto labels = reinterpret_cast<float *>(inputs.at(label_index_)->MutableData());
-  MS_ASSERT(total_size > 0);
-  MS_ASSERT(input_data != nullptr);
-  std::fill(labels, labels + inputs.at(label_index_)->ElementsNum(), 0.f);
-  for (int i = 0; i < batch_size_; i++) {
-    if (serially) {
-      idx = ++idx % total_size;
-    } else {
-      idx = rand_r(&seed_) % total_size;
-    }
-    int label = 0;
-    char *data = nullptr;
-    std::tie(data, label) = dataset[idx];
-    std::memcpy(input_data + i * data_size_, data, data_size_);
-    labels[i * num_of_classes_ + label] = 1.0;  // Model expects labels in onehot representation
-    labels_vec.push_back(label);
-  }
+  Rescaler rescale(255.0);
 
-  return labels_vec;
-}
+  loop_->Eval(test_ds_.get(), std::vector<TrainLoopCallBack *>{&rescale});
+  std::cout << "Eval Accuracy is " << acc_metrics_->Eval() << std::endl;
 
-float NetRunner::CalculateAccuracy(int max_tests) const {
-  float accuracy = 0.0;
-  const std::vector<DataLabelTuple> test_set = ds_.test_data();
-  int tests = test_set.size() / batch_size_;
-  if (max_tests != -1 && tests < max_tests) tests = max_tests;
-
-  session_->Eval();
-  for (int i = 0; i < tests; i++) {
-    auto labels = FillInputData(test_set, (max_tests == -1));
-    session_->RunGraph();
-    auto outputsv = SearchOutputsForSize(batch_size_ * num_of_classes_);
-    MS_ASSERT(outputsv != nullptr);
-    auto scores = reinterpret_cast<float *>(outputsv->MutableData());
-    for (int b = 0; b < batch_size_; b++) {
-      int max_idx = 0;
-      float max_score = scores[num_of_classes_ * b];
-      for (int c = 0; c < num_of_classes_; c++) {
-        if (scores[num_of_classes_ * b + c] > max_score) {
-          max_score = scores[num_of_classes_ * b + c];
-          max_idx = c;
-        }
-      }
-      if (labels[b] == max_idx) accuracy += 1.0;
-    }
-  }
-  session_->Train();
-  accuracy /= static_cast<float>(batch_size_ * tests);
-  return accuracy;
+  return 0.0;
 }
 
 int NetRunner::InitDB() {
-  if (data_size_ != 0) ds_.set_expected_data_size(data_size_);
-  int ret = ds_.Init(data_dir_, DS_MNIST_BINARY);
-  num_of_classes_ = ds_.num_of_classes();
-  if (ds_.test_data().size() == 0) {
+  train_ds_ = Mnist(data_dir_ + "/train", "all");
+
+  TypeCast typecast_f("float32");
+  Resize resize({h_, w_});
+  train_ds_ = train_ds_->Map({&resize, &typecast_f}, {"image"});
+
+  TypeCast typecast("int32");
+  train_ds_ = train_ds_->Map({&typecast}, {"label"});
+
+  train_ds_ = train_ds_->Shuffle(2);
+  train_ds_ = train_ds_->Batch(batch_size_, true);
+
+  if (verbose_) {
+    std::cout << "DatasetSize is " << train_ds_->GetDatasetSize() << std::endl;
+  }
+  if (train_ds_->GetDatasetSize() == 0) {
     std::cout << "No relevant data was found in " << data_dir_ << std::endl;
-    MS_ASSERT(ds_.test_data().size() != 0);
+    MS_ASSERT(train_ds_->GetDatasetSize() != 0);
   }
 
-  return ret;
-}
-
-float NetRunner::GetLoss() const {
-  auto outputsv = SearchOutputsForSize(1);  // Search for Loss which is a single value tensor
-  MS_ASSERT(outputsv != nullptr);
-  auto loss = reinterpret_cast<float *>(outputsv->MutableData());
-  return loss[0];
+  return 0;
 }
 
 int NetRunner::TrainLoop() {
-  session_->Train();
-  float min_loss = 1000.;
-  float max_acc = 0.;
-  for (int i = 0; i < cycles_; i++) {
-    FillInputData(ds_.train_data());
-    session_->RunGraph(nullptr, verbose_ ? after_callback : nullptr);
-    float loss = GetLoss();
-    if (min_loss > loss) min_loss = loss;
+  struct mindspore::lite::StepLRLambda step_lr_lambda(1, 0.7);
+  mindspore::lite::LRScheduler step_lr_sched(mindspore::lite::StepLRLambda, static_cast<void *>(&step_lr_lambda), 1);
 
-    if (save_checkpoint_ != 0 && (i + 1) % save_checkpoint_ == 0) {
-      auto cpkt_fn = ms_file_.substr(0, ms_file_.find_last_of('.')) + "_trained_" + std::to_string(i + 1) + ".ms";
-      session_->SaveToFile(cpkt_fn);
-    }
+  mindspore::lite::LossMonitor lm(100);
+  mindspore::lite::ClassificationTrainAccuracyMonitor am(1);
+  mindspore::lite::CkptSaver cs(1000, std::string("lenet"));
+  Rescaler rescale(255.0);
 
-    if ((i + 1) % 100 == 0) {
-      float acc = CalculateAccuracy(10);
-      if (max_acc < acc) max_acc = acc;
-      std::cout << i + 1 << ":\tLoss is " << std::setw(7) << loss << " [min=" << min_loss << "] "
-                << " max_acc=" << max_acc << std::endl;
-    }
-  }
+  loop_->Train(epochs_, train_ds_.get(), std::vector<TrainLoopCallBack *>{&rescale, &lm, &cs, &am, &step_lr_sched});
   return 0;
 }
 
@@ -194,18 +178,17 @@ int NetRunner::Main() {
 
   TrainLoop();
 
-  float acc = CalculateAccuracy();
-  std::cout << "accuracy = " << acc << std::endl;
+  CalculateAccuracy();
 
-  if (cycles_ > 0) {
-    auto trained_fn = ms_file_.substr(0, ms_file_.find_last_of('.')) + "_trained_" + std::to_string(cycles_) + ".ms";
+  if (epochs_ > 0) {
+    auto trained_fn = ms_file_.substr(0, ms_file_.find_last_of('.')) + "_trained.ms";
     session_->SaveToFile(trained_fn);
   }
   return 0;
 }
 
 void NetRunner::Usage() {
-  std::cout << "Usage: net_runner -f <.ms model file> -d <data_dir> [-c <num of training cycles>] "
+  std::cout << "Usage: net_runner -f <.ms model file> -d <data_dir> [-e <num of training epochs>] "
             << "[-v (verbose mode)] [-s <save checkpoint every X iterations>]" << std::endl;
 }
 
@@ -217,7 +200,7 @@ bool NetRunner::ReadArgs(int argc, char *argv[]) {
         ms_file_ = std::string(optarg);
         break;
       case 'e':
-        cycles_ = atoi(optarg);
+        epochs_ = atoi(optarg);
         break;
       case 'd':
         data_dir_ = std::string(optarg);

@@ -26,6 +26,7 @@
 
 namespace mindspore {
 namespace device {
+class Bucket;
 namespace cpu {
 class CPUSimpleMemPlan;
 class CPUMemoryManager;
@@ -66,8 +67,8 @@ class DeviceAddress : public mindspore::DeviceSync {
   virtual DeviceAddressStatus status() const { return DeviceAddressStatus::kInDevice; }
   virtual DeviceAddressType DeviceType() const { return DeviceAddressType::kUnknown; }
   void *GetMutablePtr() const override { return ptr_; }
-  virtual bool DumpMemToFile(bool dump_mode, const std::string &filepath, const std::string &host_fmt,
-                             const ShapeVector &host_shape, TypeId host_type) const {
+  virtual bool DumpMemToFile(const std::string &filepath, const std::string &host_fmt, const ShapeVector &host_shape,
+                             TypeId host_type, bool trans_flag) const {
     return true;
   }
 #ifdef ENABLE_DEBUGGER
@@ -100,6 +101,7 @@ class DeviceAddress : public mindspore::DeviceSync {
   friend class mindspore::device::ascend::AscendKernelRuntime;
   friend class mindspore::device::ascend::AscendMemoryManager;
   friend class mindspore::device::ascend::DataDumper;
+  friend class mindspore::device::Bucket;
 };
 
 using DeviceAddressPtr = std::shared_ptr<DeviceAddress>;

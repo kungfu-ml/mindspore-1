@@ -1,26 +1,27 @@
 # Contents
 
-- [YOLOv3-DarkNet53 Description](#yolov3-darknet53-description)
-- [Model Architecture](#model-architecture)
-- [Dataset](#dataset)
-- [Environment Requirements](#environment-requirements)
-- [Quick Start](#quick-start)
-- [Script Description](#script-description)
-    - [Script and Sample Code](#script-and-sample-code)
-    - [Script Parameters](#script-parameters)
-    - [Training Process](#training-process)
-        - [Training](#training)
-        - [Distributed Training](#distributed-training)  
-    - [Evaluation Process](#evaluation-process)
-        - [Evaluation](#evaluation)
-- [Model Description](#model-description)
-    - [Performance](#performance)  
-        - [Evaluation Performance](#evaluation-performance)
-        - [Inference Performance](#evaluation-performance)
-- [Description of Random Situation](#description-of-random-situation)
-- [ModelZoo Homepage](#modelzoo-homepage)
+- [Contents](#contents)
+    - [YOLOv3-DarkNet53 Description](#yolov3-darknet53-description)
+    - [Model Architecture](#model-architecture)
+    - [Dataset](#dataset)
+    - [Environment Requirements](#environment-requirements)
+    - [Quick Start](#quick-start)
+    - [Script Description](#script-description)
+        - [Script and Sample Code](#script-and-sample-code)
+        - [Script Parameters](#script-parameters)
+        - [Training Process](#training-process)
+            - [Training](#training)
+            - [Distributed Training](#distributed-training)
+        - [Evaluation Process](#evaluation-process)
+            - [Evaluation](#evaluation)
+    - [Model Description](#model-description)
+        - [Performance](#performance)
+            - [Evaluation Performance](#evaluation-performance)
+            - [Inference Performance](#inference-performance)
+    - [Description of Random Situation](#description-of-random-situation)
+    - [ModelZoo Homepage](#modelzoo-homepage)
 
-# [YOLOv3-DarkNet53 Description](#contents)
+## [YOLOv3-DarkNet53 Description](#contents)
 
 You only look once (YOLO) is a state-of-the-art, real-time object detection system. YOLOv3 is extremely fast and accurate.
 
@@ -32,11 +33,11 @@ YOLOv3 uses a few tricks to improve training and increase performance, including
 [Paper](https://pjreddie.com/media/files/papers/YOLOv3.pdf):  YOLOv3: An Incremental Improvement. Joseph Redmon, Ali Farhadi,
 University of Washington
 
-# [Model Architecture](#contents)
+## [Model Architecture](#contents)
 
 YOLOv3 use DarkNet53 for performing feature extraction, which is a hybrid approach between the network used in YOLOv2, Darknet-19, and that newfangled residual network stuff. DarkNet53 uses successive 3 × 3 and 1 × 1 convolutional layers and has some shortcut connections as well and is significantly larger. It has 53 convolutional layers.
 
-# [Dataset](#contents)
+## [Dataset](#contents)
 
 Note that you can run the scripts based on the dataset mentioned in original paper or widely used in relevant domain/network architecture. In the following sections, we will introduce how to run the scripts using the related dataset below.
 
@@ -44,28 +45,61 @@ Dataset used: [COCO2014](https://cocodataset.org/#download)
 
 - Dataset size: 19G, 123,287 images, 80 object categories.
     - Train：13G, 82,783 images
-    - Val：6GM, 40,504 images
+    - Val：6G, 40,504 images
     - Annotations: 241M, Train/Val annotations
-- Data format：zip files
-  - Note：Data will be processed in yolo_dataset.py, and unzip files before uses it.
+- The directory structure is as follows.
 
-# [Environment Requirements](#contents)
+    ```text
+        ├── dataset
+            ├── coco2014
+                ├── annotations
+                │   ├─ train.json
+                │   └─ val.json
+                ├─ train
+                │   ├─picture1.jpg
+                │   ├─ ...
+                │   └─picturen.jpg
+                └─ val
+                    ├─picture1.jpg
+                    ├─ ...
+                    └─picturen.jpg
+    ```
+
+## [Environment Requirements](#contents)
 
 - Hardware（Ascend/GPU）
-- Prepare hardware environment with Ascend or GPU processor. If you want to try Ascend  , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend or GPU processor.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
-  - [MindSpore Tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
-  - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
+    - [MindSpore Tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
+    - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
 
-# [Quick Start](#contents)
+## [Quick Start](#contents)
 
-After installing MindSpore via the official website, you can start training and evaluation in as follows. If running on GPU, please add `--device_target=GPU` in the python command or use the "_gpu" shell script ("xxx_gpu.sh").
+- After installing MindSpore via the official website, you can start training and evaluation in as follows. If running on GPU, please add `--device_target=GPU` in the python command or use the "_gpu" shell script ("xxx_gpu.sh").
+- Prepare the backbone_darknet53.ckpt and hccl_8p.json files, before run network.
+    - Pretrained_backbone can use src/convert_weight.py, convert darknet53.conv.74 to mindspore ckpt.
+
+      ```
+      python convert_weight.py --input_file ./darknet53.conv.74
+      ```
+
+      darknet53.conv.74 can get from [download](https://pjreddie.com/media/files/darknet53.conv.74) .
+      you can use command in linux os.
+
+      ```
+      wget https://pjreddie.com/media/files/darknet53.conv.74
+      ```
+
+    - Genatating hccl_8p.json, Run the script of model_zoo/utils/hccl_tools/hccl_tools.py.
+      The following parameter "[0-8)" indicates that the hccl_8p.json file of cards 0 to 7 is generated.
+
+      ```
+      python hccl_tools.py --device_num "[0,8)"
+      ```
 
 ```network
-# The darknet53_backbone.ckpt in the follow script is got from darknet53 training like paper.
-# pretrained_backbone can use src/convert_weight.py, convert darknet53.conv.74 to mindspore ckpt, darknet53.conv.74 can get from `https://pjreddie.com/media/files/darknet53.conv.74` .
 # The parameter of training_shape define image shape for network, default is "".
 # It means use 10 kinds of shape as input shape, or it can be set some kind of shape.
 # run training example(1p) by python command.
@@ -101,9 +135,9 @@ python eval.py \
 sh run_eval.sh dataset/coco2014/ checkpoint/0-319_102400.ckpt
 ```
 
-# [Script Description](#contents)
+## [Script Description](#contents)
 
-## [Script and Sample Code](#contents)
+### [Script and Sample Code](#contents)
 
 ```contents
 .
@@ -134,7 +168,7 @@ sh run_eval.sh dataset/coco2014/ checkpoint/0-319_102400.ckpt
   └─train.py                          # train net
 ```
 
-## [Script Parameters](#contents)
+### [Script Parameters](#contents)
 
 ```parameters
 Major parameters in train.py as follow.
@@ -197,9 +231,9 @@ optional arguments:
                         Resize rate for multi-scale training. Default: None
 ```
 
-## [Training Process](#contents)
+### [Training Process](#contents)
 
-### Training
+#### Training
 
 ```command
 python train.py \
@@ -230,7 +264,7 @@ After training, you'll get some checkpoint files under the outputs folder by def
 
 The model checkpoint will be saved in outputs directory.
 
-### Distributed Training
+#### Distributed Training
 
 For Ascend device, distributed training example(8p) by shell script
 
@@ -261,9 +295,9 @@ epoch[319], iter[102300], loss:31.952403, 496.02 imgs/sec, lr:2.409552052995423e
 ...
 ```
 
-## [Evaluation Process](#contents)
+### [Evaluation Process](#contents)
 
-### Evaluation
+#### Evaluation
 
 Before running the command below. If running on GPU, please add `--device_target=GPU` in the python command or use the "_gpu" shell script ("xxx_gpu.sh").
 
@@ -277,6 +311,8 @@ sh run_eval.sh dataset/coco2014/ checkpoint/0-319_102400.ckpt
 ```
 
 The above python command will run in the background. You can view the results through the file "log.txt". The mAP of the test dataset will be as follows:
+
+This the standard format from `pycocotools`, you can refer to [cocodataset](https://cocodataset.org/#detection-eval) for more detail.
 
 ```eval log
 # log.txt
@@ -295,48 +331,48 @@ The above python command will run in the background. You can view the results th
  Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ] = 0.551
 ```
 
-# [Model Description](#contents)
+## [Model Description](#contents)
 
-## [Performance](#contents)
+### [Performance](#contents)
 
-### Evaluation Performance
+#### Evaluation Performance
 
 | Parameters                 | YOLO                                                        |YOLO                                                         |
 | -------------------------- | ----------------------------------------------------------- |------------------------------------------------------------ |
 | Model Version              | YOLOv3                                                      |YOLOv3                                                       |
 | Resource                   | Ascend 910; CPU 2.60GHz, 192cores; Memory, 755G             | NV SMX2 V100-16G; CPU 2.10GHz, 96cores; Memory, 251G        |
 | uploaded Date              | 09/15/2020 (month/day/year)                                 | 09/02/2020 (month/day/year)                                 |
-| MindSpore Version          | 1.0.0                                                       | 1.0.0                                                       |
+| MindSpore Version          | 1.1.1                                                       | 1.1.1                                                       |
 | Dataset                    | COCO2014                                                    | COCO2014                                                    |
-| Training Parameters        | epoch=320, batch_size=32, lr=0.001, momentum=0.9            | epoch=320, batch_size=32, lr=0.001, momentum=0.9            |
+| Training Parameters        | epoch=320, batch_size=32, lr=0.001, momentum=0.9            | epoch=320, batch_size=32, lr=0.1, momentum=0.9            |
 | Optimizer                  | Momentum                                                    | Momentum                                                    |
 | Loss Function              | Sigmoid Cross Entropy with logits                           | Sigmoid Cross Entropy with logits                           |
 | outputs                    | boxes and label                                             | boxes and label                                             |
 | Loss                       | 34                                                          | 34                                                          |
 | Speed                      | 1pc: 350 ms/step;                                           | 1pc: 600 ms/step;                                           |
-| Total time                 | 8pc: 18.5 hours                                             | 8pc: 18 hours(shape=416)                                    |
+| Total time                 | 8pc: 13 hours                                               | 8pc: 18 hours(shape=416)                                    |
 | Parameters (M)             | 62.1                                                        | 62.1                                                        |
 | Checkpoint for Fine tuning | 474M (.ckpt file)                                           | 474M (.ckpt file)                                           |
 | Scripts                    | https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/yolov3_darknet53 | https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/yolov3_darknet53 |
 
-### Inference Performance
+#### Inference Performance
 
 | Parameters          | YOLO                        |YOLO                          |
 | ------------------- | --------------------------- |------------------------------|
 | Model Version       | YOLOv3                      | YOLOv3                       |
 | Resource            | Ascend 910                  | NV SMX2 V100-16G             |
 | Uploaded Date       | 09/15/2020 (month/day/year) | 08/20/2020 (month/day/year)  |
-| MindSpore Version   | 1.0.0                       | 1.0.0                        |
+| MindSpore Version   | 1.1.1                       | 1.1.1                        |
 | Dataset             | COCO2014, 40,504  images    | COCO2014, 40,504  images     |
 | batch_size          | 1                           | 1                            |
 | outputs             | mAP                         | mAP                          |
 | Accuracy            | 8pcs: 31.1%                 | 8pcs: 29.7%~30.3% (shape=416)|
 | Model for inference | 474M (.ckpt file)           | 474M (.ckpt file)            |
 
-# [Description of Random Situation](#contents)
+## [Description of Random Situation](#contents)
 
 There are random seeds in distributed_sampler.py, transforms.py, yolo_dataset.py files.
 
-# [ModelZoo Homepage](#contents)
+## [ModelZoo Homepage](#contents)
 
  Please check the official [homepage](https://gitee.com/mindspore/mindspore/tree/master/model_zoo).

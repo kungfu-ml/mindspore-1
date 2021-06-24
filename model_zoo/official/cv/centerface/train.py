@@ -33,6 +33,7 @@ from mindspore.train.callback import ModelCheckpoint, RunContext
 from mindspore.train.callback import _InternalCallbackParam, CheckpointConfig
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 from mindspore.profiler.profiling import Profiler
+from mindspore.common import set_seed
 
 from src.utils import get_logger
 from src.utils import AverageMeter
@@ -47,6 +48,7 @@ from src.config import ConfigCenterface
 from src.centerface import CenterFaceWithLossCell, TrainingWrapper
 from src.dataset import GetDataLoader
 
+set_seed(1)
 dev_id = int(os.getenv('DEVICE_ID'))
 context.set_context(mode=context.GRAPH_MODE, enable_auto_mixed_precision=False,
                     device_target="Ascend", save_graphs=False, device_id=dev_id, reserve_class_name_in_scope=False)
@@ -130,7 +132,7 @@ if __name__ == "__main__":
         args.rank = get_rank()
         args.group_size = get_group_size()
 
-    # select for master rank save ckpt or all rank save, compatiable for model parallel
+    # select for master rank save ckpt or all rank save, compatible for model parallel
     args.rank_save_ckpt_flag = 0
     if args.is_save_on_master:
         if args.rank == 0:
@@ -157,7 +159,6 @@ if __name__ == "__main__":
         parallel_mode = ParallelMode.STAND_ALONE
         degree = 1
 
-    # context.set_auto_parallel_context(parallel_mode=parallel_mode, device_num=degree, parameter_broadcast=True, gradients_mean=True)
     # Notice: parameter_broadcast should be supported, but current version has bugs, thus been disabled.
     # To make sure the init weight on all npu is the same, we need to set a static seed in default_recurisive_init when weight initialization
     context.set_auto_parallel_context(parallel_mode=parallel_mode, gradients_mean=True, device_num=degree)

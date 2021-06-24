@@ -26,11 +26,11 @@ __device__ __forceinline__ half SqrtFunc(half input) {
   return hsqrt(input);
 }
 
-template <typename T>
+template <typename T, typename S, typename G>
 __global__ void ApplyAdagradKernel(const size_t size,
                                    const bool update_slots,
-                                   const T *learning_rate,
-                                   const T *gradient,
+                                   const S *learning_rate,
+                                   const G *gradient,
                                    T *variable,
                                    T *accumulation) {
   for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x) {
@@ -41,11 +41,71 @@ __global__ void ApplyAdagradKernel(const size_t size,
   }
 }
 
-template <typename T>
+template <>
+__global__ void ApplyAdagradKernel(const size_t size,
+                                   const bool update_slots,
+                                   const float *learning_rate,
+                                   const half *gradient,
+                                   half *variable,
+                                   half *accumulation) {
+  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x) {
+    if (update_slots) {
+      accumulation[i] += gradient[i] * gradient[i];
+    }
+    variable[i] -= __float2half(learning_rate[0]) * gradient[i] / SqrtFunc(accumulation[i]);
+  }
+}
+
+template <>
+__global__ void ApplyAdagradKernel(const size_t size,
+                                   const bool update_slots,
+                                   const float *learning_rate,
+                                   const half *gradient,
+                                   float *variable,
+                                   float *accumulation) {
+  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x) {
+    if (update_slots) {
+      accumulation[i] += __half2float(gradient[i]) * __half2float(gradient[i]);
+    }
+    variable[i] -= learning_rate[0] * __half2float(gradient[i]) / SqrtFunc(accumulation[i]);
+  }
+}
+
+template <>
+__global__ void ApplyAdagradKernel(const size_t size,
+                                   const bool update_slots,
+                                   const half *learning_rate,
+                                   const float *gradient,
+                                   float *variable,
+                                   float *accumulation) {
+  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x) {
+    if (update_slots) {
+      accumulation[i] += gradient[i] * gradient[i];
+    }
+    variable[i] -= __half2float(learning_rate[0]) * gradient[i] / SqrtFunc(accumulation[i]);
+  }
+}
+
+template <>
+__global__ void ApplyAdagradKernel(const size_t size,
+                                   const bool update_slots,
+                                   const float *learning_rate,
+                                   const float *gradient,
+                                   half *variable,
+                                   half *accumulation) {
+  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += gridDim.x * blockDim.x) {
+    if (update_slots) {
+      accumulation[i] += __float2half(gradient[i]) * __float2half(gradient[i]);
+    }
+    variable[i] -= __float2half(learning_rate[0]) * __float2half(gradient[i]) / SqrtFunc(accumulation[i]);
+  }
+}
+
+template <typename T, typename S, typename G>
 void ApplyAdagrad(const size_t size,
                   const bool update_slots,
-                  const T *learning_rate,
-                  const T *gradient,
+                  const S *learning_rate,
+                  const G *gradient,
                   T *variable,
                   T *accumulation,
                   cudaStream_t cuda_stream) {
@@ -53,7 +113,7 @@ void ApplyAdagrad(const size_t size,
           size, update_slots, learning_rate, gradient, variable, accumulation);
 }
 
-template void ApplyAdagrad<float>(const size_t size,
+template void ApplyAdagrad<float, float, float>(const size_t size,
                                   const bool update_slots,
                                   const float *learning_rate,
                                   const float *gradient,
@@ -61,10 +121,42 @@ template void ApplyAdagrad<float>(const size_t size,
                                   float *accumulation,
                                   cudaStream_t cuda_stream);
 
-template void ApplyAdagrad<half>(const size_t size,
+template void ApplyAdagrad<half, half, half>(const size_t size,
                                  const bool update_slots,
                                  const half *learning_rate,
                                  const half *gradient,
+                                 half *variable,
+                                 half *accumulation,
+                                 cudaStream_t cuda_stream);
+
+template void ApplyAdagrad<half, float, half>(const size_t size,
+                                 const bool update_slots,
+                                 const float *learning_rate,
+                                 const half *gradient,
+                                 half *variable,
+                                 half *accumulation,
+                                 cudaStream_t cuda_stream);
+
+template void ApplyAdagrad<float, float, half>(const size_t size,
+                                 const bool update_slots,
+                                 const float *learning_rate,
+                                 const half *gradient,
+                                 float *variable,
+                                 float *accumulation,
+                                 cudaStream_t cuda_stream);
+
+template void ApplyAdagrad<float, half, float>(const size_t size,
+                                 const bool update_slots,
+                                 const half *learning_rate,
+                                 const float *gradient,
+                                 float *variable,
+                                 float *accumulation,
+                                 cudaStream_t cuda_stream);
+
+template void ApplyAdagrad<half, float, float>(const size_t size,
+                                 const bool update_slots,
+                                 const float *learning_rate,
+                                 const float *gradient,
                                  half *variable,
                                  half *accumulation,
                                  cudaStream_t cuda_stream);

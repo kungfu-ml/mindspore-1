@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,17 +13,15 @@
 # limitations under the License.
 # ============================================================================
 """math"""
-import math
 import numpy as np
 from mindspore.ops import operations as P
-from mindspore.ops.operations import _inner_ops as inner
 from mindspore.common.tensor import Tensor
+from mindspore.common._decorator import deprecated
 from mindspore.ops.primitive import constexpr
 from mindspore.ops import functional as F
 from ..cell import Cell
 from ...common import dtype as mstype
 from ..._checkparam import Validator as validator
-
 
 __all__ = ['ReduceLogSumExp',
            'Range',
@@ -74,6 +72,11 @@ class ReduceLogSumExp(Cell):
         - If axis is tuple(int), set as (2, 3), and keep_dims is False,
           the shape of output is :math:`(x_1, x_4, ..., x_R)`.
 
+    Raises:
+        TypeError: If `axis` is not one of int, list, tuple.
+        TypeError: If `keep_dims` is not bool.
+        TypeError: If dtype of `x` is neither float16 nor float32.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -105,6 +108,13 @@ class Range(Cell):
     r"""
     Creates a sequence of numbers in range [start, limit) with step size delta.
 
+    The size of output is :math:`\left \lfloor \frac{limit-start}{delta}  \right \rfloor + 1` and `delta` is the gap
+    between two values in the tensor.
+
+    .. math::
+
+        out_{i+1} = out_{i} +delta
+
     Args:
         start (Union[int, float]): If `limit` is `None`, the value acts as limit in the range and first entry
             defaults to `0`. Otherwise, it acts as first entry in the range.
@@ -116,7 +126,7 @@ class Range(Cell):
         Tensor, the dtype is int if the dtype of `start`, `limit` and `delta` all are int. Otherwise, dtype is float.
 
     Supported Platforms:
-        ``Ascend`` ``CPU``
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> net = nn.Range(1, 8, 2)
@@ -127,42 +137,22 @@ class Range(Cell):
 
     def __init__(self, start, limit=None, delta=1):
         super(Range, self).__init__()
-        validator.check_value_type("start", start, [int, float], self.cls_name)
-        validator.check_value_type("delta", delta, [int, float], self.cls_name)
         if delta == 0:
             raise ValueError("The input of `delta` can not be equal to zero.")
-        if limit is not None:
-            validator.check_value_type("limit", limit, [int, float], self.cls_name)
-            if isinstance(start, int) and isinstance(limit, int) and isinstance(delta, int):
-                self.dtype = mstype.int32
-            else:
-                self.dtype = mstype.float32
+        data = np.arange(start, limit, delta)
+        if data.dtype == np.float:
+            self.ms_dtype = mstype.float32
         else:
-            if isinstance(start, int) and isinstance(delta, int):
-                self.dtype = mstype.int32
-            else:
-                self.dtype = mstype.float32
-        if isinstance(start, int):
-            start = float(start)
-        if isinstance(limit, int):
-            limit = float(limit)
-        if isinstance(delta, int):
-            delta = float(delta)
-        self.range_x = inner.Range(start, limit, delta)
-        if limit is None:
-            length_input = math.ceil(start / delta)
-        else:
-            length_input = math.ceil((limit - start) / delta)
-        self.input_tensor = Tensor(list(range(length_input)), self.dtype)
+            self.ms_dtype = mstype.int32
+        self.result_tensor = Tensor(data, dtype=self.ms_dtype)
 
     def construct(self):
-        range_out = self.range_x(self.input_tensor)
-        return range_out
+        return self.result_tensor
 
 
 class LGamma(Cell):
     r"""
-    Calculates LGamma using Lanczos' approximation refering to "A Precision Approximationof the Gamma Function".
+    Calculates LGamma using Lanczos' approximation referring to "A Precision Approximation of the Gamma Function".
     The algorithm is:
 
     .. math::
@@ -186,18 +176,21 @@ class LGamma(Cell):
 
     Thus, the behaviour of LGamma follows:
     when x > 0.5, return log(Gamma(x))
-    when x < 0.5 and is not an interger, return the real part of Log(Gamma(x)) where Log is the complex logarithm
+    when x < 0.5 and is not an integer, return the real part of Log(Gamma(x)) where Log is the complex logarithm
     when x is an integer less or equal to 0, return +inf
     when x = +/- inf, return +inf
-
-    Supported Platforms:
-        ``Ascend`` ``GPU``
 
     Inputs:
         - **x** (Tensor) - The input tensor. Only float16, float32 are supported.
 
     Outputs:
         Tensor, has the same shape and dtype as the `x`.
+
+    Raises:
+        TypeError: If dtype of `x` is neither float16 nor float32.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_x = Tensor(np.array([2, 3, 4]).astype(np.float32))
@@ -288,17 +281,16 @@ class LGamma(Cell):
 
 class DiGamma(Cell):
     r"""
-    Calculates Digamma using Lanczos' approximation refering to "A Precision Approximationof the Gamma Function".
+    Calculates Digamma using Lanczos' approximation referring to "A Precision Approximation of the Gamma Function".
     The algorithm is:
 
     .. math::
-        digamma(z + 1) = log(t(z)) + A'(z) / A(z) - kLanczosGamma / t(z)
-
-        t(z) = z + kLanczosGamma + 1/2
-
-        A(z) = kBaseLanczosCoeff + \sum_{k=1}^n \frac{kLanczosCoefficients[i]}{z + k}
-
-        A'(z) = \sum_{k=1}^n \frac{kLanczosCoefficients[i]}{{z + k}^2}
+        \begin{array}{ll} \\
+            digamma(z + 1) = log(t(z)) + A'(z) / A(z) - kLanczosGamma / t(z) \\
+            t(z) = z + kLanczosGamma + 1/2 \\
+            A(z) = kBaseLanczosCoeff + \sum_{k=1}^n \frac{kLanczosCoefficients[i]}{z + k} \\
+            A'(z) = \sum_{k=1}^n \frac{kLanczosCoefficients[i]}{{z + k}^2}
+        \end{array}
 
     However, if the input is less than 0.5 use Euler's reflection formula:
 
@@ -306,14 +298,17 @@ class DiGamma(Cell):
 
         digamma(x) = digamma(1 - x) - pi * cot(pi * x)
 
-    Supported Platforms:
-        ``Ascend`` ``GPU``
-
     Inputs:
         - **x** (Tensor[Number]) - The input tensor. Only float16, float32 are supported.
 
     Outputs:
         Tensor, has the same shape and dtype as the `x`.
+
+    Raises:
+        TypeError: If dtype of `x` is neither float16 nor float32.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_x = Tensor(np.array([2, 3, 4]).astype(np.float32))
@@ -568,9 +563,6 @@ class IGamma(Cell):
 
     Above :math:`Q(a, x)` is the upper regularized complete Gamma function.
 
-    Supported Platforms:
-        ``Ascend`` ``GPU``
-
     Inputs:
         - **a** (Tensor) - The input tensor. With float32 data type. `a` should have
           the same dtype with `x`.
@@ -579,6 +571,13 @@ class IGamma(Cell):
 
     Outputs:
         Tensor, has the same dtype as `a` and `x`.
+
+    Raises:
+        TypeError: If dtype of input x and a is not float16 nor float32,
+                   or if x has different dtype with a.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_a = Tensor(np.array([2.0, 4.0, 6.0, 8.0]).astype(np.float32))
@@ -642,15 +641,15 @@ class IGamma(Cell):
 
 class LBeta(Cell):
     r"""
-    This is semantically equal to lgamma(x) + lgamma(y) - lgamma(x + y).
+    This is semantically equal to
+
+    .. math::
+        P(x, y) = lgamma(x) + lgamma(y) - lgamma(x + y).
 
     The method is more accurate for arguments above 8. The reason for accuracy loss in the naive computation
     is catastrophic cancellation between the lgammas. This method avoids the numeric cancellation by explicitly
     decomposing lgamma into the Stirling approximation and an explicit log_gamma_correction, and cancelling
     the large terms from the Striling analytically.
-
-    Supported Platforms:
-        ``Ascend`` ``GPU``
 
     Inputs:
         - **x** (Tensor) - The input tensor. With float16 or float32 data type. `x` should have
@@ -660,6 +659,13 @@ class LBeta(Cell):
 
     Outputs:
         Tensor, has the same dtype as `x` and `y`.
+
+    Raises:
+        TypeError: If dtype of `x` or `y` is neither float16 nor float32,
+                   or if `x` has different dtype with `y`.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> input_x = Tensor(np.array([2.0, 4.0, 6.0, 8.0]).astype(np.float32))
@@ -806,8 +812,10 @@ def matmul_op_select(x1_shape, x2_shape, transpose_x1, transpose_x2):
 
 
 class MatMul(Cell):
-    """
+    r"""
     Multiplies matrix `x1` by matrix `x2`.
+
+    nn.MatMul will be deprecated in future versions. Please use ops.matmul instead.
 
     - If both x1 and x2 are 1-dimensional, the dot product is returned.
     - If the dimensions of x1 and x2 are all not greater than 2,  the matrix-matrix product will be returned. Note if
@@ -816,7 +824,9 @@ class MatMul(Cell):
     - If at least one of x1 and x2 is N-dimensional (N>2), the none-matrix dimensions(batch) of inputs will be
       broadcasted and must be broadcastable. Note if one of 'x1' and 'x2' is 1-dimensional, the argument will first be
       expanded to 2 dimension and then the none-matrix dimensions will be broadcasted. After the matrix multiply, the
-      expanded dimension will be removed.
+      expanded dimension will be removed. For example, if `x1` is a :math:`(j \times 1 \times n \times m)` tensor and
+      `x2` is a :math:`(k \times m \times p)` tensor, the output will be a :math:`(j \times k \times n \times p)`
+      tensor.
 
     Args:
         transpose_x1 (bool): If true, `a` is transposed before multiplication. Default: False.
@@ -828,6 +838,11 @@ class MatMul(Cell):
 
     Outputs:
         Tensor, the shape of the output tensor depends on the dimension of input tensors.
+
+    Raises:
+        TypeError: If `transpose_x1` or `transpose_x2` is not a bool.
+        ValueError: If the column of matrix dimensions of `input_x1` is not equal to
+                    the row of matrix dimensions of `input_x2`.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -841,6 +856,7 @@ class MatMul(Cell):
         (3, 2, 4)
     """
 
+    @deprecated('1.2', 'ops.matmul', False)
     def __init__(self, transpose_x1=False, transpose_x2=False):
         super(MatMul, self).__init__()
 
@@ -904,8 +920,13 @@ class Moments(Cell):
         - **mean** (Tensor) - The mean of input x, with the same date type as input x.
         - **variance** (Tensor) - The variance of input x, with the same date type as input x.
 
+    Raises:
+        TypeError: If `axis` is not one of int, tuple, None.
+        TypeError: If `keep_dims` is neither bool nor None.
+        TypeError: If dtype of `input_x` is neither float16 nor float32.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> net = nn.Moments(axis=3, keep_dims=True)
@@ -936,7 +957,7 @@ class Moments(Cell):
         self.squeeze = P.Squeeze(self.axis)
 
     def construct(self, x):
-        tensor_dtype = x.dtype
+        tensor_dtype = F.dtype(x)
         _check_input_dtype("input x", tensor_dtype, [mstype.float16, mstype.float32], self.cls_name)
         if tensor_dtype == mstype.float16:
             x = self.cast(x, mstype.float32)
@@ -956,15 +977,18 @@ class MatInverse(Cell):
     """
     Calculates the inverse of Positive-Definite Hermitian matrix using Cholesky decomposition.
 
-    Supported Platforms:
-        ``GPU``
-
     Inputs:
         - **a** (Tensor[Number]) - The input tensor. It must be a positive-definite matrix.
           With float16 or float32 data type.
 
     Outputs:
         Tensor, has the same dtype as the `a`.
+
+    Raises:
+        TypeError: If dtype of `a` is neither float16 nor float32.
+
+    Supported Platforms:
+        ``GPU``
 
     Examples:
         >>> input_a = Tensor(np.array([[4, 12, -16], [12, 37, -43], [-16, -43, 98]]).astype(np.float32))
@@ -993,15 +1017,18 @@ class MatDet(Cell):
     """
     Calculates the determinant of Positive-Definite Hermitian matrix using Cholesky decomposition.
 
-    Supported Platforms:
-        ``GPU``
-
     Inputs:
         - **a** (Tensor[Number]) - The input tensor. It must be a positive-definite matrix.
           With float16 or float32 data type.
 
     Outputs:
         Tensor, has the same dtype as the `a`.
+
+    Raises:
+        TypeError: If dtype of `a` is neither float16 nor float32.
+
+    Supported Platforms:
+        ``GPU``
 
     Examples:
         >>> input_a = Tensor(np.array([[4, 12, -16], [12, 37, -43], [-16, -43, 98]]).astype(np.float32))

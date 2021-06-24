@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
-#ifndef MINDSPORE_LITE_SRC_PASS_COMMON_GLLO_UTILS_H_
-#define MINDSPORE_LITE_SRC_PASS_COMMON_GLLO_UTILS_H_
+#ifndef MINDSPORE_LITE_TOOLS_OPTIMIZER_COMMON_GLLO_UTILS_H_
+#define MINDSPORE_LITE_TOOLS_OPTIMIZER_COMMON_GLLO_UTILS_H_
 
 #include <memory>
+#include <string>
 #include <vector>
-#include "src/ops/primitive_c.h"
+#include "ops/primitive_c.h"
 #include "ir/anf.h"
 #include "ir/func_graph.h"
 #include "src/common/utils.h"
@@ -28,17 +29,27 @@
 #include "src/param_value_lite.h"
 #include "tools/converter/converter_context.h"
 
-using PrimitiveCPtr = std::shared_ptr<mindspore::lite::PrimitiveC>;
+using PrimitiveCPtr = std::shared_ptr<mindspore::ops::PrimitiveC>;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
 using mindspore::lite::STATUS;
 namespace mindspore {
 namespace opt {
+inline const PrimitivePtr kPrimReturn = std::make_shared<Primitive>("Return");
+inline const PrimitivePtr kPrimMakeTuple = std::make_shared<Primitive>("MakeTuple");
+inline const PrimitivePtr kPrimMakeTupleV2 = std::make_shared<Primitive>("make_tuple");
+inline const PrimitivePtr kPrimIdentity = std::make_shared<Primitive>("Identity");
+std::vector<int> CastToInt(const ValuePtr &value);
+
+std::vector<std::vector<int>> CastToVec2DInt(const ValuePtr &value);
+
 bool CheckPrimitiveType(const AnfNodePtr &node, const PrimitivePtr &primitive_type);
 
 bool IsRealCNodeKernel(const AnfNodePtr &node);
 
 bool IsGraphKernel(const AnfNodePtr &node);
+
+bool CheckInputs(const CNodePtr &cnode);
 
 int CheckIfFuncGraphIsNull(const FuncGraphPtr &graph);
 
@@ -56,8 +67,6 @@ int CheckLeastInputSize(const CNodePtr &node, int size);
 
 ParameterPtr AddNewBiasNode(float *bias_data, const FuncGraphPtr &func_graph, int kernel_num,
                             const ParamValueLitePtr &weight_tensor);
-
-schema::PrimitiveType GetCNodeType(const BaseRef &node);
 
 bool IsParamNode(const BaseRef &n);
 
@@ -103,7 +112,8 @@ enum kTransFilterType {
   kCKHW2KCHW,
   kCHWK2KCHW,
   kKCHW2CKHW,  // 20
-  kHWCK2KHWC
+  kHWCK2KHWC,
+  kHWKC2KHWC
 };
 
 STATUS GetFilterDim(const std::vector<int32_t> &oriDims, kTransFilterType type, int32_t *filterK, int32_t *filterC,
@@ -120,6 +130,21 @@ template <typename T>
 static lite::STATUS TransFilterFormat(const ParamValueLitePtr &tensor, kTransFilterType type);
 
 STATUS TransFilterFormat(const ParamValueLitePtr &tensor, schema::Format dst_format);
+
+ParameterPtr BuildParameterNode(const FuncGraphPtr &func_graph, const AnfNodePtr &node,
+                                const ParamValueLitePtr &param_value);
+
+ParameterPtr BuildIntValueParameterNode(const FuncGraphPtr &func_graph, const int32_t &data,
+                                        const std::string &node_name);
+
+ParameterPtr BuildIntVecParameterNode(const FuncGraphPtr &func_graph, const std::vector<int32_t> &data,
+                                      const std::string &node_name);
+
+ParameterPtr BuildIntVec2DParameterNode(const FuncGraphPtr &func_graph, const std::vector<std::vector<int32_t>> &data,
+                                        const std::string &node_name);
+
+ParameterPtr BuildFloatValueParameterNode(const FuncGraphPtr &func_graph, const float &data,
+                                          const std::string &node_name);
 }  // namespace opt
 }  // namespace mindspore
-#endif  // MINDSPORE_LITE_SRC_PASS_COMMON_GLLO_UTILS_H_
+#endif  // MINDSPORE_LITE_TOOLS_OPTIMIZER_COMMON_GLLO_UTILS_H_

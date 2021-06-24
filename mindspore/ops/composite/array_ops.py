@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@ from mindspore._checkparam import Rel
 from mindspore.ops.primitive import constexpr
 from mindspore.ops import functional as F
 from .. import operations as P
-from ..operations import _inner_ops as inner
 
 
 @constexpr
@@ -105,7 +104,20 @@ def repeat_elements(x, rep, axis=0):
 
     return x_rep
 
-def sequence_mask(lengths, maxlen):
+
+@constexpr
+def _check_sequence_mask_input_len(input_shape):
+    if not input_shape:
+        raise ValueError(f"Sequence_mask lengths_shape should be > 0. "
+                         f"Current lengths_shape is {input_shape}.")
+    # broadcast only supports 7d shape
+    shape_size = len(input_shape)
+    if shape_size >= 7:
+        raise ValueError(f"Sequence_mask lengths_shape's size only support a value less than 7. "
+                         f"Current lengths_shape is {shape_size}d.")
+
+
+def sequence_mask(lengths, maxlen=None):
     """
     Returns a mask tensor representing the first N positions of each cell.
 
@@ -123,6 +135,11 @@ def sequence_mask(lengths, maxlen):
     Outputs:
         One mask tensor of shape lengths.shape + (maxlen,).
 
+    Raises:
+        TypeError: If `lengths` is not a Tensor.
+        TypeError: If `maxlen` is not an int.
+        TypeError: If dtype of `lengths` is neither int32 nor int64.
+
     Supported Platforms:
         ``GPU``
 
@@ -135,4 +152,29 @@ def sequence_mask(lengths, maxlen):
          [[True, True, False],
           [False, False, False]]]
     """
-    return inner.SequenceMask()(lengths, maxlen)
+
+    argmax_op = P.ArgMaxWithValue()
+    reshape_op = P.Reshape()
+    range_op = P.Range()
+    expand_op = P.ExpandDims()
+    cast_op = P.Cast()
+    shape_op = P.Shape()
+    to_tensor_op = P.ScalarToArray()
+
+    const_utils.check_type_valid(F.dtype(lengths), [mstype.int64, mstype.int32], 'lengths')
+    _check_sequence_mask_input_len(shape_op(lengths))
+
+    if maxlen is None:
+        flatten_data = reshape_op(lengths, (-1,))
+        flatten_data = cast_op(flatten_data, mstype.float32)
+        _, value = argmax_op(flatten_data)
+        maxlen = cast_op(value, mstype.int32)
+    else:
+        maxlen = _check_positive_int(maxlen, "maxlen", "sequence_mask")
+        maxlen = to_tensor_op(maxlen)
+
+    range_vector = range_op(to_tensor_op(0), maxlen
+                            , to_tensor_op(1))
+    mask = expand_op(lengths, -1)
+    result = range_vector < mask
+    return result

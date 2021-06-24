@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,15 +22,26 @@
 #include "utils/contract.h"
 
 namespace mindspore {
+static const int MAX_DIRECTORY_LENGTH = 1024;
+static const int MAX_FILENAME_LENGTH = 128;
+static const int MAX_OS_FILENAME_LENGTH = 255;
 class Common {
  public:
   Common() = default;
   ~Common() = default;
   static std::optional<std::string> GetRealPath(const std::string &input_path);
   static std::optional<std::string> GetConfigFile(const std::string &env);
+  static std::optional<std::string> GetEnvConfigFile();
+  static bool IsStrLengthValid(const std::string &str, const int &length_limit, const std::string &error_message = "");
+  static bool IsPathValid(const std::string &path, const int &length_limit, const std::string &error_message = "");
+  static bool IsFilenameValid(const std::string &filename, const int &length_limit,
+                              const std::string &error_message = "");
+  static bool CreateNotExistDirs(const std::string &path);
+
+  static std::string AddId(const std::string &filename, const std::string &suffix);
 
  private:
-  static bool CreateNotExistDirs(const std::string &path);
+  static bool IsEveryFilenameValid(const std::string &path, const int &length_limit, const std::string &error_message);
 };
 }  // namespace mindspore
 #endif  // MINDSPORE_CCSRC_DEBUG_COMMON_H_

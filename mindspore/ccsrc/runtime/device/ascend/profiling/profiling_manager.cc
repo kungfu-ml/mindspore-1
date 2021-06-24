@@ -42,7 +42,7 @@ ProfilingManager &ProfilingManager::GetInstance() {
   return inst;
 }
 
-ProfilingManager::ProfilingManager() : device_id_(0), prof_cb_({0}) {}
+ProfilingManager::ProfilingManager() : device_id_(0), prof_cb_({0}), hccl_enabled_bef_profiling_enabled_(false) {}
 
 uint64_t ProfilingManager::GetJobId() const {
   const char *job_id = std::getenv("JOB_ID");
@@ -110,10 +110,9 @@ void ProfilingManager::PluginUnInit() const {
   }
 }
 
-Status ProfilingManager::GetProfConf(NotNull<MsprofGeOptions *> prof) {
+Status ProfilingManager::GetProfConf(const NotNull<MsprofGeOptions *> prof) {
   string job_id = std::to_string(GetJobId());
-
-  if (memcpy_s(prof->jobId, sizeof(prof->jobId), job_id.c_str(), sizeof(job_id.c_str())) != EOK) {
+  if (memcpy_s(prof->jobId, sizeof(prof->jobId), job_id.c_str(), strlen(job_id.c_str())) != EOK) {
     MS_LOG(ERROR) << "Copy job_id failed.";
     return PROF_FAILED;
   }
@@ -139,6 +138,14 @@ bool ProfilingManager::StartupProfiling(uint32_t device_id) {
     MS_LOG(INFO) << "No need profiling. please export PROFILING_MODE and in train mode.";
     return true;
   }
+
+  if (hccl_enabled_bef_profiling_enabled_) {
+    MS_LOG(ERROR)
+      << "Please check the Profiler object initialized before mindspore.context.set_auto_parallel_context() "
+         "and mindspore.communication.management.init(). Profiler should be initialized before these code.";
+    return false;
+  }
+
   device_id_ = device_id;
 
   struct MsprofGeOptions prof_conf = {0};
@@ -160,7 +167,7 @@ uint32_t GetCurrentDeviceId() {
   return context->get_param<uint32_t>(MS_CTX_DEVICE_ID);
 }
 
-bool ProfilingManager::ProfStartUp(NotNull<MsprofGeOptions *> prof_conf) {
+bool ProfilingManager::ProfStartUp(const NotNull<MsprofGeOptions *> prof_conf) const {
   MS_LOG(INFO) << "Prof start up. ";
 
   if (prof_cb_.msprofCtrlCallback == nullptr) {
@@ -215,7 +222,7 @@ bool ProfilingManager::StopProfiling() {
   return true;
 }
 
-Status ProfilingManager::CallMsprofReport(NotNull<ReporterData *> reporter_data) const {
+Status ProfilingManager::CallMsprofReport(const NotNull<ReporterData *> reporter_data) const {
   if (prof_cb_.msprofReporterCallback == nullptr) {
     MS_LOG(ERROR) << "MsprofReporterCallback callback is nullptr.";
     return PROF_FAILED;
@@ -299,8 +306,8 @@ Status ProfCommandHandle(ProfCommandHandleType type, void *data, uint32_t len) {
 
 bool DoRegiste() {
   MS_LOG(INFO) << "VM profiling register start";
-  return VMCallbackRegister::GetInstance().Registe(RegProfCtrlCallback, RegProfSetDeviceCallback,
-                                                   RegProfReporterCallback, ProfCommandHandle);
+  return VMCallbackRegister::GetInstance().Register(RegProfCtrlCallback, RegProfSetDeviceCallback,
+                                                    RegProfReporterCallback, ProfCommandHandle);
 }
 static bool doRegiste = DoRegiste();
 }  // namespace ascend

@@ -21,7 +21,6 @@ config = ed({
     "model": "ssd300",
     "img_shape": [300, 300],
     "num_ssd_boxes": 1917,
-    "neg_pre_positive": 3,
     "match_threshold": 0.5,
     "nms_threshold": 0.6,
     "min_score": 0.1,
@@ -51,6 +50,7 @@ config = ed({
 
     # `mindrecord_dir` and `coco_root` are better to use absolute path.
     "feature_extractor_base_param": "",
+    "checkpoint_filter_list": ['multi_loc_layers', 'multi_cls_layers'],
     "mindrecord_dir": "/data/MindRecord_COCO",
     "coco_root": "/data/coco2017",
     "train_data_type": "train2017",

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include "tools/converter/model_parser.h"
 #include "tools/converter/anf_transform.h"
 #include "tools/anf_exporter/anf_exporter.h"
+#include "test/common/import_from_meta_graphT.h"
 
 namespace mindspore {
 class ConvBNFusionTest : public mindspore::CommonTest {
@@ -40,17 +41,14 @@ CNodeTptr BuildConv2D() {
   convNode->inputIndex = {0, 1};
   convNode->outputIndex = {2};
   convNode->primitive = std::make_unique<schema::PrimitiveT>();
-  convNode->primitive->value.type = schema::PrimitiveType_Conv2D;
-  auto prim1 = new schema::Conv2DT;
-  prim1->padMode = schema::PadMode_SAME_UPPER;
+  convNode->primitive->value.type = schema::PrimitiveType_Conv2DFusion;
+  auto prim1 = new schema::Conv2DFusionT;
+  prim1->pad_mode = schema::PadMode_SAME;
   prim1->format = schema::Format_NHWC;
-  prim1->strideH = 1;
-  prim1->strideW = 1;
-  prim1->kernelH = 3;
-  prim1->kernelW = 3;
-  prim1->dilateH = 1;
-  prim1->dilateW = 1;
-  prim1->channelOut = 3;
+  prim1->stride = {1, 1};
+  prim1->kernel_size = {3, 3};
+  prim1->dilation = {1, 1};
+  prim1->out_channel = 3;
   convNode->primitive->value.value = prim1;
   convNode->name = "Conv2D";
   return convNode;
@@ -60,18 +58,14 @@ CNodeTptr BuildDepthwiseConv2D() {
   convNode->inputIndex = {0, 1, 2};
   convNode->outputIndex = {3};
   convNode->primitive = std::make_unique<schema::PrimitiveT>();
-  convNode->primitive->value.type = schema::PrimitiveType_DepthwiseConv2D;
-  auto prim1 = new schema::DepthwiseConv2DT;
-  prim1->padMode = schema::PadMode_SAME_UPPER;
+  convNode->primitive->value.type = schema::PrimitiveType_Conv2DFusion;
+  auto prim1 = new schema::Conv2DFusionT;
+  prim1->pad_mode = schema::PadMode_SAME;
   prim1->format = schema::Format_NHWC;
-  prim1->strideH = 1;
-  prim1->strideW = 1;
-  prim1->kernelH = 3;
-  prim1->kernelW = 3;
-  prim1->dilateH = 1;
-  prim1->dilateW = 1;
-  prim1->channelIn = 1;
-  prim1->channelMultiplier = 3;
+  prim1->stride = {1, 1};
+  prim1->kernel_size = {3, 3};
+  prim1->dilation = {1, 1};
+  prim1->in_channel = 1;
 
   convNode->primitive->value.value = prim1;
   convNode->name = "Conv2D";
@@ -83,7 +77,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
   meta_graph->name = "graph";
   // conv node
   CNodeTptr convNode;
-  if (conv_type == schema::PrimitiveType_Conv2D) {
+  if (conv_type == schema::PrimitiveType_Conv2DFusion) {
     convNode = BuildConv2D();
   } else {
     convNode = BuildDepthwiseConv2D();
@@ -104,7 +98,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
 
   // input 0: data
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {1, 5, 5, 3};
@@ -113,7 +107,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
 
   // input 1: weight
   auto input1 = std::make_unique<schema::TensorT>();
-  input1->nodeType = schema::NodeType::NodeType_ValueNode;
+  input1->nodeType = lite::NodeType_ValueNode;
   input1->format = schema::Format_KHWC;
   input1->dataType = TypeId::kNumberTypeFloat32;
   input1->dims = {8, 3, 3, 3};
@@ -122,7 +116,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
 
   // conv output
   auto conv_output = std::make_unique<schema::TensorT>();
-  conv_output->nodeType = schema::NodeType::NodeType_Parameter;
+  conv_output->nodeType = lite::NodeType_Parameter;
   conv_output->format = schema::Format_NHWC;
   conv_output->dataType = TypeId::kNumberTypeFloat32;
   conv_output->dims = {1, 5, 5, 8};
@@ -130,7 +124,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
 
   // caffe bn : mean
   auto input2 = std::make_unique<schema::TensorT>();
-  input2->nodeType = schema::NodeType::NodeType_ValueNode;
+  input2->nodeType = lite::NodeType_ValueNode;
   input2->format = schema::Format_NHWC;
   input2->dataType = TypeId::kNumberTypeFloat32;
   input2->dims = {1, 5, 5, 8};
@@ -139,7 +133,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
 
   // caffe bn : var
   auto input3 = std::make_unique<schema::TensorT>();
-  input3->nodeType = schema::NodeType::NodeType_ValueNode;
+  input3->nodeType = lite::NodeType_ValueNode;
   input3->format = schema::Format_NHWC;
   input3->dataType = TypeId::kNumberTypeFloat32;
   input3->dims = {1, 5, 5, 8};
@@ -148,7 +142,7 @@ MetaGraphTptr BuildCaffeGraph(schema::PrimitiveType conv_type) {
 
   // final bn output
   auto output = std::make_unique<schema::TensorT>();
-  output->nodeType = schema::NodeType::NodeType_Parameter;
+  output->nodeType = lite::NodeType_Parameter;
   output->format = schema::Format_NHWC;
   output->dataType = TypeId::kNumberTypeFloat32;
   output->dims = {1, 5, 5, 8};
@@ -164,7 +158,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
   meta_graph->name = "graph";
   // conv node
   CNodeTptr convNode;
-  if (conv_type == schema::PrimitiveType_Conv2D) {
+  if (conv_type == schema::PrimitiveType_Conv2DFusion) {
     convNode = BuildConv2D();
   } else {
     convNode = BuildDepthwiseConv2D();
@@ -185,7 +179,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // input 0: data
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {1, 5, 5, 3};
@@ -194,7 +188,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // input 1: conv_bias
   auto input11 = std::make_unique<schema::TensorT>();
-  input11->nodeType = schema::NodeType::NodeType_ValueNode;
+  input11->nodeType = lite::NodeType_ValueNode;
   input11->format = schema::Format_KHWC;
   input11->dataType = TypeId::kNumberTypeFloat32;
   input11->dims = {8, 3, 3, 3};
@@ -203,7 +197,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // input 1: weight
   auto input1 = std::make_unique<schema::TensorT>();
-  input1->nodeType = schema::NodeType::NodeType_ValueNode;
+  input1->nodeType = lite::NodeType_ValueNode;
   input1->format = schema::Format_KHWC;
   input1->dataType = TypeId::kNumberTypeFloat32;
   input1->dims = {8, 3, 3, 3};
@@ -212,7 +206,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // conv output
   auto conv_output = std::make_unique<schema::TensorT>();
-  conv_output->nodeType = schema::NodeType::NodeType_Parameter;
+  conv_output->nodeType = lite::NodeType_Parameter;
   conv_output->format = schema::Format_NHWC;
   conv_output->dataType = TypeId::kNumberTypeFloat32;
   conv_output->dims = {1, 5, 5, 8};
@@ -220,7 +214,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // tflite bn : scale
   auto input2 = std::make_unique<schema::TensorT>();
-  input2->nodeType = schema::NodeType::NodeType_ValueNode;
+  input2->nodeType = lite::NodeType_ValueNode;
   input2->format = schema::Format_NHWC;
   input2->dataType = TypeId::kNumberTypeFloat32;
   input2->dims = {1, 5, 5, 8};
@@ -229,7 +223,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // tflite bn : bias
   auto input3 = std::make_unique<schema::TensorT>();
-  input3->nodeType = schema::NodeType::NodeType_ValueNode;
+  input3->nodeType = lite::NodeType_ValueNode;
   input3->format = schema::Format_NHWC;
   input3->dataType = TypeId::kNumberTypeFloat32;
   input3->dims = {1, 5, 5, 8};
@@ -238,7 +232,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // tflite bn : mean
   auto input4 = std::make_unique<schema::TensorT>();
-  input4->nodeType = schema::NodeType::NodeType_ValueNode;
+  input4->nodeType = lite::NodeType_ValueNode;
   input4->format = schema::Format_NHWC;
   input4->dataType = TypeId::kNumberTypeFloat32;
   input4->dims = {1, 5, 5, 8};
@@ -247,7 +241,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // tflite bn : var
   auto input5 = std::make_unique<schema::TensorT>();
-  input5->nodeType = schema::NodeType::NodeType_ValueNode;
+  input5->nodeType = lite::NodeType_ValueNode;
   input5->format = schema::Format_NHWC;
   input5->dataType = TypeId::kNumberTypeFloat32;
   input5->dims = {1, 5, 5, 8};
@@ -256,7 +250,7 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 
   // final output
   auto output = std::make_unique<schema::TensorT>();
-  output->nodeType = schema::NodeType::NodeType_Parameter;
+  output->nodeType = lite::NodeType_Parameter;
   output->format = schema::Format_NHWC;
   output->dataType = TypeId::kNumberTypeFloat32;
   output->dims = {1, 5, 5, 8};
@@ -267,8 +261,8 @@ MetaGraphTptr BuildTFGraph(schema::PrimitiveType conv_type) {
 }
 }  //  namespace
 TEST_F(ConvBNFusionTest, TestConvAddNode) {
-  auto meta_graph = BuildCaffeGraph(schema::PrimitiveType_Conv2D);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto meta_graph = BuildCaffeGraph(schema::PrimitiveType_Conv2DFusion);
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto anf_transform = new lite::AnfTransform();
   auto new_graph = anf_transform->Transform(func_graph);
   ASSERT_NE(nullptr, new_graph);
@@ -277,8 +271,8 @@ TEST_F(ConvBNFusionTest, TestConvAddNode) {
 }
 
 TEST_F(ConvBNFusionTest, TestDeptiwiseConvAddNode) {
-  auto meta_graph = BuildTFGraph(schema::PrimitiveType_DepthwiseConv2D);
-  auto func_graph = lite::ModelParser::Fb2Anf(meta_graph.get());
+  auto meta_graph = BuildTFGraph(schema::PrimitiveType_Conv2DFusion);
+  auto func_graph = lite::AnfImporterFromMetaGraphT::Fb2Anf(meta_graph.get());
   auto anf_transform = new lite::AnfTransform();
   auto new_graph = anf_transform->Transform(func_graph);
   ASSERT_NE(nullptr, new_graph);

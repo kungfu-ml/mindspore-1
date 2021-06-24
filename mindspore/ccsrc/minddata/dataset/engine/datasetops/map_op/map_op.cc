@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,12 @@
 
 #include "minddata/dataset/callback/callback_param.h"
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/core/global_context.h"
 #include "minddata/dataset/engine/data_buffer.h"
 #include "minddata/dataset/engine/datasetops/map_op/cpu_map_job.h"
 #include "minddata/dataset/engine/datasetops/map_op/gpu_map_job.h"
-#include "minddata/dataset/engine/opt/pass.h"
+#include "minddata/dataset/engine/execution_tree.h"
 #include "minddata/dataset/kernels/tensor_op.h"
 #include "minddata/dataset/util/log_adapter.h"
 #include "minddata/dataset/util/task_manager.h"
@@ -43,7 +43,7 @@ MapOp::Builder::Builder() {
 // Check if the required parameters are set by the builder.
 Status MapOp::Builder::sanityCheck() const {
   if (build_tensor_funcs_.empty()) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Building a MapOp without providing any function/operation to apply");
   }
   return Status::OK();
@@ -115,7 +115,7 @@ Status MapOp::FetchNextWork(uint32_t worker_id, std::unique_ptr<DataBuffer> *db,
 
 Status MapOp::GenerateWorkerJob(const std::unique_ptr<MapWorkerJob> *worker_job) {
   std::shared_ptr<MapJob> map_job = nullptr;
-  MapTargetDevice prev_target;
+  MapTargetDevice prev_target = MapTargetDevice::kCpu;
   for (size_t i = 0; i < tfuncs_.size(); i++) {
     // Currently we only have CPU as the device target
     // In the future, we will have heuristic or control from user to select target device
@@ -156,7 +156,8 @@ Status MapOp::operator()() {
   }
 
   // The operator class just starts off threads by calling the tree_ function
-  rc = tree_->LaunchWorkers(num_workers_, std::bind(&MapOp::WorkerEntry, this, std::placeholders::_1), NameWithID());
+  rc =
+    tree_->LaunchWorkers(num_workers_, std::bind(&MapOp::WorkerEntry, this, std::placeholders::_1), NameWithID(), id());
   // Synchronize with TaskManager
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(rc);
@@ -287,6 +288,14 @@ Status MapOp::WorkerCompute(DataBuffer *in_buffer, TensorQTable *new_tensor_tabl
     // From the current row, select the Tensor that need to be passed to TensorOp
     (void)std::transform(to_process_indices_.begin(), to_process_indices_.end(), std::back_inserter(to_process),
                          [&cur_row](const auto &it) { return std::move(cur_row[it]); });
+    to_process.setId(cur_row.getId());
+    std::vector<std::string> cur_row_path = cur_row.getPath();
+    if (cur_row_path.size() > 0) {
+      std::vector<std::string> to_process_path;
+      (void)std::transform(to_process_indices_.begin(), to_process_indices_.end(), std::back_inserter(to_process_path),
+                           [&cur_row_path](const auto &it) { return cur_row_path[it]; });
+      to_process.setPath(to_process_path);
+    }
     job_input_table.push_back(std::move(to_process));
     original_table.push_back(std::move(cur_row));
   }
@@ -435,18 +444,6 @@ void MapOp::CreateFinalColMap(std::unordered_map<std::string, int32_t> *col_name
     // Set the base class final column id map result
     column_name_id_map_ = final_col_name_id_map;
   }
-}
-
-// Visitor accept method for NodePass
-Status MapOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<MapOp>(), modified);
-}
-
-// Visitor pre-accept method for NodePass
-Status MapOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->PreRunOnNode(shared_from_base<MapOp>(), modified);
 }
 
 Status MapOp::WaitForWorkers() {

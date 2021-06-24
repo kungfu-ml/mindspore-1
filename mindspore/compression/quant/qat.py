@@ -43,28 +43,28 @@ def create_quant_config(quant_observer=(nn.FakeQuantWithMinMaxObserver, nn.FakeQ
                         symmetric=(False, False),
                         narrow_range=(False, False)):
     r"""
-    Configs the oberser type of weights and data flow with quant params.
+    Config the observer type of weights and data flow with quant params.
 
     Args:
-        quant_observer (Observer, list or tuple): The oberser type to do quantization. The first element represent
-            weights and second element represent data flow.
+        quant_observer (Union[Observer, list, tuple]): The observer type to do quantization. The first element
+            represents weights and second element represents data flow.
             Default: (nn.FakeQuantWithMinMaxObserver, nn.FakeQuantWithMinMaxObserver)
-        quant_delay (int, list or tuple): Number of steps after which weights and activations are quantized during
-            eval. The first element represent weights and second element represent data flow. Default: (0, 0)
-        quant_dtype (QuantDtype, list or tuple): Datatype to use for quantize weights and activations. The first
-            element represent weights and second element represent data flow.
+        quant_delay (Union[int, list, tuple]): Number of steps after which weights and activations are quantized during
+            eval. The first element represents weights and second element represents data flow. Default: (0, 0)
+        quant_dtype (Union[QuantDtype, list, tuple]): Datatype to use for quantize weights and activations. The first
+            element represents weights and second element represents data flow.
             Default: (QuantDtype.INT8, QuantDtype.INT8)
-        per_channel (bool, list or tuple):  Quantization granularity based on layer or on channel. If `True`
-            then base on per channel otherwise base on per layer. The first element represent weights
-            and second element represent data flow. Default: (False, False)
-        symmetric (bool, list or tuple): Whether the quantization algorithm is symmetric or not. If `True` then base on
-            symmetric otherwise base on asymmetric. The first element represent weights and second
-            element represent data flow. Default: (False, False)
-        narrow_range (bool, list or tuple): Whether the quantization algorithm uses narrow range or not.
+        per_channel (Union[bool, list, tuple]):  Quantization granularity based on layer or on channel. If `True`
+            then base on per channel otherwise base on per layer. The first element represents weights
+            and second element represents data flow. Default: (False, False)
+        symmetric (Union[bool, list, tuple]): Whether the quantization algorithm is symmetric or not. If `True` then
+            base on symmetric otherwise base on asymmetric. The first element represents weights and second
+            element represents data flow. Default: (False, False)
+        narrow_range (Union[bool, list, tuple]): Whether the quantization algorithm uses narrow range or not.
             The first element represents weights and the second element represents data flow. Default: (False, False)
 
     Returns:
-        QuantConfig, Contains the oberser type of weight and activation.
+        QuantConfig, Contains the observer type of weight and activation.
     """
     weight_observer = quant_observer[0].partial_init(quant_delay=quant_delay[0], quant_dtype=quant_dtype[0],
                                                      per_channel=per_channel[0], symmetric=symmetric[0],
@@ -123,20 +123,20 @@ class QuantizationAwareTraining(Quantizer):
     Args:
         bn_fold (bool): Flag to used bn fold ops for simulation inference operation. Default: True.
         freeze_bn (int): Number of steps after which BatchNorm OP parameters used total mean and variance. Default: 1e7.
-        quant_delay (int, list or tuple): Number of steps after which weights and activations are quantized during
-            eval. The first element represent weights and second element represent data flow. Default: (0, 0)
-        quant_dtype (QuantDtype, list or tuple): Datatype to use for quantize weights and activations. The first
-            element represent weights and second element represent data flow.
+        quant_delay (Union[int, list, tuple]): Number of steps after which weights and activations are quantized during
+            eval. The first element represents weights and second element represents data flow. Default: (0, 0)
+        quant_dtype (Union[QuantDtype, list, tuple]): Datatype to use for quantize weights and activations. The first
+            element represents weights and second element represents data flow.
             Default: (QuantDtype.INT8, QuantDtype.INT8)
-        per_channel (bool, list or tuple):  Quantization granularity based on layer or on channel. If `True`
-            then base on per channel otherwise base on per layer. The first element represent weights
-            and second element represent data flow. Default: (False, False)
-        symmetric (bool, list or tuple): Whether the quantization algorithm is symmetric or not. If `True` then base on
-            symmetric otherwise base on asymmetric. The first element represent weights and second
-            element represent data flow. Default: (False, False)
-        narrow_range (bool, list or tuple): Whether the quantization algorithm uses narrow range or not.
+        per_channel (Union[bool, list, tuple]):  Quantization granularity based on layer or on channel. If `True`
+            then base on per channel otherwise base on per layer. The first element represents weights
+            and second element represents data flow. Default: (False, False)
+        symmetric (Union[bool, list, tuple]): Whether the quantization algorithm is symmetric or not. If `True` then
+            base on symmetric otherwise base on asymmetric. The first element represents weights and second
+            element represents data flow. Default: (False, False)
+        narrow_range (Union[bool, list, tuple]): Whether the quantization algorithm uses narrow range or not.
             The first element represents weights and the second element represents data flow. Default: (False, False)
-        optimize_option (OptimizeOption, list or tuple): Specifies the quant algorithm and options, currently only
+        optimize_option (Union[OptimizeOption, list, tuple]): Specifies the quant algorithm and options, currently only
             support QAT. Default: OptimizeOption.QAT
         one_conv_fold (bool): Flag to used one conv bn fold ops for simulation inference operation. Default: True.
 
@@ -173,7 +173,7 @@ class QuantizationAwareTraining(Quantizer):
         >>> quantizer = QuantizationAwareTraining(bn_fold=False, per_channel=[True, False], symmetric=[True, False])
         >>> net_qat = quantizer.quantize(net)
     """
-    __quant_op_name__ = ["TensorAdd", "Sub", "Mul", "RealDiv"]
+    __quant_op_name__ = ["Add", "Sub", "Mul", "RealDiv"]
 
     def __init__(self,
                  bn_fold=True,
@@ -187,6 +187,7 @@ class QuantizationAwareTraining(Quantizer):
                  one_conv_fold=True):
         """Init for QuantizationAwareTraining quantizer"""
         super(QuantizationAwareTraining, self).__init__(optimize_option=optimize_option)
+
         def convert2list(name, value):
             if not isinstance(value, list) and not isinstance(value, tuple):
                 value = [value]

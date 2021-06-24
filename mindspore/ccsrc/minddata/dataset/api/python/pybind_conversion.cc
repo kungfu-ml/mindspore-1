@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "minddata/dataset/api/python/pybind_conversion.h"
 
 namespace mindspore {
@@ -63,6 +62,25 @@ std::vector<std::string> toStringVector(const py::list list) {
   return vector;
 }
 
+std::vector<pid_t> toIntVector(const py::list input_list) {
+  std::vector<pid_t> vector;
+  if (!input_list.empty()) {
+    std::transform(input_list.begin(), input_list.end(), std::back_inserter(vector),
+                   [&](const py::handle &handle) { return static_cast<pid_t>(toInt(handle)); });
+  }
+  return vector;
+}
+
+std::unordered_map<int32_t, std::vector<pid_t>> toIntMap(const py::dict input_dict) {
+  std::unordered_map<int32_t, std::vector<pid_t>> map;
+  if (!input_dict.empty()) {
+    for (auto p : input_dict) {
+      (void)map.emplace(toInt(p.first), toIntVector(py::reinterpret_borrow<py::list>(p.second)));
+    }
+  }
+  return map;
+}
+
 std::pair<int64_t, int64_t> toIntPair(const py::tuple tuple) {
   std::pair<int64_t, int64_t> pair;
   if (!tuple.empty()) {
@@ -92,13 +110,20 @@ std::vector<std::shared_ptr<TensorOperation>> toTensorOperations(py::list operat
       std::shared_ptr<TensorOp> tensor_op;
       if (py::isinstance<TensorOp>(op)) {
         tensor_op = op.cast<std::shared_ptr<TensorOp>>();
+        vector.push_back(std::make_shared<transforms::PreBuiltOperation>(tensor_op));
       } else if (py::isinstance<py::function>(op)) {
         tensor_op = std::make_shared<PyFuncOp>(op.cast<py::function>());
+        vector.push_back(std::make_shared<transforms::PreBuiltOperation>(tensor_op));
       } else {
-        THROW_IF_ERROR(
-          []() { RETURN_STATUS_UNEXPECTED("Error: tensor_op is not recognised (not TensorOp and not pyfunc)."); }());
+        if (py::isinstance<TensorOperation>(op)) {
+          vector.push_back(op.cast<std::shared_ptr<TensorOperation>>());
+        } else {
+          THROW_IF_ERROR([]() {
+            RETURN_STATUS_UNEXPECTED(
+              "Error: tensor_op is not recognised (not TensorOp, TensorOperation and not pyfunc).");
+          }());
+        }
       }
-      vector.push_back(std::make_shared<transforms::PreBuiltOperation>(tensor_op));
     }
   }
   return vector;
@@ -107,12 +132,15 @@ std::vector<std::shared_ptr<TensorOperation>> toTensorOperations(py::list operat
 std::shared_ptr<TensorOperation> toTensorOperation(py::handle operation) {
   std::shared_ptr<TensorOperation> op;
   std::shared_ptr<TensorOp> tensor_op;
-  if (py::isinstance<TensorOp>(operation)) {
+  if (py::isinstance<TensorOperation>(operation)) {
+    op = operation.cast<std::shared_ptr<TensorOperation>>();
+  } else if (py::isinstance<TensorOp>(operation)) {
     tensor_op = operation.cast<std::shared_ptr<TensorOp>>();
+    op = std::make_shared<transforms::PreBuiltOperation>(tensor_op);
   } else {
-    THROW_IF_ERROR([]() { RETURN_STATUS_UNEXPECTED("Error: input operation is not a tensor_op."); }());
+    THROW_IF_ERROR(
+      []() { RETURN_STATUS_UNEXPECTED("Error: input operation is not a tensor_op or TensorOperation."); }());
   }
-  op = std::make_shared<transforms::PreBuiltOperation>(tensor_op);
   return op;
 }
 
@@ -133,19 +161,19 @@ std::vector<std::shared_ptr<DatasetNode>> toDatasetNode(std::shared_ptr<DatasetN
 }
 
 std::shared_ptr<SamplerObj> toSamplerObj(py::handle py_sampler, bool isMindDataset) {
+  if (py_sampler.is_none()) {
+    return nullptr;
+  }
   if (py_sampler) {
     std::shared_ptr<SamplerObj> sampler_obj;
     if (!isMindDataset) {
-      // Common Sampler
-      std::shared_ptr<SamplerRT> sampler;
-      auto create = py::reinterpret_borrow<py::object>(py_sampler).attr("create");
-      sampler = create().cast<std::shared_ptr<SamplerRT>>();
-      sampler_obj = std::make_shared<PreBuiltSamplerObj>(std::move(sampler));
+      auto parse = py::reinterpret_borrow<py::object>(py_sampler).attr("parse");
+      sampler_obj = parse().cast<std::shared_ptr<SamplerObj>>();
     } else {
       // Mindrecord Sampler
       std::shared_ptr<mindrecord::ShardOperator> sampler;
-      auto create = py::reinterpret_borrow<py::object>(py_sampler).attr("create_for_minddataset");
-      sampler = create().cast<std::shared_ptr<mindrecord::ShardOperator>>();
+      auto parse = py::reinterpret_borrow<py::object>(py_sampler).attr("parse_for_minddataset");
+      sampler = parse().cast<std::shared_ptr<mindrecord::ShardOperator>>();
       sampler_obj = std::make_shared<PreBuiltSamplerObj>(std::move(sampler));
     }
     return sampler_obj;
@@ -192,7 +220,7 @@ std::vector<std::shared_ptr<CsvBase>> toCSVBase(py::list csv_bases) {
   return vector;
 }
 
-Status ToJson(const py::handle &padded_sample, nlohmann::json *padded_sample_json,
+Status ToJson(const py::handle &padded_sample, nlohmann::json *const padded_sample_json,
               std::map<std::string, std::string> *sample_bytes) {
   for (const py::handle &key : padded_sample) {
     if (py::isinstance<py::bytes>(padded_sample[key])) {

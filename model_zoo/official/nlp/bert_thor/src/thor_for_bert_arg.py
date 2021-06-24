@@ -66,7 +66,7 @@ class THOR(Optimizer):
         self.shape = P.Shape()
         self.reshape = P.Reshape()
         self.mul = P.Mul()
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.matrix_A_inv = ()
         self.matrix_G_inv = ()
         self.num_hidden_layers = num_hidden_layers
@@ -230,8 +230,8 @@ class THOR(Optimizer):
             end_idx = mlm_fc_idx + 4
             new_grads = new_grads + gradients[begin_idx: end_idx]
 
-            lenth = len(gradients)
-            new_grads = new_grads + gradients[lenth - 2: lenth]
+            length = len(gradients)
+            new_grads = new_grads + gradients[length - 2: length]
             gradients = new_grads
             gradients = self.grad_reducer_g(gradients)
         else:
@@ -242,8 +242,6 @@ class THOR(Optimizer):
                 matrix_idx = em_idx
                 temp_a = self.matrix_A[matrix_idx]
                 temp_g = self.matrix_G[matrix_idx]
-                temp_a = F.depend(temp_a, g)
-                temp_g = F.depend(temp_g, g)
                 temp_a = self.expand(temp_a, 1)
                 temp_a = self.cast(temp_a, mstype.float16)
                 temp_g = self.cast(temp_g, mstype.float16)
@@ -305,8 +303,6 @@ class THOR(Optimizer):
                         matrix_idx = 6 * i + offset_idx + 3
                         temp_a = self.matrix_A[matrix_idx]
                         temp_g = self.matrix_G[matrix_idx]
-                        temp_a = F.depend(temp_a, g)
-                        temp_g = F.depend(temp_g, g)
                         temp_a = self.cast(temp_a, mstype.float16)
                         temp_g = self.cast(temp_g, mstype.float16)
                         g = self.cast(g, mstype.float16)
@@ -323,8 +319,6 @@ class THOR(Optimizer):
             pooler_bias = gradients[pooler_layer_idx + 1]
             temp_a = self.matrix_A[matrix_idx]
             temp_g = self.matrix_G[matrix_idx]
-            temp_a = F.depend(temp_a, g)
-            temp_g = F.depend(temp_g, g)
             temp_a = self.cast(temp_a, mstype.float16)
             temp_g = self.cast(temp_g, mstype.float16)
             g = self.cast(g, mstype.float16)
@@ -340,8 +334,6 @@ class THOR(Optimizer):
             mlm_bias = gradients[mlm_fc_idx + 1]
             temp_a = self.matrix_A[matrix_idx]
             temp_g = self.matrix_G[matrix_idx]
-            temp_a = F.depend(temp_a, g)
-            temp_g = F.depend(temp_g, g)
             temp_a = self.cast(temp_a, mstype.float16)
             temp_g = self.cast(temp_g, mstype.float16)
             g = self.cast(g, mstype.float16)
@@ -356,8 +348,8 @@ class THOR(Optimizer):
             end_idx = mlm_fc_idx + 4
             new_grads = new_grads + gradients[begin_idx: end_idx]
 
-            lenth = len(gradients)
-            new_grads = new_grads + gradients[lenth - 2: lenth]
+            length = len(gradients)
+            new_grads = new_grads + gradients[length - 2: length]
             gradients = new_grads
             gradients = self.grad_reducer_g(gradients)
 

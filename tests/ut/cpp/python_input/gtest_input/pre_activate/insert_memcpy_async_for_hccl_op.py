@@ -15,14 +15,16 @@
 
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
+from mindspore.ops import _constants as Constants
 
+depend = P.Depend()
 all_reduce = P.AllReduce()
 broadcast = P.Broadcast(1)
 memcpy_async = Primitive('memcpy_async')
-make_tuple = Primitive('make_tuple')
-tuple_getitem = Primitive('tuple_getitem')
+make_tuple = Primitive('MakeTuple')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
+assign_add = P.AssignAdd()
 apply_momentun = P.ApplyMomentum()
-control_depend = P.ControlDepend()
 relu = P.ReLU()
 
 
@@ -83,14 +85,14 @@ def test_insert_memcpy_async_for_hccl_op_cond3(tag):
     fns = FnDict()
 
     @fns
-    def before(a, b, c, d, e):
-        res = apply_momentun(a, b, c, d, e)
+    def before(a, b):
+        res = assign_add(a, b)
         res = all_reduce(res)
         return res
 
     @fns
-    def after(a, b, c, d, e):
-        res = apply_momentun(a, b, c, d, e)
+    def after(a, b):
+        res = assign_add(a, b)
         res = memcpy_async(res)
         res = all_reduce(res)
         return make_tuple(res)
@@ -105,7 +107,7 @@ def test_insert_memcpy_async_for_hccl_op_cond4(tag):
     def before(a, b):
         x = relu(a)
         y = all_reduce(b)
-        res = control_depend(x, y)
+        res = depend(x, y)
         return res
 
     @fns
@@ -113,7 +115,7 @@ def test_insert_memcpy_async_for_hccl_op_cond4(tag):
         x = relu(a)
         y1 = memcpy_async(b)
         y2 = all_reduce(y1)
-        res = control_depend(x, make_tuple(y1, y2))
+        res = depend(x, y2)
         return make_tuple(res)
 
     return fns[tag]
@@ -126,7 +128,7 @@ def test_insert_memcpy_async_for_hccl_op_cond5(tag):
     def before(a, b, c):
         x = relu(a)
         y = broadcast((b, c))
-        res = control_depend(x, y)
+        res = depend(x, y)
         return res
 
     @fns
@@ -135,7 +137,9 @@ def test_insert_memcpy_async_for_hccl_op_cond5(tag):
         m1 = memcpy_async(b)
         m2 = memcpy_async(c)
         y = broadcast(m1, m2)
-        res = control_depend(x, make_tuple(m1, m2, y))
+        y0 = tuple_getitem(y, 0)
+        y1 = tuple_getitem(y, 1)
+        res = depend(x, make_tuple(y0, y1))
         return make_tuple(res)
 
     return fns[tag]

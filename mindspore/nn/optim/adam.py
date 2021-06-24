@@ -113,8 +113,8 @@ def _run_opt_with_sparse(opt, sparse_opt, push, pull, use_locking, use_nesterov,
         op_sqrt = P.Sqrt()
         scatter_add = P.ScatterAdd(use_locking)
 
-        assign_m = F.assign(m, op_mul(beta1, m))
-        assign_v = F.assign(v, op_mul(beta2, v))
+        success = F.depend(success, F.assign(m, op_mul(beta1, m)))
+        success = F.depend(success, F.assign(v, op_mul(beta2, v)))
 
         grad_indices = gradient.indices
         grad_value = gradient.values
@@ -129,26 +129,17 @@ def _run_opt_with_sparse(opt, sparse_opt, push, pull, use_locking, use_nesterov,
 
         if use_nesterov:
             m_temp = next_m * _scaler_ten
-            assign_m_nesterov = F.assign(m, op_mul(beta1, next_m))
+            F.assign(m, op_mul(beta1, next_m))
             div_value = scatter_add(m,
                                     op_mul(grad_indices, _scaler_one),
                                     op_mul(F.tuple_to_array((1.0,)) - beta1, grad_value))
             param_update = div_value / (op_sqrt(next_v) + eps)
-
-            m_recover = F.assign(m, m_temp / _scaler_ten)
-
-            F.control_depend(m_temp, assign_m_nesterov)
-            F.control_depend(assign_m_nesterov, div_value)
-            F.control_depend(param_update, m_recover)
+            F.assign(m, m_temp / _scaler_ten)
         else:
             param_update = next_m / (op_sqrt(next_v) + eps)
 
         lr_t = lr * op_sqrt(1 - beta2_power) / (1 - beta1_power)
-
         next_param = param - lr_t * param_update
-
-        F.control_depend(assign_m, next_m)
-        F.control_depend(assign_v, next_v)
 
         success = F.depend(success, F.assign(param, next_param))
         success = F.depend(success, F.assign(m, next_m))
@@ -221,6 +212,10 @@ class Adam(Optimizer):
         weight decay is positive. When not separating parameter groups, the `weight_decay` in the API will be applied
         on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
 
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
+
         To improve parameter groups performance, the customized order of parameters is supported.
 
         The sparse strategy is applied while the SparseGatherV2 operator is used for forward network.
@@ -244,6 +239,10 @@ class Adam(Optimizer):
               the order will be followed in the optimizer. There are no other keys in the `dict` and the parameters
               which in the 'order_params' must be in one of group parameters.
 
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
+
         learning_rate (Union[float, Tensor, Iterable, LearningRateSchedule]): A value or a graph for the learning rate.
             When the learning_rate is an Iterable or a Tensor in a 1D dimension, use the dynamic learning rate, then
             the i-th step will take the i-th value as the learning rate. When the learning_rate is LearningRateSchedule,
@@ -265,13 +264,27 @@ class Adam(Optimizer):
             If true, update the gradients using NAG.
             If false, update the gradients without using NAG. Default: False.
         weight_decay (float): Weight decay (L2 penalty). It must be equal to or greater than 0. Default: 0.0.
-        loss_scale (float): A floating point value for the loss scale. Should be greater than 0. Default: 1.0.
+        loss_scale (float): A floating point value for the loss scale. Should be greater than 0. In general, use the
+            default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
 
     Inputs:
         - **gradients** (tuple[Tensor]) - The gradients of `params`, the shape is the same as `params`.
 
     Outputs:
         Tensor[bool], the value is True.
+
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `beta1`, `beta2`, `eps` or `loss_scale` is not a float.
+        TypeError: If `weight_decay` is neither float nor int.
+        TypeError: If `use_locking` or `use_nesterov` is not a bool.
+        ValueError: If `loss_scale` or `eps` is less than or equal to 0.
+        ValueError: If `beta1`, `beta2` is not in range (0.0, 1.0).
+        ValueError: If `weight_decay` is less than 0.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -284,12 +297,14 @@ class Adam(Optimizer):
         >>> #2) Use parameter groups and set different values
         >>> conv_params = list(filter(lambda x: 'conv' in x.name, net.trainable_params()))
         >>> no_conv_params = list(filter(lambda x: 'conv' not in x.name, net.trainable_params()))
-        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01},
+        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01, 'grad_centralization':True},
         ...                 {'params': no_conv_params, 'lr': 0.01},
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.Adam(group_params, learning_rate=0.1, weight_decay=0.0)
-        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use learning rate of 0.01 and defaule weight decay of 0.0.
+        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01 and grad
+        >>> # centralization of True.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0 and grad
+        >>> # centralization of False.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -329,6 +344,7 @@ class Adam(Optimizer):
         gradients = self.decay_weight(gradients)
         gradients = self.scale_grad(gradients)
         gradients = self._grad_sparse_indices_deduplicate(gradients)
+        gradients = self.gradients_centralization(gradients)
         lr = self.get_lr()
 
         beta1_power = self.beta1_power * self.beta1
@@ -416,6 +432,15 @@ class AdamWeightDecay(Optimizer):
 
     Outputs:
         tuple[bool], all elements are True.
+
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `beta1`, `beta2` or `eps` is not a float.
+        TypeError: If `weight_decay` is neither float nor int.
+        ValueError: If `eps` is less than or equal to 0.
+        ValueError: If `beta1`, `beta2` is not in range (0.0, 1.0).
+        ValueError: If `weight_decay` is less than 0.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -540,13 +565,27 @@ class AdamOffload(Optimizer):
             If true, update the gradients using NAG.
             If false, update the gradients without using NAG. Default: False.
         weight_decay (float): Weight decay (L2 penalty). It must be equal to or greater than 0. Default: 0.0.
-        loss_scale (float): A floating point value for the loss scale. Should be greater than 0. Default: 1.0.
+        loss_scale (float): A floating point value for the loss scale. Should be greater than 0. In general, use the
+            default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
 
     Inputs:
         - **gradients** (tuple[Tensor]) - The gradients of `params`, the shape is the same as `params`.
 
     Outputs:
         Tensor[bool], the value is True.
+
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `beta1`, `beta2`, `eps` or `loss_scale` is not a float.
+        TypeError: If `weight_decay` is neither float nor int.
+        TypeError: If `use_locking` or `use_nesterov` is not a bool.
+        ValueError: If `loss_scale` or `eps` is less than or equal to 0.
+        ValueError: If `beta1`, `beta2` is not in range (0.0, 1.0).
+        ValueError: If `weight_decay` is less than 0.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -564,7 +603,7 @@ class AdamOffload(Optimizer):
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.AdamOffload(group_params, learning_rate=0.1, weight_decay=0.0)
         >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use learning rate of 0.01 and defaule weight decay of 0.0.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()

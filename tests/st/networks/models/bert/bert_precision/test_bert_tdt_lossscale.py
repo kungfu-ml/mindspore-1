@@ -174,8 +174,8 @@ class TimeMonitor(Callback):
         self.per_step_mseconds_list.append(epoch_mseconds / self.data_size)
 
 
-def test_bert_percision(enable_graph_kernel=False):
-    """test bert percision"""
+def test_bert_precision(enable_graph_kernel=False):
+    """test bert precision"""
     context.set_context(mode=context.GRAPH_MODE, device_target="Ascend", reserve_class_name_in_scope=False)
     if enable_graph_kernel:
         context.set_context(enable_graph_kernel=True)
@@ -223,14 +223,14 @@ def test_bert_percision(enable_graph_kernel=False):
 
     # assertion occurs while the loss value, overflow state or loss_scale value is wrong
     loss_value = np.array(callback.loss_list)
-    assert np.allclose(loss_value[0], 12.2065868, 0, 0.000001)
+    assert np.allclose(loss_value[0], 12.2066, 0, 0.0005)
 
     if enable_graph_kernel:
-        expect_loss_value = [12.2065868, 11.8651543, 11.8282356, 11.8266964, 11.8210478, 12.4073524, 12.0055466,
-                             12.6212320, 12.2229223, 12.4272099]
+        expect_loss_value = [12.206627, 11.840489, 11.798470, 11.796345, 11.790964, 12.366766, 11.971539, 12.576565,
+                             12.185522, 12.386192]
     else:
-        expect_loss_value = [12.2065868, 11.94102, 11.931558, 11.938105, 11.932648, 12.556579, 12.130686, 12.783716,
-                             12.360179, 12.578461]
+        expect_loss_value = [12.206587, 11.966410, 11.965916, 11.975922, 11.970262, 12.608881, 12.174048, 12.840656,
+                             12.407923, 12.631133]
     print("loss value: {}".format(loss_value))
     assert np.allclose(loss_value, expect_loss_value, 0, 0.0005)
 
@@ -249,18 +249,13 @@ def test_bert_percision(enable_graph_kernel=False):
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
-def test_bert_percision_graph_kernel_off():
-    test_bert_percision(enable_graph_kernel=False)
+def test_bert_precision_graph_kernel_off():
+    test_bert_precision(enable_graph_kernel=False)
 
 
-@pytest.mark.level0
-@pytest.mark.platform_arm_ascend_training
-@pytest.mark.platform_x86_ascend_training
-@pytest.mark.env_onecard
-def test_bert_percision_graph_kernel_on():
-    test_bert_percision(enable_graph_kernel=True)
+def test_bert_precision_graph_kernel_on():
+    test_bert_precision(enable_graph_kernel=True)
 
 
 if __name__ == '__main__':
-    test_bert_percision(enable_graph_kernel=False)
-    test_bert_percision(enable_graph_kernel=True)
+    test_bert_precision(enable_graph_kernel=False)

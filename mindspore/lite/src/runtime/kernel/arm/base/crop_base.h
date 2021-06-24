@@ -25,28 +25,20 @@ namespace mindspore::kernel {
 class CropBaseCPUKernel : public LiteKernel {
  public:
   CropBaseCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                    const std::vector<lite::Tensor *> &outputs, const mindspore::lite::InnerContext *ctx,
-                    const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                    const std::vector<lite::Tensor *> &outputs, const mindspore::lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     crop_para_ = reinterpret_cast<CropParameter *>(op_parameter_);
     crop_para_->thread_count_ = op_parameter_->thread_num_;
   }
-  ~CropBaseCPUKernel() {
-    if (crop_para_->in_shape_ != nullptr) {
-      free(crop_para_->in_shape_);
-      crop_para_->in_shape_ = nullptr;
-    }
-    if (crop_para_->out_shape_ != nullptr) {
-      free(crop_para_->out_shape_);
-      crop_para_->out_shape_ = nullptr;
-    }
-  }
+  ~CropBaseCPUKernel() = default;
 
   int Init() override;
   int ReSize() override;
   int Run() override { return 0; }
 
  protected:
+  std::vector<int> input_shape_;
+  std::vector<int> output_shape_;
   CropParameter *crop_para_;
   void PadOffset(int input_dim, CropParameter *crop_para);
 };

@@ -25,8 +25,9 @@
 #include "include/api/status.h"
 #include "include/api/types.h"
 
-namespace mindspore::api {
+namespace mindspore {
 struct AclTensorInfo {
+  void *cur_device_data;
   void *device_data;
   size_t buffer_size;
   aclDataType data_type;
@@ -45,14 +46,12 @@ class ModelProcess {
         input_infos_(),
         output_infos_() {}
   ~ModelProcess() {}
-  Status LoadModelFromFile(const std::string &file_name, uint32_t *model_id);
+
   Status UnLoad();
-  Status PredictFromHost(const std::vector<Buffer> &inputs, std::vector<Buffer> *outputs);
+  Status PredictFromHost(const std::vector<MSTensor> &inputs, std::vector<MSTensor> *outputs);
   Status PreInitModelResource();
-  Status GetInputsInfo(std::vector<std::string> *names, std::vector<std::vector<int64_t>> *shapes,
-                       std::vector<DataType> *data_types, std::vector<size_t> *mem_sizes) const;
-  Status GetOutputsInfo(std::vector<std::string> *names, std::vector<std::vector<int64_t>> *shapes,
-                        std::vector<DataType> *data_types, std::vector<size_t> *mem_sizes) const;
+  std::vector<MSTensor> GetInputs();
+  std::vector<MSTensor> GetOutputs();
 
   // override this method to avoid request/reply data copy
   void SetIsDevice(bool is_device) { is_run_on_device_ = is_device; }
@@ -62,10 +61,13 @@ class ModelProcess {
 
  private:
   Status CreateDataBuffer(void **data_mem_buffer, size_t buffer_size, aclmdlDataset *dataset);
-  Status CheckAndInitInput(const std::vector<Buffer> &inputs);
-  Status BuildOutputs(std::vector<Buffer> *outputs);
+  Status CheckAndInitInput(const std::vector<MSTensor> &inputs);
+  Status ConstructTensors(const std::vector<AclTensorInfo> &acl_tensor_list, std::vector<MSTensor> *tensor_list);
+  Status BuildOutputs(std::vector<MSTensor> *outputs);
+  Status SetBatchSize(const std::vector<MSTensor> &inputs);
   Status InitInputsBuffer();
   Status InitOutputsBuffer();
+  Status ResetOutputSize();
 
   void DestroyInputsDataset();
   void DestroyInputsDataMem();
@@ -80,7 +82,10 @@ class ModelProcess {
   aclmdlDataset *outputs_;
   std::vector<AclTensorInfo> input_infos_;
   std::vector<AclTensorInfo> output_infos_;
+  std::vector<MSTensor> input_tensors_;
+  std::vector<MSTensor> output_tensors_;
+  size_t GetDynamicDims(const std::vector<AclTensorInfo> &);
 };
-}  // namespace mindspore::api
+}  // namespace mindspore
 
 #endif  // MINDSPORE_CCSRC_CXXAPI_GRAPH_ACL_MODEL_PROCESS_H

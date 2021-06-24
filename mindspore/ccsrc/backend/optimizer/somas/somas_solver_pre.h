@@ -34,6 +34,15 @@ using std::vector;
 
 namespace mindspore {
 namespace somas {
+constexpr char const *sortingNames[6] = {"size(>), index(<)",
+                                         "size(>), index(>)",
+                                         "size(>), constraints(<), index(<)",
+                                         "size(>), constraints(<), index(>)",
+                                         "size(>), constraints(>), index(<)",
+                                         "size(>), constraints(>), index(>)"};
+constexpr char const *branchingNames[4] = {"bestfit", "smallest", "largest", "worstfit"};
+constexpr char const *algorithmTypeNames[2] = {"Shared Objects", "Single Object"};
+constexpr auto kParallelComputeSizeThreshold = 2000;
 enum Status { FAILED, SUCCESS };
 enum AlgorithmType { kManyObjects = 0, kSingleObject, kNumAlgorithmTypes };
 enum SortingType {
@@ -81,6 +90,8 @@ class DynamicBitSet {
     Reset(0x0);
   }
 
+  ~DynamicBitSet() = default;
+
   void SetBitTrue(size_t index, bool log = false) {
     if (log) {
       MS_LOG(INFO) << GetIndex(index) << " " << GetBitMask(index);
@@ -91,6 +102,24 @@ class DynamicBitSet {
   void SetBitFalse(size_t index) { bit_[GetIndex(index)] &= (~GetBitMask(index)); }
 
   bool IsBitTrue(size_t index) const { return (bit_[GetIndex(index)] & GetBitMask(index)) != 0x0; }
+
+  size_t CountOnesNum() const {
+    size_t ret = 0;
+    static char ones_num_in_hex[] = "\0\1\1\2\1\2\2\3\1\2\2\3\2\3\3\4";
+    for (size_t i = 0; i < bit_size_; i++) {
+      auto value = bit_[i];
+      if (value == 0) {
+        continue;
+      }
+      char *char_value = reinterpret_cast<char *>(&value);
+      for (size_t j = 0; j < bit_width_ / CHAR_BIT; j++) {
+        ret += ones_num_in_hex[char_value[j] & 0xF];
+        char_value[j] >>= 4;
+        ret += ones_num_in_hex[char_value[j] & 0xF];
+      }
+    }
+    return ret;
+  }
 
   void Log() {
     std::cout << "Start Print Bitset ";
@@ -146,7 +175,7 @@ struct SomasSolverTensorDesc {
   }
 };
 using SomasSolverTensorDescPtr = std::shared_ptr<SomasSolverTensorDesc>;
-
+typedef std::unordered_map<size_t, SomasSolverTensorDescPtr> TensorsDescMap;
 class SomasSolverPre {
  public:
   SomasSolverPre() = default;
@@ -157,18 +186,27 @@ class SomasSolverPre {
 
   size_t GetMaxOffset() { return max_offset_; }
 
-  Status Solving(const session::KernelGraph *graph, std::unordered_map<size_t, SomasSolverTensorDescPtr> *tensors,
+  Status Solving(const session::KernelGraph *graph, TensorsDescMap *tensors,
                  const std::vector<DynamicBitSet> *pConstraints, const vector<vector<size_t>> &continuous_v,
                  bool bVerifySolution,  // true -> Check continuous and non overlapping constraints solution
                  bool ball = true,      // true -> run full set of heuristics, false -> run single heuristic specified
                  SortingType sorting = kGreaterSizeSmallerIndex, FittingType fitting = kBest,
                  AlgorithmType algorithm = kManyObjects);
 
-  void Log(const session::KernelGraph *graph, const unordered_map<size_t, SomasSolverTensorDescPtr> &tensors,
+  void Log(const session::KernelGraph *graph, const TensorsDescMap &tensors,
            const std::vector<DynamicBitSet> *pConstraints_v, const vector<vector<size_t>> &continuous_v);
+
+  Status checkTensors(TensorsDescMap *tensors, uint32_t index1, uint32_t index2);
+  Status addContiguousInfoInMap(const vector<vector<size_t>> &continuous_v, TensorsDescMap *tensors);
+  Status addContiguousInfoInMultiMaps(const vector<vector<size_t>> &continuous_v, vector<TensorsDescMap> *vecTensorsMap,
+                                      TensorsDescMap *tensors);
 
  private:
   size_t max_offset_;
+  void SolverInputLog(const session::KernelGraph *graph, const TensorsDescMap &tensors,
+                      const std::vector<DynamicBitSet> *pConstraints_v, const vector<vector<size_t>> &continuous_v);
+  void SolverOutputLog(const session::KernelGraph *graph, const TensorsDescMap &tensors) const;
+  vector<TensorsDescMap> createTensorsMaps(const TensorsDescMap &tensors, size_t total_sol);
 };
 using SomasSolverPrePtr = std::shared_ptr<SomasSolverPre>;
 }  // namespace somas

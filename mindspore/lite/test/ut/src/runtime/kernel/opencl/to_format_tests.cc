@@ -18,7 +18,6 @@
 #include "src/common/log_adapter.h"
 #include "common/common_test.h"
 #include "mindspore/lite/src/common/file_utils.h"
-#include "mindspore/lite/src/runtime/opencl/opencl_runtime.h"
 #include "mindspore/lite/src/runtime/kernel/opencl/opencl_subgraph.h"
 #include "mindspore/lite/src/runtime/kernel/opencl/kernel/to_format.h"
 
@@ -58,7 +57,7 @@ TEST_F(TestToFormatOpenCL, ToFormatNHWC2NCHW) {
   }
   std::vector<lite::Tensor *> inputs{tensor_x};
   std::vector<lite::Tensor *> outputs{tensor_out};
-  auto arith_kernel_ptr = std::make_unique<kernel::ToFormatOpenCLKernel>(nullptr, inputs, outputs);
+  auto arith_kernel_ptr = std::make_unique<kernel::ToFormatOpenCLKernel>(nullptr, inputs, outputs, nullptr);
   auto arith_kernel = arith_kernel_ptr.get();
   if (arith_kernel == nullptr) {
     MS_LOG(ERROR) << "arith_kernel create error.";

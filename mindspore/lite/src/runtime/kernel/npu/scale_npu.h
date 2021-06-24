@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,14 +19,14 @@
 #include <vector>
 #include "nnacl/scale.h"
 #include "src/runtime/kernel/npu/npu_kernel.h"
+#include "include/graph/op/all_ops.h"
 #include "include/graph/op/nn_defs.h"
 namespace mindspore::kernel {
 class ScaleNPUKernel : public NPUKernel {
  public:
   ScaleNPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                 const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                 const mindspore::lite::PrimitiveC *primitive)
-      : NPUKernel(parameter, inputs, outputs, ctx, primitive) {
+                 const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : NPUKernel(parameter, inputs, outputs, ctx) {
     scale_parameter_ = reinterpret_cast<ScaleParameter *>(parameter);
   }
   ~ScaleNPUKernel() override;
@@ -37,9 +37,15 @@ class ScaleNPUKernel : public NPUKernel {
                    const std::vector<ge::Operator *> &npu_inputs) override;
   ge::Operator *GetNPUOp() override;
 
+ protected:
+  int SetActivation(const ge::Operator *input, int act_type);
+
  private:
   hiai::op::Scale *op_ = nullptr;
+  hiai::op::Const *scale_ = nullptr;
+  hiai::op::Const *bias_ = nullptr;
+  hiai::op::Activation *act_ = nullptr;
   ScaleParameter *scale_parameter_;
 };
 }  // namespace mindspore::kernel
-#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_NPU_Scale_NPU_H_
+#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_NPU_SCALE_NPU_H_

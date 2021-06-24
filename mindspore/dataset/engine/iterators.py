@@ -98,7 +98,6 @@ class Iterator:
         """
         Manually terminate Python iterator instead of relying on out of scope destruction.
         """
-        logger.info("Terminating Python iterator. This will also terminate C++ pipeline.")
         if hasattr(self, '_runtime_context') and self._runtime_context:
             if hasattr(self, '_iterator') and self._iterator:
                 self._runtime_context.Terminate()
@@ -169,7 +168,6 @@ class DictIterator(Iterator):
             return {k: self._transform_tensor(t) for k, t in self._iterator.GetNextAsMap().items()}
         except RuntimeError as err:
             ## maybe "Out of memory" / "MemoryError" error
-            logger.error("Got runtime err: {}.".format(err))
             err_info = str(err)
             if err_info.find("Out of memory") >= 0 or err_info.find("MemoryError") >= 0:
                 logger.error("Memory error occurred, process will exit.")

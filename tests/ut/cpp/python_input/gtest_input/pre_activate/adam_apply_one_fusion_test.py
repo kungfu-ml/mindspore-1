@@ -15,16 +15,18 @@
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
 from mindspore.ops import functional as F
+from mindspore.ops import _constants as Constants
 
-Add = P.TensorAdd()
+
+Add = P.Add()
 Sub = P.Sub()
 Mul = P.Mul()
 RealDiv = P.RealDiv()
 Sqrt = P.Sqrt()
 Square = P.Square()
 Assign = P.Assign()
-make_tuple = Primitive('make_tuple')
-tuple_getitem = Primitive('tuple_getitem')
+make_tuple = Primitive('MakeTuple')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
 AdamApplyOne = Primitive('AdamApplyOne')
 AdamApplyOneAssign = Primitive('AdamApplyOneAssign')
 

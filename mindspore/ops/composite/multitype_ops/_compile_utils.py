@@ -23,28 +23,17 @@ from ....common import dtype as mstype
 from ....common._register_for_tensor import tensor_operator_registry
 
 hyper_map = base.HyperMap()
-pack = P.Pack(axis=-1)
+pack = P.Stack(axis=-1)
 
 
 def _tensor_getitem(self, index):
     """Handle tensor getitem"""
-    if isinstance(index, Tensor):
-        return tensor_index_by_tensor(self, index)
     if isinstance(index, list):
         return tensor_index_by_list(self, index)
     if isinstance(index, tuple):
         return tensor_index_by_tuple(self, index)
-    # bool type should be judged before int
-    if isinstance(index, bool):
-        return _tensor_index_by_bool(self, index)
-    if isinstance(index, int):
-        return _tensor_index_by_integer(self, index)
-    if isinstance(index, slice):
-        return tensor_index_by_slice(self, index)
-    if index is None:
-        return F.expand_dims(self, 0)
-    if index is ...:
-        return self
+    if isinstance(index, (Tensor, int, slice)) or index in (None, ...):
+        return tensor_index_by_tuple(self, (index,))
     raise IndexError(f"Only support integers, slices(`:`), ellipsis(`...`), None, bool, tensor with int, "
                      f"list and tuple ,but got {index} with type {type(index)}.")
 
@@ -129,127 +118,104 @@ def _transform_ellipsis_to_slice(data, tuple_index, op_name):
     return tuple_index_new
 
 
-def _expand_data_dims_with_none(data, tuple_index, op_name):
-    """expand the data's dim with 'None' in tuple_index"""
+def _expand_data_dims(data, tuple_index):
+    """expand the data's dim with 'None' and 'Boolean' in tuple_index"""
     indexes_types = hyper_map(F.typeof, tuple_index)
-    none_positions, tuple_index_without_none = (), ()
+    expand_positions, tuple_index_new = (), ()
     for i, (index, index_type) in enumerate(zip(tuple_index, indexes_types)):
-        none_type_tag = const_utils.judge_index_type(index_type, mstype.type_none)
-        tuple_index_without_none += (const_utils.make_empty_slice(),) if none_type_tag else(index,)
-        none_positions += (i,) if none_type_tag else ()
-    for dim in none_positions:
-        data = F.expand_dims(data, dim)
-    return data, tuple_index_without_none
-
-
-def _expand_data_dims_with_bool(data, tuple_index, op_name):
-    """expand the data's dim with 'True/False' in tuple_index"""
-    indexes_types = hyper_map(F.typeof, tuple_index)
-    bool_positions, tuple_index_without_bool = (), ()
-
-    for i, (index, index_type) in enumerate(zip(tuple_index, indexes_types)):
-        bool_type_tag = const_utils.judge_index_type(index_type, mstype.bool_)
-        if bool_type_tag:
-            if index:
-                tuple_index_without_bool += (const_utils.make_tensor([0], mstype.int64),)
-            else:
-                # todo wait to complete the operations' support for zero dim-size, then could make 0 length tensor.
-                # to replace the 'False'
-
-                return const_utils.raise_index_error("When tensor is indexed by a tuple which contains bool object, "
-                                                     "the value only support 'True'.")
+        if const_utils.judge_index_type(index_type, mstype.type_none):
+            tuple_index_new += (const_utils.make_empty_slice(),)
+            expand_positions += (i,)
+        elif const_utils.judge_index_type(index_type, mstype.bool_):
+            tuple_index_new += (const_utils.make_tensor([0] if index else[], mstype.int64),)
+            expand_positions += (i,)
         else:
-            tuple_index_without_bool += (index,)
-        bool_positions += (i,) if bool_type_tag else ()
+            tuple_index_new += (index,)
 
-    for dim in bool_positions:
+    for dim in expand_positions:
         data = F.expand_dims(data, dim)
 
-    return data, tuple_index_without_bool
+    return data, tuple_index_new
 
 
-def tensor_index_by_slice(data, slice_index):
-    """Tensor getitem by a single slice"""
-    shape = F.shape(data)
-    if not shape:
-        const_utils.raise_index_error("When tensor is indexed by a slice, the dimension of the tensor"
-                                      "cannot be 0.")
-    begin_strides, end_strides, step_strides = const_utils.get_stride_info_from_slice(shape, slice_index)
-    return F.strided_slice(data, begin_strides, end_strides, step_strides)
-
-
-def tensor_index_by_number(data, number):
+def tensor_index_by_number(data, number_index):
     """Tensor getitem by a Number which may be integer/float/bool value"""
-    number_type = const_utils.check_number_index_type(number)
+    data_type = F.typeof(data)
+    if const_utils.judge_index_type(data_type, mstype.tensor_type):
+        data_shape = F.shape(data)
+        data_rank = len(data_shape)
+        min_data_rank, max_data_rank = 0, 8
+        const_utils.judge_data_rank(data_rank, min_data_rank, max_data_rank)
+
+    number_type = const_utils.check_number_index_type(number_index)
     if number_type == const_utils.BOOL_:
-        return _tensor_index_by_bool(data, number)
+        return tensor_index_by_tuple(data, (number_index,))
     if number_type == const_utils.INT_:
-        return _tensor_index_by_integer(data, number)
+        return _tensor_index_by_integer(data, number_index)
     return const_utils.raise_index_error("Only support integers, slices(`:`), ellipsis(`...`), None and bool.")
 
 
-def _tensor_index_by_bool(data, bool_value):
+# TODO wait to remove after setitem by Yang Linfeng
+def _tensor_index_by_bool(data, bool_index):
     """Tensor getitem by a single bool value"""
-    if bool_value:
+    if bool_index:
         return F.expand_dims(data, 0)
     return const_utils.make_tensor([], data.dtype, (0,) + F.shape(data))
 
 
-def _tensor_index_by_integer(data, number):
+def _tensor_index_by_integer(data, int_index):
     """Tensor getitem by a single integer number"""
     data_shape = F.shape(data)
     data_rank = len(data_shape)
     if data_rank == 0:
         return const_utils.raise_type_error("When tensor is indexed by an integer, the dimension of the tensor "
                                             "cannot be 0.")
-    transformed_number = const_utils.check_and_transform_int_index(number, data_shape[0], const_utils.TENSOR_GETITEM)
+    transformed_number = const_utils.check_and_transform_int_index(int_index, data_shape[0], const_utils.TENSOR_GETITEM)
     begin_strides, end_strides, step_strides = const_utils.get_stride_info_from_integer(data_shape, transformed_number)
     shrink_axis_mask = 1
     return P.StridedSlice(0, 0, 0, 0, shrink_axis_mask)(data, begin_strides, end_strides, step_strides)
 
 
-def tensor_index_by_tensor(data, tensor_index):
-    """Tensor getitem by a single tensor"""
-    index_type = F.dtype(tensor_index)
-    const_utils.check_index_type_valid(index_type, mstype.int_type, const_utils.TENSOR_GETITEM)
-    tensor_index = F.cast(tensor_index, mstype.int64)
-    return F.gather(data, tensor_index, 0)
-
-
 def tensor_index_by_list(data, list_index):
     """Tensor getitem by list of int and bool"""
     data_shape = F.shape(data)
-    const_utils.check_sequence_index_type(list_index, const_utils.TENSOR_GETITEM)
-    sub_tuple_index = const_utils.transform_sequence_index(list_index, data_shape[0], const_utils.TENSOR_GETITEM)
-    tensor_index = F.tuple_to_array(sub_tuple_index)
-    tensor_index = F.cast(tensor_index, mstype.int64)
-    return F.gather(data, tensor_index, 0)
+    indexes_types = hyper_map(F.typeof, list_index)
+    if const_utils.judge_indexes_types(indexes_types, mstype.int_type + (mstype.bool_,)):
+        sub_tuple_index = const_utils.transform_sequence_index(list_index, data_shape[0], const_utils.TENSOR_GETITEM)
+        if not sub_tuple_index:
+            data_rank = len(data_shape)
+            if data_rank == 1:
+                return const_utils.make_tensor([], data.dtype, ())
+            return const_utils.make_tensor([], data.dtype, data_shape[1:])
+        tensor_index = const_utils.make_tensor(sub_tuple_index, mstype.int64)
+        return F.gather(data, tensor_index, 0)
+
+    tuple_index_new = ()
+    for index in list_index:
+        tuple_index_new += (index,)
+    return tensor_index_by_tuple(data, tuple_index_new)
 
 
 def tensor_index_by_tuple(data, tuple_index):
     """Tensor getitem by tuple of various types with None"""
-    op_name = const_utils.TENSOR_GETITEM
-    if len(tuple_index) == 1:
-        return data[tuple_index[0]]
+    tuple_index_len = len(tuple_index)
+    if tuple_index_len == 0:
+        return data
 
+    op_name = const_utils.TENSOR_GETITEM
     tuple_index = _transform_ellipsis_to_slice(data, tuple_index, op_name)
-    data, tuple_index = _expand_data_dims_with_none(data, tuple_index, op_name)
-    data, tuple_index = _expand_data_dims_with_bool(data, tuple_index, op_name)
+    data, tuple_index = _expand_data_dims(data, tuple_index)
+
+    data_shape = F.shape(data)
+    data_rank = len(data_shape)
+    min_data_rank, max_data_rank = 0, 8
+    const_utils.judge_data_rank(data_rank, min_data_rank, max_data_rank)
 
     indexes_types = hyper_map(F.typeof, tuple_index)
     contain_type = const_utils.tuple_index_type_cnt(indexes_types, op_name)
-    if contain_type == const_utils.ALL_TENSOR:
-        return _tensor_getitem_by_tuple_of_tensor(data, tuple_index)
     if contain_type == const_utils.ALL_BASIC:
         return _tensor_getitem_by_tuple_slice(data, tuple_index)
-    return _tensor_getitem_by_tuple(data, tuple_index)
-
-
-def _tensor_getitem_by_tuple_of_tensor(data, tuple_index):
-    """Tensor getitem by a tuple of tensor."""
-    indices = _generate_indices_from_tuple_of_tensor(data, tuple_index, const_utils.TENSOR_GETITEM)
-    result = F.gather_nd(data, indices)
-    return result
+    return _tensor_getitem_by_tuple(data, tuple_index, op_name)
 
 
 def _tensor_getitem_by_tuple_slice(data, tuple_index):
@@ -260,35 +226,16 @@ def _tensor_getitem_by_tuple_slice(data, tuple_index):
     return P.StridedSlice(0, 0, 0, 0, shrink_axis_mask)(data, begin_strides, end_strides, step_strides)
 
 
-def _tensor_getitem_by_tuple(data, tuple_index):
+def _tensor_getitem_by_tuple(data, tuple_index, op_name):
     """Tensor getitem by a tuple of mixed tensor."""
-    indices = _generate_indices_from_tuple(data, tuple_index, const_utils.TENSOR_GETITEM)
-    result = F.gather_nd(data, indices)
-    return result
-
-
-def _generate_indices_from_tuple_of_tensor(data, tuple_index, op_name):
-    """Generate an indices tensor from a tuple of tensor."""
-    indices = None
-    indexes_types = hyper_map(F.dtype, tuple_index)
-    const_utils.check_indexes_types_valid(indexes_types, mstype.int_type, op_name)
-    tensor_index_shape = hyper_map(F.shape, tuple_index)
-    broadcast_shape = const_utils.generate_broadcast_shape(tensor_index_shape, op_name)
-    broadcast_tensors = hyper_map(F.partial(_broadcast, broadcast_shape), tuple_index)
-    indices = pack(broadcast_tensors)
-    indices = F.cast(indices, mstype.int64)
-    return indices
-
-
-def _generate_indices_from_tuple(data, tuple_index, op_name):
-    """Generate an indices tensor from a tuple that contains slice, int, ellipsis, tensor."""
     data_shape = F.shape(data)
+    data_rank = len(data_shape)
     tuple_index_len = len(tuple_index)
     tensor_indexes, slice_indexes = [], []
     indexes_types = hyper_map(F.typeof, tuple_index)
     slice_positions, _, _, int_positions, _, tensor_positions, sequence_positions = \
         const_utils.get_pos_of_indexes_types(indexes_types, op_name)
-    tuple_index_new = ()
+    tuple_index_new, slice_shapes = (), ()
 
     for i, (index, dim_size) in enumerate(zip(tuple_index, data_shape)):
         if i in int_positions:
@@ -296,40 +243,116 @@ def _generate_indices_from_tuple(data, tuple_index, op_name):
             tensor_index = F.scalar_to_tensor(int_index, mstype.int64)
             tuple_index_new += (tensor_index,)
             tensor_indexes.append(tensor_index)
-            tensor_positions.append(i)
+            tensor_positions += (i,)
         elif i in sequence_positions:
             sequence_index = const_utils.transform_sequence_index(index, dim_size, op_name)
-            tensor_index = F.tuple_to_array(sequence_index)
+            tensor_index = const_utils.make_tensor(sequence_index)
             tensor_index = F.cast(tensor_index, mstype.int64)
             tuple_index_new += (tensor_index,)
             tensor_indexes.append(tensor_index)
-            tensor_positions.append(i)
+            tensor_positions += (i,)
         elif i in tensor_positions:
+            const_utils.check_type_valid(F.dtype(index), mstype.int_type, op_name)
             tensor_index = F.cast(index, mstype.int64)
             tuple_index_new += (tensor_index,)
             tensor_indexes.append(tensor_index)
         elif i in slice_positions:
-            slice_indexes.append(index)
-            tuple_index_new += (index,)
+            slice_ele_list_index = const_utils.transform_slice_to_ele_list(index, dim_size)
+            slice_shapes += (len(slice_ele_list_index),)
+            tuple_index_new += (slice_ele_list_index,)
+            slice_indexes.append(slice_ele_list_index)
 
     tensor_indexes_shapes = hyper_map(F.shape, tensor_indexes)
-    tensor_indexes_dtypes = hyper_map(F.dtype, tensor_indexes)
-    indexes_types = hyper_map(F.typeof, tuple_index_new)
-    broadcast_shape, final_shape, indexes_shapes_info = const_utils.generate_index_info_from_tuple_of_mixed_tensors(
-        data_shape, indexes_types, tensor_indexes_shapes, tensor_indexes_dtypes, slice_indexes, op_name)
+    broadcast_shape, index_tensor_new_shape, final_shape, fancy_position = \
+        const_utils.generate_index_info_from_tuple_of_mixed_tensors(tensor_positions, tensor_indexes_shapes,
+                                                                    slice_shapes, op_name)
 
-    slice_number = 0
+    if 0 in final_shape + data_shape:
+        if tuple_index_len < data_rank:
+            final_shape = final_shape + data_shape[tuple_index_len:]
+        return const_utils.make_tensor([], data.dtype, final_shape)
+
     final_index_tensors = []
-    index_tensor_new_shape = const_utils.compute_new_shape(broadcast_shape, indexes_shapes_info)
-    for i in range(tuple_index_len):
+    slice_cnt = 0
+    for i, index in enumerate(tuple_index_new):
         if i in tensor_positions:
-            transform_tensor = _transform_indexing_tensor(broadcast_shape, final_shape, index_tensor_new_shape,
-                                                          tuple_index_new[i])
+            transform_tensor = _transform_indexing_tensor(broadcast_shape, final_shape, index_tensor_new_shape, index)
             final_index_tensors.append(transform_tensor)
-        if i in slice_positions:
-            slice_tensor = const_utils.convert_slice_to_tensor(slice_number, final_shape, indexes_shapes_info, op_name)
-            final_index_tensors.append(slice_tensor)
-            slice_number += 1
+        elif i in slice_positions:
+            slice_index_tensor = const_utils.convert_slice_to_tensor(index, final_shape, slice_cnt, broadcast_shape,
+                                                                     slice_shapes, fancy_position)
+            final_index_tensors.append(slice_index_tensor)
+            slice_cnt += 1
+
+    indices = pack(final_index_tensors)
+    return F.gather_nd(data, indices)
+
+
+def _generate_indices_from_tuple_of_tensor(tuple_index, op_name):
+    """Generate an indices tensor from a tuple of tensor."""
+    indices = None
+    indexes_types = hyper_map(F.dtype, tuple_index)
+    const_utils.check_types_valid(indexes_types, mstype.int_type, op_name)
+    tensor_index_shape = hyper_map(F.shape, tuple_index)
+    broadcast_shape = const_utils.generate_broadcast_shape(tensor_index_shape, op_name)
+    broadcast_tensors = hyper_map(F.partial(_broadcast, broadcast_shape), tuple_index)
+    new_broadcast_tensors = ()
+    for tensor in broadcast_tensors:
+        new_broadcast_tensors += (F.cast(tensor, mstype.int64),)
+    indices = pack(new_broadcast_tensors)
+    return indices
+
+
+def _generate_indices_from_tuple(data, tuple_index, op_name):
+    """Generate an indices tensor from a tuple that contains slice, int, ellipsis, tensor."""
+    data_shape = F.shape(data)
+    tensor_indexes, slice_indexes = [], []
+    indexes_types = hyper_map(F.typeof, tuple_index)
+    slice_positions, _, _, int_positions, _, tensor_positions, sequence_positions = \
+        const_utils.get_pos_of_indexes_types(indexes_types, op_name)
+    tuple_index_new, slice_shapes = (), ()
+
+    for i, (index, dim_size) in enumerate(zip(tuple_index, data_shape)):
+        if i in int_positions:
+            int_index = const_utils.check_and_transform_int_index(index, dim_size, op_name)
+            tensor_index = F.scalar_to_tensor(int_index, mstype.int64)
+            tuple_index_new += (tensor_index,)
+            tensor_indexes.append(tensor_index)
+            tensor_positions += (i,)
+        elif i in sequence_positions:
+            sequence_index = const_utils.transform_sequence_index(index, dim_size, op_name)
+            tensor_index = const_utils.make_tensor(sequence_index)
+            tensor_index = F.cast(tensor_index, mstype.int64)
+            tuple_index_new += (tensor_index,)
+            tensor_indexes.append(tensor_index)
+            tensor_positions += (i,)
+        elif i in tensor_positions:
+            const_utils.check_type_valid(F.dtype(index), mstype.int_type, op_name)
+            tensor_index = F.cast(index, mstype.int64)
+            tuple_index_new += (tensor_index,)
+            tensor_indexes.append(tensor_index)
+        elif i in slice_positions:
+            slice_ele_list_index = const_utils.transform_slice_to_ele_list(index, dim_size)
+            slice_shapes += (len(slice_ele_list_index),)
+            tuple_index_new += (slice_ele_list_index,)
+            slice_indexes.append(slice_ele_list_index)
+
+    tensor_indexes_shapes = hyper_map(F.shape, tensor_indexes)
+    broadcast_shape, index_tensor_new_shape, final_shape, fancy_position = \
+        const_utils.generate_index_info_from_tuple_of_mixed_tensors(tensor_positions, tensor_indexes_shapes,
+                                                                    slice_shapes, op_name)
+
+    final_index_tensors = []
+    slice_cnt = 0
+    for i, index in enumerate(tuple_index_new):
+        if i in tensor_positions:
+            transform_tensor = _transform_indexing_tensor(broadcast_shape, final_shape, index_tensor_new_shape, index)
+            final_index_tensors.append(transform_tensor)
+        elif i in slice_positions:
+            slice_index_tensor = const_utils.convert_slice_to_tensor(index, final_shape, slice_cnt, broadcast_shape,
+                                                                     slice_shapes, fancy_position)
+            final_index_tensors.append(slice_index_tensor)
+            slice_cnt += 1
 
     indices = pack(final_index_tensors)
     return indices
@@ -353,7 +376,7 @@ def _generate_updates_from_tuple(data, index, value, op_type):
         value_shapes = hyper_map(F.shape, value)
         shapes_same = const_utils.check_shapes_same(value_shapes, const_utils.TENSOR_SETITEM)
         if shapes_same:
-            value = F.pack(value)
+            value = F.stack(value)
         return _generate_updates_from_tensor(data, index, value, op_type)
 
     data_shape = F.shape(data)
@@ -385,8 +408,7 @@ tensor_operator_registry.register("__setitem__", _tensor_setitem)
 
 def _tensor_setitem_by_int_tensor_with_tensor(data, index, value):
     """Set a tensor item by a int tensor with a tensor."""
-    updates = _generate_updates_from_tensor(data, index, value,
-                                            const_utils.SET_ITEM_BY_ONE_TENSOR)
+    updates = _generate_updates_from_tensor(data, index, value, const_utils.SET_ITEM_BY_ONE_TENSOR)
     index = F.expand_dims(index, -1)
     return P.TensorScatterUpdate()(data, index, updates)
 
@@ -430,8 +452,9 @@ def _tensor_setitem_by_bool_tensor_with_scalar(data, index, value):
 
 def _tensor_setitem_by_int_tensor_with_scalar(data, index, value):
     """Set a tensor item by a int tensor with a scalar."""
-    updates = _generate_updates_from_scalar(data, index, value,
-                                            const_utils.SET_ITEM_BY_ONE_TENSOR)
+    if not F.shape(index):
+        index = F.expand_dims(index, 0)
+    updates = _generate_updates_from_scalar(data, index, value, const_utils.SET_ITEM_BY_ONE_TENSOR)
     index = F.expand_dims(index, -1)
     return P.TensorScatterUpdate()(data, index, updates)
 
@@ -449,10 +472,8 @@ def tensor_setitem_by_tensor_with_number(data, index, value):
 def tensor_setitem_by_tensor_with_tuple(data, index, value):
     """Assigns the tensor by tensor with tuple value."""
     index_dtype = F.dtype(index)
-    check_dtype = const_utils.check_index_tensor_dtype(index_dtype, const_utils.TENSOR_SETITEM)
-    result = None
-    if check_dtype:
-        result = _tensor_setitem_by_tensor_with_tuple(data, index, value)
+    const_utils.check_type_valid(index_dtype, (mstype.int32, mstype.int64), const_utils.TENSOR_SETITEM)
+    result = _tensor_setitem_by_tensor_with_tuple(data, index, value)
     return result
 
 
@@ -474,11 +495,9 @@ def _tensor_indices_number(data, data_shape, index, indices, value):
 
 def _tensor_setitem_by_tensor_with_tuple(data, index, value):
     """Set a tensor item by a tensor with a tuple."""
-    updates = _generate_updates_from_tuple(data, index, value,
-                                           const_utils.SET_ITEM_BY_ONE_TENSOR)
+    updates = _generate_updates_from_tuple(data, index, value, const_utils.SET_ITEM_BY_ONE_TENSOR)
     index = F.expand_dims(index, -1)
-    result = P.TensorScatterUpdate()(data, index, updates)
-    return result
+    return P.TensorScatterUpdate()(data, index, updates)
 
 
 def tensor_setitem_by_slice_with_number(data, input_slice, value):
@@ -502,13 +521,13 @@ def tensor_setitem_by_tuple_with_number(data, tuple_index, value):
         return data
     op_name = const_utils.TENSOR_GETITEM
     tuple_index = _transform_ellipsis_to_slice(data, tuple_index, op_name)
-    data, tuple_index = _expand_data_dims_with_none(data, tuple_index, op_name)
+    data, tuple_index = _expand_data_dims(data, tuple_index)
 
     indexes_types = hyper_map(F.typeof, tuple_index)
     contain_type = const_utils.tuple_index_type_cnt(indexes_types, const_utils.TENSOR_SETITEM)
 
     if contain_type == const_utils.ALL_TENSOR:
-        indices = _generate_indices_from_tuple_of_tensor(data, tuple_index, const_utils.TENSOR_SETITEM)
+        indices = _generate_indices_from_tuple_of_tensor(tuple_index, const_utils.TENSOR_SETITEM)
     else:
         int_cnt = const_utils.tuple_index_int_cnt(indexes_types, const_utils.TENSOR_SETITEM)
         if int_cnt == const_utils.ALL_INT:
@@ -564,13 +583,13 @@ def tensor_setitem_by_tuple_with_tensor(data, tuple_index, value):
         return data
     op_name = const_utils.TENSOR_GETITEM
     tuple_index = _transform_ellipsis_to_slice(data, tuple_index, op_name)
-    data, tuple_index = _expand_data_dims_with_none(data, tuple_index, op_name)
+    data, tuple_index = _expand_data_dims(data, tuple_index)
 
     indexes_types = hyper_map(F.typeof, tuple_index)
     contain_type = const_utils.tuple_index_type_cnt(indexes_types, const_utils.TENSOR_SETITEM)
 
     if contain_type == const_utils.ALL_TENSOR:
-        indices = _generate_indices_from_tuple_of_tensor(data, tuple_index, const_utils.TENSOR_SETITEM)
+        indices = _generate_indices_from_tuple_of_tensor(tuple_index, const_utils.TENSOR_SETITEM)
     else:
         int_cnt = const_utils.tuple_index_int_cnt(indexes_types, const_utils.TENSOR_SETITEM)
         if int_cnt == const_utils.ALL_INT:
@@ -592,13 +611,13 @@ def tensor_setitem_by_tuple_with_tuple(data, tuple_index, value):
         return data
     op_name = const_utils.TENSOR_GETITEM
     tuple_index = _transform_ellipsis_to_slice(data, tuple_index, op_name)
-    data, tuple_index = _expand_data_dims_with_none(data, tuple_index, op_name)
+    data, tuple_index = _expand_data_dims(data, tuple_index)
 
     indexes_types = hyper_map(F.typeof, tuple_index)
     contain_type = const_utils.tuple_index_type_cnt(indexes_types, const_utils.TENSOR_SETITEM)
 
     if contain_type == const_utils.ALL_TENSOR:
-        indices = _generate_indices_from_tuple_of_tensor(data, tuple_index, const_utils.TENSOR_SETITEM)
+        indices = _generate_indices_from_tuple_of_tensor(tuple_index, const_utils.TENSOR_SETITEM)
     else:
         int_cnt = const_utils.tuple_index_int_cnt(indexes_types, const_utils.TENSOR_SETITEM)
         if int_cnt == const_utils.ALL_INT:

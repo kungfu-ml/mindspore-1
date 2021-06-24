@@ -27,6 +27,7 @@
 #include "ir/graph_utils.h"
 #include "utils/misc.h"
 #include "debug/draw.h"
+#include "base/core_ops.h"
 
 namespace mindspore {
 namespace abstract {
@@ -57,7 +58,7 @@ void TestSpecializeGraph::SetUp() {
    */
   graph_g_ = std::make_shared<FuncGraph>();
   ParameterPtr y = graph_g_->add_parameter();
-  auto prim_return = std::make_shared<Primitive>("return");
+  auto prim_return = std::make_shared<Primitive>("Return");
   std::vector<AnfNodePtr> inputs;
   inputs.push_back(NewValueNode(prim_return));
   inputs.push_back(y);
@@ -95,12 +96,12 @@ void TestSpecializeGraph::SetUp() {
   // build func_graph beta
   ParameterPtr x1 = graph_beta_->add_parameter();
   inputs.clear();
-  inputs.push_back(NewValueNode(std::make_shared<Primitive>("scalar_add")));
+  inputs.push_back(NewValueNode(std::make_shared<Primitive>(prim::kScalarAdd)));
   inputs.push_back(x1);
   inputs.push_back(y);
   CNodePtr cnode_add = graph_beta_->NewCNode(inputs);
   inputs.clear();
-  inputs.push_back(NewValueNode(std::make_shared<Primitive>("return")));
+  inputs.push_back(NewValueNode(std::make_shared<Primitive>("Return")));
   inputs.push_back(cnode_add);
   CNodePtr cnode_return = graph_beta_->NewCNode(inputs);
   graph_beta_->set_return(cnode_return);
@@ -166,13 +167,13 @@ class MetaScalarAdd : public MetaFuncGraph {
     FuncGraphPtr graph_g = std::make_shared<FuncGraph>();
     ParameterPtr x = graph_g->add_parameter();
     ParameterPtr y = graph_g->add_parameter();
-    auto prim_scalar_add = std::make_shared<Primitive>("scalar_add");
+    auto prim_scalar_add = std::make_shared<Primitive>(prim::kScalarAdd);
     std::vector<AnfNodePtr> inputs;
     inputs.push_back(NewValueNode(prim_scalar_add));
     inputs.push_back(x);
     inputs.push_back(y);
     CNodePtr cnode_add = graph_g->NewCNode(inputs);
-    auto prim_return = std::make_shared<Primitive>("return");
+    auto prim_return = std::make_shared<Primitive>("Return");
     inputs.clear();
     inputs.push_back(NewValueNode(prim_return));
     inputs.push_back(cnode_add);
@@ -201,7 +202,7 @@ void TestSpecializeMetaFuncGraph::SetUp() {
   inputs.push_back(x);
   inputs.push_back(y);
   CNodePtr cnode_add = graph_->NewCNode(inputs);
-  auto prim_return = std::make_shared<Primitive>("return");
+  auto prim_return = std::make_shared<Primitive>("Return");
   inputs.clear();
   inputs.push_back(NewValueNode(prim_return));
   inputs.push_back(cnode_add);

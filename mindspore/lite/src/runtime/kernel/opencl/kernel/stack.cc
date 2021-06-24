@@ -25,13 +25,14 @@
 
 using mindspore::kernel::KERNEL_ARCH::kGPU;
 using mindspore::lite::KernelRegistrar;
+using mindspore::lite::opencl::ImageSize;
 using mindspore::schema::PrimitiveType_Stack;
 
 namespace mindspore::kernel {
 
 int StackOpenCLKernel::RunAxis0() {
   auto allocator_ = ocl_runtime_->GetAllocator();
-  std::vector<size_t> img_size;
+  ImageSize img_size;
   auto dst_data = out_tensors_[0]->data_c();
   auto dst_origin = cl::array<cl::size_type, 3U>{0, 0, 0};
   cl::Image2D *out_image = reinterpret_cast<cl::Image2D *>(allocator_->GetImage(dst_data));
@@ -39,7 +40,7 @@ int StackOpenCLKernel::RunAxis0() {
     auto src_data = in_tensors_[i]->data_c();
     allocator_->GetImageSize(src_data, &img_size);
     auto src_origin = cl::array<cl::size_type, 3U>{0, 0, 0};
-    auto region = cl::array<cl::size_type, 3U>{img_size[0], img_size[1], 1};
+    auto region = cl::array<cl::size_type, 3U>{img_size.width, img_size.height, 1};
     cl::Image2D *input_image = reinterpret_cast<cl::Image2D *>(allocator_->GetImage(src_data));
     ocl_runtime_->GetDefaultCommandQueue()->enqueueCopyImage(*input_image, *out_image, src_origin, dst_origin, region);
     dst_origin[1] += region[1];
@@ -66,12 +67,24 @@ void StackGetWorkGroup(const std::vector<size_t> &global, std::vector<size_t> *l
 int StackOpenCLKernel::CheckSpecs() {
   auto param = reinterpret_cast<StackParameter *>(this->op_parameter_);
   axis_ = param->axis_;
-  if (in_tensors_.size() != 2 && (axis_ != 0)) {
-    MS_LOG(ERROR) << " only support input size = 2 ";
+  if (in_tensors_.size() != 2 && out_tensors_.size() != 1) {
+    MS_LOG(ERROR) << " only support input size = 2 and output size = 1";
     return RET_ERROR;
   }
+  for (auto &tensor : in_tensors_) {
+    if (tensor->data_type() != kNumberTypeFloat32 && tensor->data_type() != kNumberTypeFloat16) {
+      MS_LOG(ERROR) << " only support fp32/fp16 input";
+      return RET_ERROR;
+    }
+  }
+  for (auto &tensor : out_tensors_) {
+    if (tensor->data_type() != kNumberTypeFloat32 && tensor->data_type() != kNumberTypeFloat16) {
+      MS_LOG(ERROR) << " only support fp32/fp16 output";
+      return RET_ERROR;
+    }
+  }
   if (in_tensors_[0]->shape().size() > 4 || in_tensors_[0]->shape().size() <= 0) {
-    MS_LOG(ERROR) << " only support dim <= 4 ";
+    MS_LOG(ERROR) << " only support 0<dim<=4";
     return RET_ERROR;
   }
   axis_ = axis_ < 0 ? axis_ + in_tensors_[0]->shape().size() : axis_;

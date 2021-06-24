@@ -19,15 +19,15 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-#include "nnacl/power.h"
+#include "nnacl/power_parameter.h"
+#include "nnacl/fp32/power_fp32.h"
 
 namespace mindspore::kernel {
 class PowerGradCPUKernel : public LiteKernel {
  public:
   PowerGradCPUKernel(OpParameter *param, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                     const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(param, inputs, outputs, ctx, primitive) {
+                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(param, inputs, outputs, ctx), thread_count_(ctx->thread_num_) {
     PowerParameter *power_param = reinterpret_cast<PowerParameter *>(param);
     power_ = power_param->power_;
     scale_ = power_param->scale_;
@@ -41,6 +41,7 @@ class PowerGradCPUKernel : public LiteKernel {
   int Execute(int task_id);
 
  private:
+  int thread_count_;
   float power_;
   float scale_;
   float shift_;

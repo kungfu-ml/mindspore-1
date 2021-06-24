@@ -14,11 +14,11 @@
 # ============================================================================
 """ResNet."""
 import numpy as np
+from scipy.stats import truncnorm
 import mindspore.nn as nn
 import mindspore.common.dtype as mstype
 from mindspore.ops import operations as P
 from mindspore.common.tensor import Tensor
-from scipy.stats import truncnorm
 
 format_ = "NHWC"
 # tranpose shape to NCHW, default init is NHWC.
@@ -119,10 +119,13 @@ class ResidualBlock(nn.Cell):
 
         if self.down_sample:
             self.down_sample_layer = nn.SequentialCell([_conv1x1(in_channel, out_channel, stride), _bn(out_channel)])
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x):
         identity = x
+        if self.down_sample:
+            identity = self.down_sample_layer(identity)
+
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
@@ -132,10 +135,7 @@ class ResidualBlock(nn.Cell):
         out = self.conv3(out)
         out = self.bn3(out)
 
-        if self.down_sample:
-            identity = self.down_sample_layer(identity)
-
-        out = self.add(out, identity)
+        out = self.add(identity, out)
         out = self.relu(out)
 
         return out

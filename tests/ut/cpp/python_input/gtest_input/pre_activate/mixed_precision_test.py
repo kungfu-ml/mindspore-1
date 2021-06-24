@@ -14,15 +14,16 @@
 # ============================================================================
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
+from mindspore.ops import _constants as Constants
 
-tuple_getitem = Primitive('tuple_getitem')
+tuple_getitem = Primitive(Constants.kTupleGetItem)
 depend = P.Depend()
 addn = P.AddN()
-add = P.TensorAdd()
+add = P.Add()
 sub = P.Sub()
 mul = P.Mul()
-max_pool = P.MaxPoolWithArgmax(padding="same", ksize=3, strides=2)
-make_tuple = Primitive('make_tuple')
+max_pool = P.MaxPoolWithArgmax(pad_mode="same", kernel_size=3, strides=2)
+make_tuple = Primitive('MakeTuple')
 cast = Primitive('Cast')
 
 

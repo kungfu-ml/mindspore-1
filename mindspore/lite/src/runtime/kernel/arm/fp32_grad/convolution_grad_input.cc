@@ -26,11 +26,10 @@ using mindspore::kernel::KERNEL_ARCH::kCPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_Conv2DGradInput;
-using mindspore::schema::PrimitiveType_GroupConv2DGradInput;
+using mindspore::schema::PrimitiveType_Conv2DBackpropInputFusion;
 
 namespace mindspore::kernel {
-int ConvolutionGradInputCPUKernel::Init() {
+int ConvolutionGradInputCPUKernel::ReSize() {
   auto *dy_tensor = in_tensors_.at(kInputIndex);
   MS_ASSERT(dy_tensor != nullptr);
   auto *weight_tensor = in_tensors_.at(kWeightIndex);
@@ -51,18 +50,17 @@ int ConvolutionGradInputCPUKernel::Init() {
 
   conv_param->output_h_ = dy_tensor->shape()[kNHWC_H];
   conv_param->output_w_ = dy_tensor->shape()[kNHWC_W];
-  ws_size = chunk * conv_param->kernel_h_ * conv_param->kernel_w_ * conv_param->input_channel_ / conv_param->group_;
+  ws_size_ = chunk_ * conv_param->kernel_h_ * conv_param->kernel_w_ * conv_param->input_channel_ / conv_param->group_;
 
   int n = conv_param->kernel_w_ * conv_param->kernel_h_ * conv_param->input_channel_ / conv_param->group_;
   int k = conv_param->output_channel_ / conv_param->group_;
-
-  size_t mat_alloc = MatSizeTotal(chunk, n, k, 0);
-
-  set_workspace_size((ws_size + mat_alloc) * sizeof(float));
+  int thread_num = context_->thread_num_;
+  mat_alloc_ = MatSizeTotal(chunk_, n, k, 0);
+  set_workspace_size((ws_size_ + mat_alloc_) * sizeof(float) * thread_num);
   return RET_OK;
 }
 
-int ConvolutionGradInputCPUKernel::ReSize() { return RET_OK; }
+int ConvolutionGradInputCPUKernel::Init() { return ReSize(); }
 
 int ConvolutionGradInputCPUKernel::Execute(int task_id) {
   auto conv_param = reinterpret_cast<ConvParameter *>(op_parameter_);
@@ -86,17 +84,22 @@ int ConvolutionGradInputCPUKernel::Execute(int task_id) {
   int groups = conv_param->group_;
   int out_h = conv_param->output_h_;
   int out_w = conv_param->output_w_;
-
+  int thread_num = context_->thread_num_;
   int m = out_h * out_w;
   int n = k_w * k_h * in_ch / groups;
   int k = out_ch / groups;
-  float *workspace_temp = reinterpret_cast<float *>(workspace());
-  float *mat_workspace = workspace_temp + ws_size;
-  memset(dx_addr, 0, sizeof(float) * batch * in_ch * in_h * in_w);
-  for (i = 0; i < batch; ++i) {
+  float *workspace_temp = reinterpret_cast<float *>(workspace()) + task_id * (mat_alloc_ + ws_size_);
+  float *mat_workspace = workspace_temp + ws_size_;
+  int stride = UP_DIV(batch, thread_num);
+  int count = MSMIN(stride, batch - stride * task_id);
+  count = (count < 0) ? 0 : count;
+  int start = stride * task_id;
+  int end = start + count;
+
+  for (i = start; i < end; ++i) {
     for (j = 0; j < groups; ++j) {
       GemmCb gcb;
-      for (int ci = 0; ci < m; ci += chunk) {
+      for (int ci = 0; ci < m; ci += chunk_) {
         float *mat_b = nullptr;
         if (ci == 0) {
           mat_b = w_addr + j * nweights / groups;
@@ -108,7 +111,7 @@ int ConvolutionGradInputCPUKernel::Execute(int task_id) {
           mat_b = gcb.mat_b;
           gcb.cb = 1;
         }
-        int real_chunk = MSMIN(m - ci, chunk);
+        int real_chunk = MSMIN(m - ci, chunk_);
         float *mat_a = dy_addr + (i * groups) * m * k + j * (out_ch / groups) + ci * out_ch;
         float *mat_c = workspace_temp;
         GemmMatmulPlus(0, 0, real_chunk, n, k, 1, mat_a, out_ch, mat_b, n, 0, mat_c, n, mat_workspace, &gcb);
@@ -133,7 +136,15 @@ int ConvolutionGradInputRun(void *cdata, int task_id) {
 }
 
 int ConvolutionGradInputCPUKernel::Run() {
-  int error_code = ParallelLaunch(this->context_->thread_pool_, ConvolutionGradInputRun, this, 1);
+  auto conv_param = reinterpret_cast<ConvParameter *>(op_parameter_);
+  int batch = conv_param->output_batch_;
+  int in_ch = conv_param->input_channel_;
+  int in_h = conv_param->input_h_;
+  int in_w = conv_param->input_w_;
+  auto *out_dx = out_tensors_.at(0);
+  auto dx_addr = reinterpret_cast<float *>(out_dx->MutableData());
+  memset(dx_addr, 0, sizeof(float) * batch * in_ch * in_h * in_w);
+  int error_code = ParallelLaunch(this->context_->thread_pool_, ConvolutionGradInputRun, this, context_->thread_num_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "bias function error error_code[" << error_code << "]";
     return RET_ERROR;
@@ -141,32 +152,6 @@ int ConvolutionGradInputCPUKernel::Run() {
   return RET_OK;
 }
 
-kernel::LiteKernel *CpuConvGradInputFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
-                                                      const std::vector<lite::Tensor *> &outputs,
-                                                      OpParameter *opParameter, const lite::InnerContext *ctx,
-                                                      const kernel::KernelKey &desc,
-                                                      const mindspore::lite::PrimitiveC *primitive) {
-  MS_ASSERT(opParameter != nullptr);
-  MS_ASSERT(desc.type == schema::PrimitiveType_Conv2DGradInput ||
-            desc.type == schema::PrimitiveType_GroupConv2DGradInput);
-
-  auto *kernel = new (std::nothrow) ConvolutionGradInputCPUKernel(opParameter, inputs, outputs, ctx, primitive);
-  if (kernel == nullptr) {
-    MS_LOG(ERROR) << "new kernel fail!";
-    free(opParameter);
-    return nullptr;
-  }
-
-  auto ret = kernel->Init();
-  if (ret != RET_OK) {
-    MS_LOG(ERROR) << "Init kernel failed, name: " << opParameter->name_ << ", type: "
-                  << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(opParameter->type_));
-    delete kernel;
-    return nullptr;
-  }
-  return kernel;
-}
-
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Conv2DGradInput, CpuConvGradInputFp32KernelCreator)
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_GroupConv2DGradInput, CpuConvGradInputFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Conv2DBackpropInputFusion,
+           LiteKernelCreator<ConvolutionGradInputCPUKernel>)
 }  // namespace mindspore::kernel

@@ -21,51 +21,43 @@
 #include <vector>
 
 #include "minddata/dataset/engine/datasetops/source/sampler/sampler.h"
+#include "minddata/dataset/engine/datasetops/source/sampler/subset_sampler.h"
 
 namespace mindspore {
 namespace dataset {
-// Randomly samples elements from a given list of indices, without replacement.
-class SubsetRandomSamplerRT : public SamplerRT {
+/// Randomly samples elements from a given list of indices, without replacement.
+class SubsetRandomSamplerRT : public SubsetSamplerRT {
  public:
-  // Constructor.
-  // @param num_samples The number of samples to draw. 0 for the full amount.
-  // @param indices List of indices from where we will randomly draw samples.
-  // @param samples_per_buffer The number of ids we draw on each call to GetNextBuffer().
-  // When samplesPerBuffer=0, GetNextBuffer() will draw all the sample ids and return them at once.
+  /// Constructor.
+  /// \param num_samples The number of samples to draw. 0 for the full amount.
+  /// \param indices List of indices from where we will randomly draw samples.
+  /// \param samples_per_buffer The number of ids we draw on each call to GetNextBuffer().
+  /// When samples_per_buffer=0, GetNextBuffer() will draw all the sample ids and return them at once.
   SubsetRandomSamplerRT(int64_t num_samples, const std::vector<int64_t> &indices,
                         std::int64_t samples_per_buffer = std::numeric_limits<int64_t>::max());
 
-  // Destructor.
+  /// Destructor.
   ~SubsetRandomSamplerRT() = default;
 
-  // Initialize the sampler.
-  // @return Status
+  /// Initialize the sampler.
+  /// \return Status
   Status InitSampler() override;
 
-  // Reset the internal variable to the initial state and reshuffle the indices.
-  // @return Status
+  /// Reset the internal variable to the initial state and reshuffle the indices.
+  /// \return Status
   Status ResetSampler() override;
 
-  // Get the sample ids.
-  // @param[out] out_buffer The address of a unique_ptr to DataBuffer where the sample ids will be placed.
-  // @note the sample ids (int64_t) will be placed in one Tensor and be placed into pBuffer.
-  Status GetNextSample(std::unique_ptr<DataBuffer> *out_buffer) override;
-
-  // Printer for debugging purposes.
-  // @param out - output stream to write to
-  // @param show_all - bool to show detailed vs summary
+  /// Printer for debugging purposes.
+  /// \param out - output stream to write to
+  /// \param show_all - bool to show detailed vs summary
   void SamplerPrint(std::ostream &out, bool show_all) const override;
 
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
+
  private:
-  // A list of indices (already randomized in constructor).
-  std::vector<int64_t> indices_;
-
-  // Current sample id.
-  int64_t sample_id_;
-
-  // Current buffer id.
-  int64_t buffer_id_;
-
   // A random number generator.
   std::mt19937 rand_gen_;
 };

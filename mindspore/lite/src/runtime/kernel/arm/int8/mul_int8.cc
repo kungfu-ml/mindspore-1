@@ -22,7 +22,7 @@
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_Mul;
+using mindspore::schema::PrimitiveType_MulFusion;
 
 namespace mindspore::kernel {
 int MulInt8CPUKernel::Init() {
@@ -77,13 +77,13 @@ void MulInt8CPUKernel::CheckIfFastImpl() {
   auto in_tensor0 = in_tensors_.at(0);
   auto in_tensor1 = in_tensors_.at(1);
   if (in_tensor0->ElementsNum() != in_tensor1->ElementsNum()) {
-    if (in_tensor0->shape().size() == 4 && in_tensor1->shape().size() == 4) {
+    if (in_tensor0->shape().size() == COMM_SHAPE_SIZE && in_tensor1->shape().size() == COMM_SHAPE_SIZE) {
       CheckSameShapeSize(in_tensor0->shape(), in_tensor1->shape());
-    } else if (in_tensor0->shape().size() == 1 && in_tensor1->shape().size() == 4) {
+    } else if (in_tensor0->shape().size() == 1 && in_tensor1->shape().size() == COMM_SHAPE_SIZE) {
       if (in_tensor0->ElementsNum() == in_tensor1->shape()[3]) {
         fast_hw_broadcast_ = true;
       }
-    } else if (in_tensor0->shape().size() == 4 && in_tensor1->shape().size() == 1) {
+    } else if (in_tensor0->shape().size() == COMM_SHAPE_SIZE && in_tensor1->shape().size() == 1) {
       if (in_tensor1->ElementsNum() == in_tensor0->shape()[3]) {
         fast_hw_broadcast_ = true;
         input1_hw_broadcast_ = true;
@@ -217,5 +217,5 @@ int MulInt8CPUKernel::DoExecute(int task_id) {
   return lite::RET_OK;
 }
 
-REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_Mul, LiteKernelCreator<MulInt8CPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_MulFusion, LiteKernelCreator<MulInt8CPUKernel>)
 }  // namespace mindspore::kernel

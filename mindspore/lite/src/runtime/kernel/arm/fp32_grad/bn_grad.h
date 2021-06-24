@@ -25,14 +25,18 @@ namespace mindspore::kernel {
 class BNGradCPUKernel : public LiteKernel {
  public:
   explicit BNGradCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                           const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                           const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~BNGradCPUKernel() override {}
   int Init() override;
   int ReSize() override;
   int Run() override;
   int Execute(int task_id);
+
+ private:
+  int thread_num_ = 1;
+  int stage_ = 0;
+  size_t ws_size_ = 0;
 };
 }  // namespace mindspore::kernel
 #endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_GRAD_BN_GRAD_H_

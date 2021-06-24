@@ -17,18 +17,21 @@
 #define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_INT8_TRANSPOSE_INT8_H_
 
 #include <vector>
+#include "nnacl/int8/pack_int8.h"
 #include "nnacl/int8/transpose_int8.h"
 #include "src/kernel_registry.h"
 #include "src/lite_kernel.h"
 #include "include/errorcode.h"
 
 namespace mindspore::kernel {
+
+typedef void (*TransposeFunc)(const void *src, void *dst, int batch, int plane, int channel);
+
 class TransposeInt8CPUKernel : public LiteKernel {
  public:
   TransposeInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                         const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                         const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                         const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     transpose_param_ = reinterpret_cast<TransposeParameter *>(op_parameter_);
   }
   ~TransposeInt8CPUKernel() = default;
@@ -45,7 +48,9 @@ class TransposeInt8CPUKernel : public LiteKernel {
   void FreeTmpBuf();
 
  private:
+  void GetNHNCTransposeFunc(lite::Tensor *in_tensor, lite::Tensor *out_tensor, TransposeParameter *param);
   TransposeParameter *transpose_param_;
+  TransposeFunc NHNCTransposeFunc_ = nullptr;
   int8_t *in_ptr_ = nullptr;
   int8_t *out_ptr_ = nullptr;
   int *dim_size_ = nullptr;
@@ -57,6 +62,7 @@ class TransposeInt8CPUKernel : public LiteKernel {
   int num_unit_ = 0;
   int in_shape_[8] = {0};
   int out_shape_[8] = {0};
+  int nhnc_param_[3];
 };
 }  // namespace mindspore::kernel
 

@@ -18,7 +18,7 @@
 #include "common/common_test.h"
 #include "mindspore/lite/src/runtime/kernel/arm/int8/fullconnection_int8.h"
 #include "mindspore/lite/nnacl/common_func.h"
-#include "mindspore/lite/nnacl/quantization/quantize.h"
+#include "mindspore/lite/nnacl/int8/quantize.h"
 #include "mindspore/lite/src/kernel_registry.h"
 #include "mindspore/lite/src/lite_kernel.h"
 
@@ -138,7 +138,7 @@ TEST_F(TestFcInt8, fctest1) {
   ASSERT_EQ(lite::RET_OK, ctx->Init());
 
   kernel::FullconnectionInt8CPUKernel *fc =
-    new kernel::FullconnectionInt8CPUKernel(reinterpret_cast<OpParameter *>(fc_param), inputs, outputs, ctx, nullptr);
+    new kernel::FullconnectionInt8CPUKernel(reinterpret_cast<OpParameter *>(fc_param), inputs, outputs, ctx);
 
   fc->Init();
   fc->Run();

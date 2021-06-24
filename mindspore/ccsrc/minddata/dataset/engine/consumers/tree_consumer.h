@@ -72,12 +72,12 @@ class IteratorConsumer : public TreeConsumer {
   /// Returns the next row in as a map
   /// \param[out] out std::map of string to Tensor
   /// \return Status error code
-  Status GetNextAsMap(std::unordered_map<std::string, TensorPtr> *out);
+  Status GetNextAsMap(std::unordered_map<std::string, TensorPtr> *const out);
 
   /// Returns the next row in as a vector
   /// \param[out] out std::vector of pairs of string to Tensor
   /// \return Status error code
-  Status GetNextAsOrderedPair(std::vector<std::pair<std::string, std::shared_ptr<Tensor>>> *vec);
+  Status GetNextAsOrderedPair(std::vector<std::pair<std::string, std::shared_ptr<Tensor>>> *const vec);
 
  protected:
   /// Method to return the name of the consumer
@@ -130,6 +130,12 @@ class SaveToDisk : public TreeConsumer {
                                 nlohmann::json *row_raw_data,
                                 std::map<std::string, std::unique_ptr<std::vector<uint8_t>>> *row_bin_data);
 
+  Status FetchFloatData(std::shared_ptr<Tensor> tensor, std::string column_name, nlohmann::json *row_raw_data,
+                        std::unique_ptr<std::vector<uint8_t>> *data_ptr);
+
+  Status FetchItemData(std::shared_ptr<Tensor> tensor, std::string column_name, nlohmann::json *row_raw_data,
+                       std::map<std::string, std::unique_ptr<std::vector<uint8_t>>> *row_bin_data);
+
   std::string dataset_path_;
   int32_t num_files_;
   std::string dataset_type_;
@@ -161,7 +167,7 @@ class ToDevice : public TreeConsumer {
 
   /// Get data info from TDT
   /// \return  Status error code
-  virtual Status GetDataInfo(std::vector<DataType> *types, std::vector<TensorShape> *shapes);
+  virtual Status GetDataInfo(std::vector<DataType> *const types, std::vector<TensorShape> *const shapes);
 
  protected:
   /// Method to return the name of the consumer
@@ -199,7 +205,6 @@ class TreeGetters : public TreeConsumer {
   bool first_row_obtained_;  // whether first row (which could be empty) is obtained by TreeGetter
   bool init_flag_;           // indicate whether the tree has initialized
 
-  Status InternalInit(int8_t type);
   Status InternalInit();
 };
 

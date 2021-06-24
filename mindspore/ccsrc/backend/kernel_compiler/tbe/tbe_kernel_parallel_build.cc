@@ -36,7 +36,21 @@ using mindspore::kernel::tbe::TbeUtils;
 bool TbeOpParallelBuild(const std::vector<AnfNodePtr> &anf_nodes) {
   auto build_manger = std::make_shared<ParallelBuildManager>();
   MS_EXCEPTION_IF_NULL(build_manger);
-  set<std::string> processed_kernel;
+  static set<std::string> processed_kernel;
+  auto context_ptr = MsContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(context_ptr);
+  auto tune_mode = context_ptr->get_param<std::string>(MS_CTX_TUNE_MODE);
+  std::string offline_tune = common::GetEnv("ENABLE_TUNE_DUMP");
+  if (!offline_tune.empty()) {
+    for (size_t j = 0; j < offline_tune.length(); j++) {
+      offline_tune[j] = tolower(offline_tune[j]);
+    }
+    if (!(offline_tune == "true" || offline_tune == "false")) {
+      MS_LOG(ERROR) << "The value of ENABLE_TUNE_DUMP must be 'true' or 'false'";
+      return false;
+    }
+  }
+
   for (const auto &anf_node : anf_nodes) {
     // gen kernel json
     if (AnfAlgo::GetKernelMod(anf_node) != nullptr) {
@@ -47,7 +61,7 @@ bool TbeOpParallelBuild(const std::vector<AnfNodePtr> &anf_nodes) {
     TbeKernelJsonCreator creator(SINGLE_BUILD);
     if (!creator.GenTbeSingleKernelJson(anf_node, &kernel_json)) {
       MS_LOG(ERROR) << "GenTbeSingleKernelJson failed";
-      TbeUtils::SaveJsonInfo(kernel_json["op_info"]["kernel_name"], kernel_json["op_info"].dump());
+      TbeUtils::SaveJsonInfo(kernel_json["op_info"]["kernel_name"], kernel_json.dump());
       return false;
     }
     // get size
@@ -56,21 +70,18 @@ bool TbeOpParallelBuild(const std::vector<AnfNodePtr> &anf_nodes) {
     (void)TbeKernelBuild::GetIOSize(kernel_json, &input_size_list, &output_size_list, anf_node);
     // search cache
     const std::string &json_name = creator.json_name();
-    auto IsDynamicShape = tbe::TbeDynamicShapeUtil::GetDynamicShapeAttr(anf_node);
     if (build_manger->SearchInCache(json_name, processor, input_size_list, output_size_list, anf_node.get()) &&
-        !IsDynamicShape) {
-      MS_LOG(INFO) << "Node:" << anf_node->fullname_with_scope() << " Use cached kernel, kernel json name:."
-                   << json_name;
+        ((!offline_tune.empty() && offline_tune != "true") || tune_mode == "NO_TUNE")) {
       continue;
     }
     // same op not need build, but need wait build finish to set kernel mode
-    if (processed_kernel.find(json_name) != processed_kernel.end() && !IsDynamicShape) {
+    if (processed_kernel.find(json_name) != processed_kernel.end()) {
       build_manger->SaveSameOpInfo(anf_node, json_name, input_size_list, output_size_list);
       continue;
     }
     (void)processed_kernel.insert(json_name);
     // op build
-    TbeUtils::SaveJsonInfo(kernel_json["op_info"]["kernel_name"], kernel_json["op_info"].dump());
+    TbeUtils::SaveJsonInfo(kernel_json["op_info"]["kernel_name"], kernel_json.dump());
     auto task_id = build_manger->StartCompileOp(kernel_json);
     build_manger->SaveTaskInfo(task_id, anf_node, json_name, input_size_list, output_size_list);
   }
@@ -190,6 +201,19 @@ void ParallelBuildManager::SaveSameOpInfo(const mindspore::AnfNodePtr &anf_node,
   same_op_list_.push_back(task_info);
 }
 
+void ParallelBuildManager::SaveSameFusionOpInfo(const int64_t scope_id, const std::string &json_name,
+                                                const std::string &processor,
+                                                const std::vector<size_t> &input_size_list,
+                                                const std::vector<size_t> &output_size_list) {
+  struct KernelBuildTaskInfo task_info;
+  task_info.scope_id = scope_id;
+  task_info.json_name = json_name;
+  task_info.processor = processor;
+  task_info.input_size_list.assign(input_size_list.begin(), input_size_list.end());
+  task_info.output_size_list.assign(output_size_list.begin(), output_size_list.end());
+  same_op_list_.push_back(task_info);
+}
+
 bool ParallelBuildManager::GenSameOpKernelMod() const {
   for (const auto &task_info : same_op_list_) {
     bool ret = SearchInCache(task_info.json_name, task_info.processor, task_info.input_size_list,
@@ -202,12 +226,29 @@ bool ParallelBuildManager::GenSameOpKernelMod() const {
   return true;
 }
 
+bool ParallelBuildManager::GenSameFusionOpKernelMod(std::map<int64_t, KernelModPtr> *kernel_mode_ret) const {
+  bool ret = true;
+  for (const auto &task_info : same_op_list_) {
+    auto kernel_pack = TbeUtils::SearchCache(task_info.json_name, tbe::kProcessorAiCore);
+    if (kernel_pack != nullptr) {
+      auto kernel_mode = GenKernelMod(task_info.json_name, tbe::kProcessorAiCore, task_info.input_size_list,
+                                      task_info.output_size_list, kernel_pack);
+      if (kernel_mode != nullptr) {
+        (*kernel_mode_ret)[task_info.scope_id] = kernel_mode;
+        continue;
+      }
+    }
+    MS_LOG(INFO) << "can't find " << task_info.json_name << " in cache.";
+    ret = false;
+  }
+  return ret;
+}
+
 bool ParallelBuildManager::SearchInCache(const std::string &json_name, const std::string &processor,
                                          const std::vector<size_t> &input_size_list,
                                          const std::vector<size_t> &output_size_list, mindspore::AnfNode *node) const {
   auto cached_kernel_pack = TbeUtils::SearchCache(json_name, processor);
   if (cached_kernel_pack != nullptr) {
-    MS_LOG(INFO) << "Find cached kernel, kernel json name" << json_name;
     auto kernel_mod_ptr = GenKernelMod(json_name, processor, input_size_list, output_size_list, cached_kernel_pack);
     MS_EXCEPTION_IF_NULL(kernel_mod_ptr);
     AnfAlgo::SetKernelMod(kernel_mod_ptr, node);
@@ -232,7 +273,8 @@ KernelModPtr ParallelBuildManager::GenKernelMod(const string &json_name, const s
 }
 
 int ParallelBuildManager::StartCompileOp(const nlohmann::json &kernel_json) {
-  return AscendKernelBuildClient::Instance().TbeStart(kernel_json.dump());
+  auto tune_mode = kernel_json["SocInfo"]["autoTilingMode"];
+  return AscendKernelBuildClient::Instance().TbeStart(kernel_json.dump(), tune_mode);
 }
 
 bool ParallelBuildManager::WaitOne(int *task_id, std::string *task_result, std::string *pre_build_result) {
@@ -247,7 +289,6 @@ void ParallelBuildManager::ResetTaskInfo() {
   }
   task_map_.clear();
   same_op_list_.clear();
-  AscendKernelBuildClient::Instance().TbeReset();
 }
 
 AnfNodePtr ParallelBuildManager::GetAnfNodeByTaskID(int32_t task_id) {

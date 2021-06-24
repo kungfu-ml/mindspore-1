@@ -30,10 +30,9 @@ namespace mindspore::kernel {
 class CropInt8CPUKernel : public CropBaseCPUKernel {
  public:
   CropInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                    const std::vector<lite::Tensor *> &outputs, const mindspore::lite::InnerContext *ctx,
-                    const mindspore::lite::PrimitiveC *primitive)
-      : CropBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
-  ~CropInt8CPUKernel();
+                    const std::vector<lite::Tensor *> &outputs, const mindspore::lite::InnerContext *ctx)
+      : CropBaseCPUKernel(parameter, inputs, outputs, ctx) {}
+  ~CropInt8CPUKernel() = default;
 
   int Init() override;
   int ReSize() override;

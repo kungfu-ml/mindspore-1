@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,6 +45,12 @@ struct CacheServiceStat {
   row_id_type min_row_id;
   row_id_type max_row_id;
   int8_t cache_service_state;
+};
+
+struct CacheServerCfgInfo {
+  int32_t num_workers;
+  int8_t log_level;
+  std::string spill_dir;
 };
 
 /// \brief Info structure ListSessionsRequest
@@ -124,6 +130,33 @@ class BaseRequest {
   /// \brief A method for the client to wait for the availability of the result back from the server.
   /// \return Status object
   Status Wait();
+
+  /// \brief Return if the request is of row request type
+  /// \return True if the request is row-related request
+  bool IsRowRequest() const {
+    return type_ == RequestType::kBatchCacheRows || type_ == RequestType::kBatchFetchRows ||
+           type_ == RequestType::kInternalCacheRow || type_ == RequestType::kInternalFetchRow ||
+           type_ == RequestType::kCacheRow;
+  }
+
+  /// \brief Return if the request is of admin request type
+  /// \return True if the request is admin-related request
+  bool IsAdminRequest() const {
+    return type_ == RequestType::kCreateCache || type_ == RequestType::kDestroyCache ||
+           type_ == RequestType::kGetStat || type_ == RequestType::kGetCacheState ||
+           type_ == RequestType::kAllocateSharedBlock || type_ == RequestType::kFreeSharedBlock ||
+           type_ == RequestType::kCacheSchema || type_ == RequestType::kFetchSchema ||
+           type_ == RequestType::kBuildPhaseDone || type_ == RequestType::kToggleWriteMode ||
+           type_ == RequestType::kConnectReset || type_ == RequestType::kStopService ||
+           type_ == RequestType::kHeartBeat || type_ == RequestType::kGetCacheMissKeys;
+  }
+
+  /// \brief Return if the request is of session request type
+  /// \return True if the request is session-related request
+  bool IsSessionRequest() const {
+    return type_ == RequestType::kGenerateSessionId || type_ == RequestType::kDropSession ||
+           type_ == RequestType::kListSessions;
+  }
 
  protected:
   CacheRequest rq_;   // This is what we send to the server
@@ -383,8 +416,19 @@ class ListSessionsRequest : public BaseRequest {
 
   std::vector<SessionCacheInfo> GetSessionCacheInfo() { return session_info_list_; }
 
+  std::vector<session_id_type> GetSessionIds() {
+    std::vector<session_id_type> session_ids;
+    for (auto session_info : session_info_list_) {
+      session_ids.push_back(session_info.session_id);
+    }
+    return session_ids;
+  }
+
+  CacheServerCfgInfo GetServerStat() { return server_cfg_; }
+
  private:
   std::vector<SessionCacheInfo> session_info_list_;
+  CacheServerCfgInfo server_cfg_{};
 };
 
 class AllocateSharedBlockRequest : public BaseRequest {

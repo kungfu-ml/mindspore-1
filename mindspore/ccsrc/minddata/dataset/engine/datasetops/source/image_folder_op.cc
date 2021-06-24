@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
 #include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
@@ -62,7 +61,7 @@ Status ImageFolderOp::Builder::SanityCheck() {
   err_msg += builder_num_workers_ <= 0 ? "Invalid parameter, num_parallel_workers must be greater than 0, but got " +
                                            std::to_string(builder_num_workers_) + ".\n"
                                        : "";
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 ImageFolderOp::ImageFolderOp(int32_t num_wkrs, int32_t rows_per_buffer, std::string file_dir, int32_t queue_size,
@@ -230,6 +229,7 @@ Status ImageFolderOp::LoadTensorRow(row_id_type row_id, ImageLabelPair pairPtr, 
     }
   }
   (*trow) = TensorRow(row_id, {std::move(image), std::move(label)});
+  trow->setPath({folder_path_ + (pairPtr->first), std::string("")});
   return Status::OK();
 }
 
@@ -384,12 +384,13 @@ Status ImageFolderOp::LaunchThreadsAndInitOp() {
   // 1) A thread that walks all folders and push the folder names to a util:Queue folder_name_queue_.
   // 2) Workers that pull foldername from folder_name_queue_, walk it and return the sorted images to image_name_queue
   // 3) Launch main workers that load DataBuffers by reading all images
-  RETURN_IF_NOT_OK(tree_->AllTasks()->CreateAsyncTask("walk dir", std::bind(&ImageFolderOp::StartAsyncWalk, this)));
+  RETURN_IF_NOT_OK(
+    tree_->AllTasks()->CreateAsyncTask("walk dir", std::bind(&ImageFolderOp::StartAsyncWalk, this), nullptr, id()));
   RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_,
                                         std::bind(&ImageFolderOp::PrescanWorkerEntry, this, std::placeholders::_1),
-                                        Name() + "::PrescanWorkerEntry"));
+                                        Name() + "::PrescanWorkerEntry", id()));
   RETURN_IF_NOT_OK(tree_->LaunchWorkers(
-    num_workers_, std::bind(&ImageFolderOp::WorkerEntry, this, std::placeholders::_1), Name() + "::WorkerEntry"));
+    num_workers_, std::bind(&ImageFolderOp::WorkerEntry, this, std::placeholders::_1), Name() + "::WorkerEntry", id()));
   TaskManager::FindMe()->Post();
   // The order of the following 2 functions must not be changed!
   RETURN_IF_NOT_OK(this->PrescanMasterEntry(folder_path_));  // Master thread of pre-scan workers, blocking
@@ -446,12 +447,6 @@ Status ImageFolderOp::CountRowsAndClasses(const std::string &path, const std::se
   }
   (*num_rows) = row_cnt;
   return Status::OK();
-}
-
-// Visitor accept method for NodePass
-Status ImageFolderOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<ImageFolderOp>(), modified);
 }
 
 Status ImageFolderOp::ComputeColMap() {

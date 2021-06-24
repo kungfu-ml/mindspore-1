@@ -18,7 +18,6 @@
 #define MINDSPORE_LITE_NNACL_MATMUL_H_
 
 #include "nnacl/op_base.h"
-#include "nnacl/quantization/quantize.h"
 
 typedef void (*MATMUL_OPT_R4_FUNC)(const int8_t *a, const int8_t *b, int *dst, int row_4, int col_4, int deep_16,
                                    const int *input_sum, const int *bias);
@@ -38,36 +37,35 @@ typedef enum OutType { OutType_C8 = 0, OutType_Nhwc = 1, OutType_TileC8 = 2 } Ou
 typedef struct MatMulParameter {
   // Primitive parameter
   OpParameter op_parameter_;
+  bool has_bias_;
+
   // other parameter
   int row_;
   int col_;
   int row_4_;
   int row_6_;
-  int row_8_;
   int row_12_;
   int row_16_;
   int row_align_;
-  int col_2_;
   int col_4_;
   int col_8_;
-  int col_16_;
   int col_align_;
   int deep_;
   int deep_4_;
   int deep_16_;
-  bool has_bias_;
   int batch;
   bool a_transpose_; /* false :  row-major  */
   bool b_transpose_; /* true  :  col-major  */
   bool a_const_;
   bool b_const_;
-  bool a_init_shape_;
-  bool b_init_shape_;
   ActType act_type_;
+  bool use_axis_;
+  int axis_;
 } MatMulParameter;
 
 typedef struct MatmulQuantParameter {
   QuantArg input_;
+  QuantArg weight_;
   QuantArg output_;
   int32_t out_act_min_;
   int32_t out_act_max_;

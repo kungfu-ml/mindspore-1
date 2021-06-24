@@ -93,6 +93,8 @@ class Model:
             will be overwritten. Default: True.
 
     Examples:
+        >>> from mindspore import Model, nn
+        >>>
         >>> class Net(nn.Cell):
         ...     def __init__(self, num_class=10, num_channel=1):
         ...         super(Net, self).__init__()
@@ -118,7 +120,8 @@ class Model:
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
         >>> optim = nn.Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
         >>> model = Model(net, loss_fn=loss, optimizer=optim, metrics=None)
-        >>> # For details about how to build the dataset, please refer to the tutorial document on the official website.
+        >>> # For details about how to build the dataset, please refer to the tutorial
+        >>> # document on the official website.
         >>> dataset = create_custom_dataset()
         >>> model.train(2, dataset)
     """
@@ -139,9 +142,21 @@ class Model:
         self._global_rank = _get_global_rank()
         self._parameter_broadcast = _get_parameter_broadcast()
 
+        self._check_for_graph_cell(kwargs)
         self._train_network = self._build_train_network()
         self._build_eval_network(metrics, eval_network, eval_indexes)
         self._build_predict_network()
+
+    def _check_for_graph_cell(self, kwargs):
+        if not isinstance(self._network, nn.GraphCell):
+            return
+        if self._amp_level != "O0":
+            logger.warning("amp_level will not work when network is a GraphCell.")
+
+        if self._loss_fn is not None or self._optimizer is not None:
+            raise ValueError("Currently loss_fn and optimizer should be None when network is a GraphCell. ")
+        if kwargs:
+            raise ValueError("Currently kwargs should be empty when network is a GraphCell. ")
 
     def _process_amp_args(self, kwargs):
         if self._amp_level in ["O0", "O3"]:
@@ -156,6 +171,12 @@ class Model:
         for arg in kwargs:
             if arg not in ['loss_scale_manager', 'keep_batchnorm_fp32']:
                 raise ValueError(f"Unsupported arg '{arg}'")
+
+    def _check_reuse_dataset(self, dataset):
+        if not hasattr(dataset, '__model_hash__'):
+            dataset.__model_hash__ = hash(self)
+        if hasattr(dataset, '__model_hash__') and dataset.__model_hash__ != hash(self):
+            raise RuntimeError('The Dataset cannot be bound to different models, please create a new dataset.')
 
     def _build_train_network(self):
         """Build train network"""
@@ -381,6 +402,7 @@ class Model:
 
         # build callback list
         with _CallbackManager(callbacks) as list_callback:
+            self._check_reuse_dataset(train_dataset)
             if not dataset_sink_mode:
                 self._train_process(epoch, train_dataset, list_callback, cb_params)
             elif context.get_context("device_target") == "CPU":
@@ -423,6 +445,7 @@ class Model:
             train_dataset.__total_batch__ = epoch * sink_size
 
         cb_params.cur_step_num = 0
+        cb_params.dataset_sink_mode = True
 
         run_context = RunContext(cb_params)
         list_callback.begin(run_context)
@@ -490,11 +513,11 @@ class Model:
                                                   dataset_sink_mode=False,
                                                   epoch_num=epoch)
         cb_params.cur_step_num = 0
+        cb_params.dataset_sink_mode = False
         run_context = RunContext(cb_params)
         list_callback.begin(run_context)
         # used to stop training for early stop, such as stopAtTIme or stopATStep
         should_stop = False
-
         for i in range(epoch):
             cb_params.cur_epoch_num = i + 1
 
@@ -526,6 +549,9 @@ class Model:
 
             train_dataset.reset()
 
+            # if param is cache enable, flush data from cache to host before epoch end
+            self._flush_from_cache(cb_params)
+
             list_callback.epoch_end(run_context)
             should_stop = should_stop or run_context.get_stop_requested()
             if should_stop:
@@ -554,27 +580,35 @@ class Model:
                                      returned and passed to the network. Otherwise, a tuple (data, label) should
                                      be returned. The data and label would be passed to the network and loss
                                      function respectively.
-            callbacks (list, object): List of callback objects or callback object, which should be executed
-                                      while training. Default: None.
+            callbacks (Optional[list[Callback], Callback]): List of callback objects or callback object,
+                                                            which should be executed while training.
+                                                            Default: None.
             dataset_sink_mode (bool): Determines whether to pass the data through dataset channel. Default: True.
                                       Configure pynative mode or CPU, the training process will be performed with
-                                      dataset not sink.
+                                      dataset not sink. Default: True.
             sink_size (int): Control the amount of data in each sink.
                              If sink_size = -1, sink the complete dataset for each epoch.
                              If sink_size > 0, sink sink_size data for each epoch.
-                             If dataset_sink_mode is False, set sink_size as invalid. Default: -1.
+                             If dataset_sink_mode is False, set sink_size as invalid.
+                             Default: -1.
 
         Examples:
+            >>> from mindspore import Model, nn
             >>> from mindspore.train.loss_scale_manager import FixedLossScaleManager
+            >>>
+            >>> # For details about how to build the dataset, please refer to the tutorial
+            >>> # document on the official website.
             >>> dataset = create_custom_dataset()
             >>> net = Net()
             >>> loss = nn.SoftmaxCrossEntropyWithLogits()
             >>> loss_scale_manager = FixedLossScaleManager()
-            >>> optim = Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
+            >>> optim = nn.Momentum(params=net.trainable_params(), learning_rate=0.1, momentum=0.9)
             >>> model = Model(net, loss_fn=loss, optimizer=optim, metrics=None, loss_scale_manager=loss_scale_manager)
             >>> model.train(2, dataset)
         """
         dataset_sink_mode = Validator.check_bool(dataset_sink_mode)
+        if isinstance(self._train_network, nn.GraphCell) and dataset_sink_mode is True:
+            raise ValueError("Sink mode is currently not supported when training with a GraphCell.")
         Validator.check_is_int(sink_size)
         dataset_size = train_dataset.get_dataset_size()
         if dataset_size == 0:
@@ -613,8 +647,8 @@ class Model:
                                                              dataset_sink_mode=True)
         self._eval_network = eval_network
         cb_params.eval_network = self._eval_network
+        cb_params.dataset_sink_mode = True
         list_callback.begin(run_context)
-
         for inputs in dataset_helper:
             cb_params.cur_step_num += 1
             list_callback.step_begin(run_context)
@@ -644,8 +678,8 @@ class Model:
             Dict, which returns the loss value and metrics values for the model in the test mode.
         """
         run_context = RunContext(cb_params)
+        cb_params.dataset_sink_mode = False
         list_callback.begin(run_context)
-
         dataset_helper, _ = self._exec_preprocess(self._eval_network,
                                                   is_train=False,
                                                   phase='eval',
@@ -679,13 +713,19 @@ class Model:
 
         Args:
             valid_dataset (Dataset): Dataset to evaluate the model.
-            callbacks (list): List of callback objects which should be executed while training. Default: None.
-            dataset_sink_mode (bool): Determines whether to pass the data through dataset channel. Default: True.
+            callbacks (Optional[list(Callback)]): List of callback objects which should be executed
+                while training. Default: None.
+            dataset_sink_mode (bool): Determines whether to pass the data through dataset channel.
+                Default: True.
 
         Returns:
             Dict, which returns the loss value and metrics values for the model in the test mode.
 
         Examples:
+            >>> from mindspore import Model, nn
+            >>>
+            >>> # For details about how to build the dataset, please refer to the tutorial
+            >>> # document on the official website.
             >>> dataset = create_custom_dataset()
             >>> net = Net()
             >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -693,9 +733,12 @@ class Model:
             >>> acc = model.eval(dataset, dataset_sink_mode=False)
         """
         dataset_sink_mode = Validator.check_bool(dataset_sink_mode)
+
         _device_number_check(self._parallel_mode, self._device_number)
         if not self._metric_fns:
             raise ValueError("metric fn can not be None or empty.")
+        if isinstance(self._eval_network, nn.GraphCell) and dataset_sink_mode is True:
+            raise ValueError("Sink mode is currently not supported when evaluating with a GraphCell.")
 
         cb_params = _InternalCallbackParam()
         cb_params.eval_network = self._eval_network
@@ -728,14 +771,17 @@ class Model:
             Batch data should be put together in one tensor.
 
         Args:
-           predict_data: The predict data, can be bool, int, float, str, None, tensor,
+           predict_data (Tensor): The predict data, can be bool, int, float, str, None, tensor,
                          or tuple, list and dict that store these types.
 
         Returns:
             Tensor, array(s) of predictions.
 
         Examples:
-            >>> input_data = Tensor(np.random.randint(0, 255, [1, 1, 32, 32]), mindspore.float32)
+            >>> import mindspore as ms
+            >>> from mindspore import Model, Tensor
+            >>>
+            >>> input_data = Tensor(np.random.randint(0, 255, [1, 1, 32, 32]), ms.float32)
             >>> model = Model(Net())
             >>> result = model.predict(input_data)
         """
@@ -760,12 +806,17 @@ class Model:
             predict_data (Tensor): One tensor or multiple tensors of predict data.
 
         Returns:
-            parameter_layout_dict (dict): Parameter layout dictionary used for load distributed checkpoint
+            Dict, Parameter layout dictionary used for load distributed checkpoint
 
         Examples:
+            >>> import numpy as np
+            >>> import mindspore as ms
+            >>> from mindspore import Model, context, Tensor
+            >>> from mindspore.context import ParallelMode
+            >>>
             >>> context.set_context(mode=context.GRAPH_MODE)
             >>> context.set_auto_parallel_context(full_batch=True, parallel_mode=ParallelMode.SEMI_AUTO_PARALLEL)
-            >>> input_data = Tensor(np.random.randint(0, 255, [1, 3, 224, 224]), mindspore.float32)
+            >>> input_data = Tensor(np.random.randint(0, 255, [1, 3, 224, 224]), ms.float32)
             >>> model = Model(Net())
             >>> model.infer_predict_layout(input_data)
         """
@@ -783,6 +834,28 @@ class Model:
         predict_net.set_train(False)
         predict_net.compile(*predict_data)
         return predict_net.parameter_layout_dict
+
+    def _flush_from_cache(self, cb_params):
+        """Flush cache data to host if tensor is cache enable."""
+        params = cb_params.train_network.get_parameters()
+        for param in params:
+            if param.cache_enable:
+                Tensor(param).flush_from_cache()
+
+    @property
+    def train_network(self):
+        """Get the model's train_network."""
+        return self._train_network
+
+    @property
+    def predict_network(self):
+        """Get the model's predict_network."""
+        return self._predict_network
+
+    @property
+    def eval_network(self):
+        """Get the model's eval_network."""
+        return self._eval_network
 
 
 __all__ = ["Model"]

@@ -93,6 +93,7 @@ class ExecutorPy : public std::enable_shared_from_this<ExecutorPy> {
   void PyExePath(const py::object &phase);
   py::dict GetParameterLayout(const std::string &phase);
   py::dict GetCNodeStrategy(const std::string &phase);
+  py::list GetParallelParameterNameList(const std::string &phase);
   void SetCNodeStrategy(const std::string &name, const parallel::Strategys &strategy);
   size_t GetNumOpsInfo(const std::string &phase);
   void SetNumOpsInfo(size_t);
@@ -109,6 +110,8 @@ class ExecutorPy : public std::enable_shared_from_this<ExecutorPy> {
  private:
   ExecutorPy();
   void ConvertObjectToTensors(const py::dict &dict, std::map<std::string, tensor::TensorPtr> *tensors);
+  void GetWeightInfo(const CNodePtr &root_node, const AnfNodePtr &weight_node,
+                     std::map<std::string, std::pair<PrimitivePyPtr, std::string>> *fake_quant_table);
   void GetGeBackendPolicy() const;
   // filter some pipeline actions according to phase, e.g. when exporting onnx, it is no need to execute actions after
   // 'validate' stage
@@ -139,6 +142,7 @@ void ClearResAtexit();
 void ReleaseGeTsd();
 
 void ExportGraph(const std::string &file_name, const std::string &, const std::string &phase);
+FuncGraphPtr LoadMindIR(const std::string &file_name);
 
 // init and exec dataset sub graph
 bool InitExecDataset(const std::string &queue_name, int64_t iter_num, int64_t batch_size,

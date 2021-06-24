@@ -19,10 +19,13 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "nlohmann/json.hpp"
 
 #include "minddata/dataset/core/tensor.h"
 #include "minddata/dataset/core/tensor_row.h"
 #include "minddata/dataset/util/status.h"
+#include "minddata/dataset/core/device_tensor.h"
+#include "minddata/dataset/core/device_resource.h"
 
 #define IO_CHECK(input, output)                             \
   do {                                                      \
@@ -50,6 +53,7 @@ namespace dataset {
 constexpr char kTensorOp[] = "TensorOp";
 
 // image
+constexpr char kAffineOp[] = "AffineOp";
 constexpr char kAutoContrastOp[] = "AutoContrastOp";
 constexpr char kBoundingBoxAugmentOp[] = "BoundingBoxAugmentOp";
 constexpr char kDecodeOp[] = "DecodeOp";
@@ -57,14 +61,21 @@ constexpr char kCenterCropOp[] = "CenterCropOp";
 constexpr char kCutMixBatchOp[] = "CutMixBatchOp";
 constexpr char kCutOutOp[] = "CutOutOp";
 constexpr char kCropOp[] = "CropOp";
+constexpr char kDvppCropJpegOp[] = "DvppCropJpegOp";
 constexpr char kDvppDecodeResizeCropJpegOp[] = "DvppDecodeResizeCropJpegOp";
+constexpr char kDvppDecodeResizeJpegOp[] = "DvppDecodeResizeJpegOp";
+constexpr char kDvppDecodeJpegOp[] = "DvppDecodeJpegOp";
+constexpr char kDvppDecodePngOp[] = "DvppDecodePngOp";
+constexpr char kDvppNormalizeOp[] = "DvppNormalizeOp";
+constexpr char kDvppResizeJpegOp[] = "DvppResizeJpegOp";
 constexpr char kEqualizeOp[] = "EqualizeOp";
-constexpr char kHwcToChwOp[] = "HwcToChwOp";
+constexpr char kHwcToChwOp[] = "HWC2CHWOp";
 constexpr char kInvertOp[] = "InvertOp";
 constexpr char kMixUpBatchOp[] = "MixUpBatchOp";
 constexpr char kNormalizeOp[] = "NormalizeOp";
 constexpr char kNormalizePadOp[] = "NormalizePadOp";
 constexpr char kPadOp[] = "PadOp";
+constexpr char kRandomAffineOp[] = "RandomAffineOp";
 constexpr char kRandomColorAdjustOp[] = "RandomColorAdjustOp";
 constexpr char kRandomCropAndResizeOp[] = "RandomCropAndResizeOp";
 constexpr char kRandomCropAndResizeWithBBoxOp[] = "RandomCropAndResizeWithBBoxOp";
@@ -83,9 +94,11 @@ constexpr char kRandomVerticalFlipWithBBoxOp[] = "RandomVerticalFlipWithBBoxOp";
 constexpr char kRescaleOp[] = "RescaleOp";
 constexpr char kResizeBilinearOp[] = "ResizeBilinearOp";
 constexpr char kResizeOp[] = "ResizeOp";
+constexpr char kResizePreserveAROp[] = "ResizePreserveAROp";
 constexpr char kResizeWithBBoxOp[] = "ResizeWithBBoxOp";
 constexpr char kRgbaToBgrOp[] = "RgbaToBgrOp";
 constexpr char kRgbaToRgbOp[] = "RgbaToRgbOp";
+constexpr char kRgbToGrayOp[] = "RgbToGrayOp";
 constexpr char kSharpnessOp[] = "SharpnessOp";
 constexpr char kSolarizeOp[] = "SolarizeOp";
 constexpr char kSwapRedBlueOp[] = "SwapRedBlueOp";
@@ -134,7 +147,7 @@ constexpr char kCFuncOp[] = "CFuncOp";
 constexpr char kPyFuncOp[] = "PyFuncOp";
 constexpr char kNoOp[] = "NoOp";
 
-// A class that does a computation on  a Tensor
+// A class that does a computation on a Tensor
 class TensorOp {
  public:
   TensorOp() = default;
@@ -167,6 +180,12 @@ class TensorOp {
   // @return Status
   virtual Status Compute(const TensorRow &input, TensorRow *output);
 
+  // Perform an operation on one DeviceTensor and produce one DeviceTensor. This is for 1-to-1 column MapOp
+  // @param input shares the ownership of the Tensor (increase the ref count).
+  // @param output the address to a shared_ptr where the result will be placed.
+  // @return Status
+  virtual Status Compute(const std::shared_ptr<DeviceTensor> &input, std::shared_ptr<DeviceTensor> *output);
+
   // Returns true oif the TensorOp takes one input and returns one output.
   // @return true/false
   bool OneToOne() { return NumInput() == 1 && NumOutput() == 1; }
@@ -198,6 +217,10 @@ class TensorOp {
   virtual Status OutputType(const std::vector<DataType> &inputs, std::vector<DataType> &outputs);
 
   virtual std::string Name() const = 0;
+
+  virtual Status to_json(nlohmann::json *out_json) { return Status::OK(); }
+
+  virtual Status SetAscendResource(const std::shared_ptr<DeviceResource> &resource);
 
  protected:
   bool is_deterministic_{true};

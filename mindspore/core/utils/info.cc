@@ -190,6 +190,7 @@ void TraceManager::DebugTrace(const std::string &func_name, const LocationPtr &l
 void TraceManager::DebugTrace(const LocationPtr &location) {
   TraceContextPtr context = std::make_shared<TraceContext>(location);
   TraceManager::trace_context_stack_.push(context);
+  TraceManager::parse_or_resolve_debug_info_ = std::make_shared<DebugInfo>(location);
 }
 
 void TraceManager::DebugTrace(const TraceInfoPtr &trace_info) {
@@ -201,6 +202,7 @@ void TraceManager::DebugTrace(const TraceInfoPtr &trace_info) {
     MS_LOG(EXCEPTION) << "Trace debug info is null";
   }
   TraceManager::trace_context_stack_.push(context);
+  TraceManager::parse_or_resolve_debug_info_ = trace_info->debug_info();
 }
 
 void TraceManager::DebugTrace(const DebugInfoPtr &debug_info, const TraceInfoPtr &trace_info) {
@@ -218,5 +220,11 @@ void TraceManager::DebugTrace(const DebugInfoPtr &debug_info, const TraceInfoPtr
 
 void TraceManager::EndTrace() { TraceManager::trace_context_stack_.pop(); }
 
+DebugInfoPtr TraceManager::GetParseOrResolveDebugInfo() { return TraceManager::parse_or_resolve_debug_info_; }
+
+void TraceManager::ClearParseOrResolveDebugInfo() { TraceManager::parse_or_resolve_debug_info_ = nullptr; }
+
 std::stack<TraceContextPtr> TraceManager::trace_context_stack_;
+
+DebugInfoPtr TraceManager::parse_or_resolve_debug_info_ = nullptr;
 }  // namespace mindspore

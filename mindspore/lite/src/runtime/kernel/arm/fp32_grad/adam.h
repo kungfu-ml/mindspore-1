@@ -18,25 +18,31 @@
 #define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_GRAD_ADAM_H_
 
 #include <vector>
-#include "src/lite_kernel.h"
+#include "src/train/optimizer_kernel.h"
 #include "nnacl/fp32_grad/optimizer.h"
 
 namespace mindspore::kernel {
-class AdamCPUKernel : public LiteKernel {
+class AdamCPUKernel : public OptimizerKernel {
  public:
   explicit AdamCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                         const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                         const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                         const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : OptimizerKernel(parameter, inputs, outputs, ctx, 5, 9), thread_count_(ctx->thread_num_) {
     adam_param_ = reinterpret_cast<AdamParameter *>(parameter);
   }
-  ~AdamCPUKernel() override {}
+  ~AdamCPUKernel() override {
+    if (grad_sum_ != nullptr) {
+      context_->allocator->Free(grad_sum_);
+      grad_sum_ = nullptr;
+    }
+  }
   int Init() override;
   int ReSize() override;
   int Run() override;
   int Execute(int task_id);
+  int OptimizerStep() override;
 
  private:
+  int thread_count_;
   AdamParameter *adam_param_;
 };
 }  // namespace mindspore::kernel

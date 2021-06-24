@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
 #include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "utils/ms_utils.h"
 
 namespace mindspore {
@@ -83,7 +82,7 @@ Status CifarOp::Builder::SanityCheck() {
   err_msg += valid.find(usage_) == valid.end()
                ? "Invalid parameter, usage must be 'train','test' or 'all', but got " + usage_ + ".\n"
                : "";
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 CifarOp::CifarOp(CifarType type, const std::string &usage, int32_t num_works, int32_t rows_per_buf,
@@ -165,9 +164,10 @@ Status CifarOp::LaunchThreadsAndInitOp() {
   }
   RETURN_IF_NOT_OK(io_block_queues_.Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(wait_for_workers_post_.Register(tree_->AllTasks()));
+  RETURN_IF_NOT_OK(tree_->AllTasks()->CreateAsyncTask(
+    "Get cifar data block", std::bind(&CifarOp::ReadCifarBlockDataAsync, this), nullptr, id()));
   RETURN_IF_NOT_OK(
-    tree_->AllTasks()->CreateAsyncTask("Get cifar data block", std::bind(&CifarOp::ReadCifarBlockDataAsync, this)));
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_, std::bind(&CifarOp::WorkerEntry, this, std::placeholders::_1)));
+    tree_->LaunchWorkers(num_workers_, std::bind(&CifarOp::WorkerEntry, this, std::placeholders::_1), "", id()));
   TaskManager::FindMe()->Post();
   // The order of the following 2 functions must not be changed!
   RETURN_IF_NOT_OK(ParseCifarData());  // Parse cifar data and get num rows, blocking
@@ -216,14 +216,19 @@ Status CifarOp::LoadTensorRow(uint64_t index, TensorRow *trow) {
   std::shared_ptr<Tensor> fine_label;
   std::shared_ptr<Tensor> ori_image = cifar_image_label_pairs_[index].first;
   std::shared_ptr<Tensor> copy_image;
+  uint64_t path_index = std::ceil(index / kCifarBlockImageNum);
   RETURN_IF_NOT_OK(Tensor::CreateFromTensor(ori_image, &copy_image));
   RETURN_IF_NOT_OK(Tensor::CreateScalar(cifar_image_label_pairs_[index].second[0], &label));
 
   if (cifar_image_label_pairs_[index].second.size() > 1) {
     RETURN_IF_NOT_OK(Tensor::CreateScalar(cifar_image_label_pairs_[index].second[1], &fine_label));
     (*trow) = TensorRow(index, {copy_image, std::move(label), std::move(fine_label)});
+    // Add file path info
+    trow->setPath({path_record_[path_index], path_record_[path_index], path_record_[path_index]});
   } else {
     (*trow) = TensorRow(index, {copy_image, std::move(label)});
+    // Add file path info
+    trow->setPath({path_record_[path_index], path_record_[path_index]});
   }
 
   return Status::OK();
@@ -310,6 +315,8 @@ Status CifarOp::ReadCifar10BlockData() {
       (void)in.read(reinterpret_cast<char *>(&(image_data[0])), block_size * sizeof(unsigned char));
       CHECK_FAIL_RETURN_UNEXPECTED(!in.fail(), "Invalid data, failed to read data from cifar10 file: " + file);
       (void)cifar_raw_data_block_->EmplaceBack(image_data);
+      // Add file path info
+      path_record_.push_back(file);
     }
     in.close();
   }
@@ -350,6 +357,8 @@ Status CifarOp::ReadCifar100BlockData() {
       (void)in.read(reinterpret_cast<char *>(&(image_data[0])), block_size * sizeof(unsigned char));
       CHECK_FAIL_RETURN_UNEXPECTED(!in.fail(), "Invalid data, failed to read data from cifar100 file: " + file);
       (void)cifar_raw_data_block_->EmplaceBack(image_data);
+      // Add file path info
+      path_record_.push_back(file);
     }
     in.close();
   }
@@ -448,7 +457,7 @@ Status CifarOp::CountTotalRows(const std::string &dir, const std::string &usage,
     for (auto &file : op->cifar_files_) {
       Path file_path(file);
       CHECK_FAIL_RETURN_UNEXPECTED(file_path.Exists() && !file_path.IsDirectory(),
-                                   "Invalid file, failed to open cifar file: " + file);
+                                   "Invalid file, failed to open cifar10 file: " + file);
       std::string file_name = file_path.Basename();
 
       if (op->usage_ == "train") {
@@ -461,7 +470,7 @@ Status CifarOp::CountTotalRows(const std::string &dir, const std::string &usage,
 
       std::ifstream in(file, std::ios::binary);
 
-      CHECK_FAIL_RETURN_UNEXPECTED(in.is_open(), file + " can not be opened.");
+      CHECK_FAIL_RETURN_UNEXPECTED(in.is_open(), "Invalid file, failed to open cifar10 file: " + file);
       *count = *count + num_cifar10_records;
     }
     return Status::OK();
@@ -472,7 +481,7 @@ Status CifarOp::CountTotalRows(const std::string &dir, const std::string &usage,
       std::string file_name = file_path.Basename();
 
       CHECK_FAIL_RETURN_UNEXPECTED(file_path.Exists() && !file_path.IsDirectory(),
-                                   "Invalid file, failed to find cifar file: " + file);
+                                   "Invalid file, failed to find cifar100 file: " + file);
 
       if (op->usage_ == "train" && file_path.Basename().find("train") == std::string::npos) continue;
       if (op->usage_ == "test" && file_path.Basename().find("test") == std::string::npos) continue;
@@ -483,17 +492,11 @@ Status CifarOp::CountTotalRows(const std::string &dir, const std::string &usage,
         num_cifar100_records += 50000;
       }
       std::ifstream in(file, std::ios::binary);
-      CHECK_FAIL_RETURN_UNEXPECTED(in.is_open(), "Invalid file, failed to open file: " + file);
+      CHECK_FAIL_RETURN_UNEXPECTED(in.is_open(), "Invalid file, failed to open cifar100 file: " + file);
     }
     *count = num_cifar100_records;
     return Status::OK();
   }
-}
-
-// Visitor accept method for NodePass
-Status CifarOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<CifarOp>(), modified);
 }
 
 Status CifarOp::ComputeColMap() {

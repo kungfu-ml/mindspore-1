@@ -24,7 +24,7 @@
 
 #include "schema/inner/model_generated.h"
 #include "common/common_test.h"
-#include "include/train_session.h"
+#include "include/train/train_session.h"
 #include "include/context.h"
 #include "include/errorcode.h"
 #include "src/common/log_adapter.h"
@@ -32,6 +32,7 @@
 #include "src/kernel_registry.h"
 #include "src/runtime/kernel/arm/fp32_grad/convolution.h"
 
+using mindspore::lite::RET_OK;
 namespace mindspore {
 class NetworkTest : public mindspore::CommonTest {
  public:
@@ -90,7 +91,7 @@ TEST_F(NetworkTest, tuning_layer) {
     node->primitive->value.type = schema::PrimitiveType_Activation;
     auto primitive = new schema::ActivationT;
     ASSERT_NE(primitive, nullptr);
-    primitive->type = schema::ActivationType_RELU;
+    primitive->activation_type = schema::ActivationType_RELU;
     node->primitive->value.value = primitive;
     node->name = "ReLU";
     meta_graph->nodes.emplace_back(std::move(node));
@@ -103,8 +104,8 @@ TEST_F(NetworkTest, tuning_layer) {
     node->primitive->value.type = schema::PrimitiveType_MatMul;
     auto primitive = new schema::MatMulT;
     ASSERT_NE(primitive, nullptr);
-    primitive->transposeA = false;
-    primitive->transposeB = true;
+    primitive->transpose_a = false;
+    primitive->transpose_b = true;
     node->primitive->value.value = primitive;
     node->name = "MatMul1";
     meta_graph->nodes.emplace_back(std::move(node));
@@ -117,7 +118,6 @@ TEST_F(NetworkTest, tuning_layer) {
     node->primitive->value.type = schema::PrimitiveType_BiasAdd;
     auto primitive = new schema::BiasAddT;
     ASSERT_NE(primitive, nullptr);
-    primitive->axis.push_back(0);
     node->primitive->value.value = primitive;
     node->name = "BiasAdd";
     meta_graph->nodes.emplace_back(std::move(node));
@@ -127,11 +127,11 @@ TEST_F(NetworkTest, tuning_layer) {
     node->inputIndex = {5, 6};
     node->outputIndex = {14, 7};
     node->primitive = std::make_unique<schema::PrimitiveT>();
-    node->primitive->value.type = schema::PrimitiveType_SoftmaxCrossEntropy;
-    auto primitive = new schema::SoftmaxCrossEntropyT;
+    node->primitive->value.type = schema::PrimitiveType_SoftmaxCrossEntropyWithLogits;
+    auto primitive = new schema::SoftmaxCrossEntropyWithLogitsT;
     ASSERT_NE(primitive, nullptr);
     node->primitive->value.value = primitive;
-    node->name = "SoftmaxCrossEntropy";
+    node->name = "SoftmaxCrossEntropyWithLogits";
     meta_graph->nodes.emplace_back(std::move(node));
   }
   {
@@ -139,8 +139,8 @@ TEST_F(NetworkTest, tuning_layer) {
     node->inputIndex = {7};
     node->outputIndex = {8};
     node->primitive = std::make_unique<schema::PrimitiveT>();
-    node->primitive->value.type = schema::PrimitiveType_BiasGrad;
-    auto primitive = new schema::BiasGradT;
+    node->primitive->value.type = schema::PrimitiveType_BiasAddGrad;
+    auto primitive = new schema::BiasAddGradT;
     ASSERT_NE(primitive, nullptr);
     node->primitive->value.value = primitive;
     node->name = "BiasGrad";
@@ -154,8 +154,8 @@ TEST_F(NetworkTest, tuning_layer) {
     node->primitive->value.type = schema::PrimitiveType_MatMul;
     auto primitive = new schema::MatMulT;
     ASSERT_NE(primitive, nullptr);
-    primitive->transposeA = true;
-    primitive->transposeB = false;
+    primitive->transpose_a = true;
+    primitive->transpose_b = false;
     node->primitive->value.value = primitive;
     node->name = "MatMul2";
     meta_graph->nodes.emplace_back(std::move(node));
@@ -188,7 +188,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->outputIndex = {5, 14};
 
   auto input0 = std::make_unique<schema::TensorT>();
-  input0->nodeType = schema::NodeType::NodeType_ValueNode;
+  input0->nodeType = lite::NodeType_ValueNode;
   input0->format = schema::Format_NHWC;
   input0->dataType = TypeId::kNumberTypeFloat32;
   input0->dims = {BATCH_SIZE, FEATURE_SIZE};
@@ -196,7 +196,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->allTensors.emplace_back(std::move(input0));
   // tensor 1 - relu
   auto relu_out = std::make_unique<schema::TensorT>();
-  relu_out->nodeType = schema::NodeType::NodeType_Parameter;
+  relu_out->nodeType = lite::NodeType_Parameter;
   relu_out->format = schema::Format_NHWC;
   relu_out->dataType = TypeId::kNumberTypeFloat32;
   relu_out->dims = {BATCH_SIZE, FEATURE_SIZE};
@@ -204,7 +204,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->allTensors.emplace_back(std::move(relu_out));
   // tensor 2 - matmul weights
   auto weight = std::make_unique<schema::TensorT>();
-  weight->nodeType = schema::NodeType::NodeType_ValueNode;
+  weight->nodeType = lite::NodeType_ValueNode;
   weight->format = schema::Format_KHWC;
   weight->dataType = TypeId::kNumberTypeFloat32;
   weight->dims = {NUM_CLASSES, FEATURE_SIZE};
@@ -219,7 +219,7 @@ TEST_F(NetworkTest, tuning_layer) {
   delete[] buf;
   // tensor 3 - matmul
   auto input3 = std::make_unique<schema::TensorT>();
-  input3->nodeType = schema::NodeType::NodeType_Parameter;
+  input3->nodeType = lite::NodeType_Parameter;
   input3->format = schema::Format_NHWC;
   input3->dataType = TypeId::kNumberTypeFloat32;
   input3->dims = {BATCH_SIZE, NUM_CLASSES};
@@ -227,7 +227,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->allTensors.emplace_back(std::move(input3));
   // tensor 4 - fc bias
   auto bias = std::make_unique<schema::TensorT>();
-  bias->nodeType = schema::NodeType::NodeType_ValueNode;
+  bias->nodeType = lite::NodeType_ValueNode;
   bias->format = schema::Format_NHWC;
   bias->dataType = TypeId::kNumberTypeFloat32;
   bias->dims = {NUM_CLASSES};
@@ -243,7 +243,7 @@ TEST_F(NetworkTest, tuning_layer) {
 
   // tensor 5 - bias_add
   auto input5 = std::make_unique<schema::TensorT>();
-  input5->nodeType = schema::NodeType::NodeType_Parameter;
+  input5->nodeType = lite::NodeType_Parameter;
   input5->format = schema::Format_NHWC;
   input5->dataType = TypeId::kNumberTypeFloat32;
   input5->dims = {BATCH_SIZE, NUM_CLASSES};
@@ -252,7 +252,7 @@ TEST_F(NetworkTest, tuning_layer) {
   // tensor 6 - Label
   {
     auto label = std::make_unique<schema::TensorT>();
-    label->nodeType = schema::NodeType::NodeType_ValueNode;
+    label->nodeType = lite::NodeType_ValueNode;
     label->format = schema::Format_NHWC;
     label->dataType = TypeId::kNumberTypeFloat32;
     label->dims = {BATCH_SIZE * NUM_CLASSES};
@@ -261,7 +261,7 @@ TEST_F(NetworkTest, tuning_layer) {
   }
   // tensor 7 - Softmaxentropy
   auto input7 = std::make_unique<schema::TensorT>();
-  input7->nodeType = schema::NodeType::NodeType_Parameter;
+  input7->nodeType = lite::NodeType_Parameter;
   input7->format = schema::Format_NHWC;
   input7->dataType = TypeId::kNumberTypeFloat32;
   input7->dims = {BATCH_SIZE, NUM_CLASSES};
@@ -269,7 +269,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->allTensors.emplace_back(std::move(input7));
   // tensor 8 - biasGrad
   auto input8 = std::make_unique<schema::TensorT>();
-  input8->nodeType = schema::NodeType::NodeType_Parameter;
+  input8->nodeType = lite::NodeType_Parameter;
   input8->format = schema::Format_NHWC;
   input8->dataType = TypeId::kNumberTypeFloat32;
   input8->dims = {NUM_CLASSES};
@@ -277,7 +277,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->allTensors.emplace_back(std::move(input8));
   // tensor 9 - matmul2
   auto input9 = std::make_unique<schema::TensorT>();
-  input9->nodeType = schema::NodeType::NodeType_Parameter;
+  input9->nodeType = lite::NodeType_Parameter;
   input9->format = schema::Format_NHWC;
   input9->dataType = TypeId::kNumberTypeFloat32;
   input9->dims = {NUM_CLASSES, FEATURE_SIZE};
@@ -285,7 +285,7 @@ TEST_F(NetworkTest, tuning_layer) {
   meta_graph->allTensors.emplace_back(std::move(input9));
   // tensor 10 weights accumulate
   auto input10 = std::make_unique<schema::TensorT>();
-  input10->nodeType = schema::NodeType::NodeType_ValueNode;
+  input10->nodeType = lite::NodeType_ValueNode;
   input10->format = schema::Format_NHWC;
   input10->dataType = TypeId::kNumberTypeFloat32;
   input10->dims = {NUM_CLASSES, FEATURE_SIZE};
@@ -297,7 +297,7 @@ TEST_F(NetworkTest, tuning_layer) {
   // tensor 11 - lr
   {
     auto lr = std::make_unique<schema::TensorT>();
-    lr->nodeType = schema::NodeType::NodeType_ValueNode;
+    lr->nodeType = lite::NodeType_ValueNode;
     lr->format = schema::Format_NHWC;
     lr->dataType = TypeId::kNumberTypeFloat32;
     lr->dims = {1};
@@ -310,7 +310,7 @@ TEST_F(NetworkTest, tuning_layer) {
   // tensor 12  - momentum
   {
     auto input12 = std::make_unique<schema::TensorT>();
-    input12->nodeType = schema::NodeType::NodeType_ValueNode;
+    input12->nodeType = lite::NodeType_ValueNode;
     input12->format = schema::Format_NHWC;
     input12->dataType = TypeId::kNumberTypeFloat32;
     input12->dims = {1};
@@ -322,7 +322,7 @@ TEST_F(NetworkTest, tuning_layer) {
   }
   // tensor 13 - bias accumulate
   auto input13 = std::make_unique<schema::TensorT>();
-  input13->nodeType = schema::NodeType::NodeType_ValueNode;
+  input13->nodeType = lite::NodeType_ValueNode;
   input13->format = schema::Format_NHWC;
   input13->dataType = TypeId::kNumberTypeFloat32;
   input13->dims = {NUM_CLASSES};
@@ -335,7 +335,7 @@ TEST_F(NetworkTest, tuning_layer) {
   // tensor 14 - loss
   {
     auto loss14 = std::make_unique<schema::TensorT>();
-    loss14->nodeType = schema::NodeType::NodeType_ValueNode;
+    loss14->nodeType = lite::NodeType_ValueNode;
     loss14->format = schema::Format_NHWC;
     loss14->dataType = TypeId::kNumberTypeFloat32;
     loss14->dims = {1};
@@ -393,7 +393,7 @@ TEST_F(NetworkTest, tuning_layer) {
 
   auto ret = session->RunGraph();
   ASSERT_EQ(lite::RET_OK, ret);
-  auto outputs = session->GetOutputsByNodeName("SoftmaxCrossEntropy");
+  auto outputs = session->GetOutputsByNodeName("SoftmaxCrossEntropyWithLogits");
   ASSERT_EQ(outputs.size(), 1);
   auto outTensor = (outputs.at(0));
   ASSERT_NE(nullptr, outTensor);
@@ -553,6 +553,37 @@ TEST_F(NetworkTest, mobileface_net) {
   delete model;
   delete session;
   delete context;
+}
+
+TEST_F(NetworkTest, setname) {
+  std::string net = "./test_data/nets/lenet_train.ms";
+  lite::Context context;
+  context.device_list_[0].device_info_.cpu_device_info_.cpu_bind_mode_ = lite::NO_BIND;
+  context.thread_num_ = 1;
+  auto session = mindspore::session::TrainSession::CreateSession(net, &context);
+  ASSERT_NE(session, nullptr);
+
+  auto tensors_map = session->GetOutputs();
+  auto tensor_names = session->GetOutputTensorNames();
+  EXPECT_EQ(tensors_map.size(), 1);
+  EXPECT_EQ(tensors_map.begin()->first, "24");
+  EXPECT_EQ(tensor_names.size(), 1);
+  EXPECT_EQ(tensor_names.at(0), "Default/network-WithLossCell/_backbone-LeNet5/fc3-Dense/BiasAdd-op107");
+
+  auto res = session->SetLossName("nhwc");
+  EXPECT_EQ(res, RET_OK);
+  tensors_map = session->GetOutputs();
+  tensor_names = session->GetOutputTensorNames();
+  EXPECT_EQ(tensors_map.begin()->first, "8");
+  EXPECT_EQ(tensor_names.at(0), "Default/network-WithLossCell/_backbone-LeNet5/max_pool2d-MaxPool2d/MaxPool-op88");
+
+  res = session->SetLossName("loss");
+  EXPECT_EQ(res, RET_OK);
+  tensors_map = session->GetOutputs();
+  tensor_names = session->GetOutputTensorNames();
+  EXPECT_EQ(tensors_map.begin()->first, "24");
+  EXPECT_EQ(tensor_names.at(0), "Default/network-WithLossCell/_backbone-LeNet5/fc3-Dense/BiasAdd-op107");
+  delete session;
 }
 
 }  // namespace mindspore

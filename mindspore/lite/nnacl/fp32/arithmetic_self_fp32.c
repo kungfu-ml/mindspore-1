@@ -16,7 +16,6 @@
 
 #include <string.h>
 #include <math.h>
-#include <assert.h>
 #include "nnacl/fp32/arithmetic_self_fp32.h"
 
 // abs:
@@ -136,6 +135,13 @@ int ElementReciprocal(const float *input, float *output, const int element_size)
       return NNACL_ERR;
     }
     output[i] = 1.f / input[i];
+  }
+  return NNACL_OK;
+}
+
+int ElementErf(const float *input, float *output, const int element_size) {
+  for (int i = 0; i < element_size; i++) {
+    output[i] = erff(input[i]);
   }
   return NNACL_OK;
 }

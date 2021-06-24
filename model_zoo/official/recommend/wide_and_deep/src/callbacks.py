@@ -115,8 +115,11 @@ class EvalCallBack(Callback):
         if parallel_mode in (ParallelMode.SEMI_AUTO_PARALLEL, ParallelMode.AUTO_PARALLEL,
                              ParallelMode.DATA_PARALLEL):
             rank_id = get_rank()
+        enable_data_sink = not self.sparse
+        if bool(self.config.parameter_server):
+            enable_data_sink = True
         start_time = time.time()
-        out = self.model.eval(self.eval_dataset, dataset_sink_mode=(not self.sparse))
+        out = self.model.eval(self.eval_dataset, dataset_sink_mode=enable_data_sink)
         end_time = time.time()
         eval_time = int(end_time - start_time)
 

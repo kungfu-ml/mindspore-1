@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,14 +39,14 @@ TEST_F(MindDataTestPipeline, TestAlbumBasic) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -94,14 +94,14 @@ TEST_F(MindDataTestPipeline, TestAlbumBasicWithPipeline) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -123,11 +123,20 @@ TEST_F(MindDataTestPipeline, TestAlbumGetters) {
 
   int64_t num_classes = ds->GetNumClasses();
   EXPECT_EQ(num_classes, -1);
+  int64_t num_samples = ds->GetDatasetSize();
+  EXPECT_EQ(num_samples, 7);
+
   int64_t batch_size = ds->GetBatchSize();
   EXPECT_EQ(batch_size, 1);
   int64_t repeat_count = ds->GetRepeatCount();
   EXPECT_EQ(repeat_count, 1);
   EXPECT_EQ(ds->GetColumnNames(), column_names);
+
+  // Test get dataset size with num_samples > files in dataset 
+  auto sampler = std::make_shared<SequentialSampler>(0, 12);
+  std::shared_ptr<Dataset> ds2 = Album(folder_path, schema_file, column_names, false, sampler);
+  num_samples = ds->GetDatasetSize();
+  EXPECT_EQ(num_samples, 7);
 }
 
 TEST_F(MindDataTestPipeline, TestAlbumDecode) {
@@ -145,17 +154,17 @@ TEST_F(MindDataTestPipeline, TestAlbumDecode) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    auto shape = image->shape();
-    MS_LOG(INFO) << "Tensor image shape size: " << shape.Size();
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    EXPECT_GT(shape.Size(), 1);  // Verify decode=true took effect
+    auto shape = image.Shape();
+    MS_LOG(INFO) << "Tensor image shape size: " << shape.size();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    EXPECT_GT(shape.size(), 1);  // Verify decode=true took effect
     iter->GetNextRow(&row);
   }
 
@@ -172,7 +181,7 @@ TEST_F(MindDataTestPipeline, TestAlbumNumSamplers) {
   std::string schema_file = datasets_root_path_ + "/testAlbum/datasetSchema.json";
   std::vector<std::string> column_names = {"image", "label", "id"};
   // Create a Album Dataset
-  std::shared_ptr<Dataset> ds = Album(folder_path, schema_file, column_names, true, SequentialSampler(0, 1));
+  std::shared_ptr<Dataset> ds = Album(folder_path, schema_file, column_names, true, std::make_shared<SequentialSampler>(0, 1));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -181,14 +190,14 @@ TEST_F(MindDataTestPipeline, TestAlbumNumSamplers) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -204,7 +213,7 @@ TEST_F(MindDataTestPipeline, TestAlbumError) {
   std::string schema_file = datasets_root_path_ + "/testAlbum/datasetSchema.json";
   std::vector<std::string> column_names = {"image", "label", "id"};
   // Create an Album Dataset
-  std::shared_ptr<Dataset> ds = Album(folder_path, schema_file, column_names, true, SequentialSampler(0, 1));
+  std::shared_ptr<Dataset> ds = Album(folder_path, schema_file, column_names, true, std::make_shared<SequentialSampler>(0, 1));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset

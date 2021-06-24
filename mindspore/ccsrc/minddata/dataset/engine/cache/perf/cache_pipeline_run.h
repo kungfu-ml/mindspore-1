@@ -52,6 +52,8 @@ class CachePipelineRun {
   ~CachePipelineRun();
   static void PrintHelp();
   int32_t ProcessArgs(int argc, char **argv);
+  int32_t ProcessPipelineArgs(char *argv);
+  int32_t ProcessClientArgs(char *argv);
 
   void Print(std::ostream &out) const {
     out << "Number of pipelines: " << num_pipelines_ << "\n"
@@ -113,5 +115,4 @@ class CachePipelineRun {
 };
 }  // namespace dataset
 }  // namespace mindspore
-
 #endif  // MINDSPORE_CCSRC_MINDDATA_DATASET_ENGINE_CACHE_PIPELINE_RUN_H_

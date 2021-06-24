@@ -56,7 +56,7 @@ Dataset used can refer to [paper](<https://ieeexplore.ieee.org/abstract/document
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-    - Prepare hardware environment with Ascend or GPU processor. If you want to try Ascend , please send the [application](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) form to ascend@huawei.com.
+    - Prepare hardware environment with Ascend or GPU processor.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information,please check the resources below：
@@ -71,7 +71,7 @@ After installing MindSpore via the official website, you can start training and 
 
   ```python
   # run training example
-  bash ./scripts/run_standalone_train.sh
+  bash ./scripts/run_standalone_train.sh 0
 
   # run distributed training example
   bash ./scripts/run_distribute_train.sh rank_table.json
@@ -164,7 +164,7 @@ For more configuration details, please refer the script config.py.
 - running on Ascend：
 
   ```python
-  bash scripts/run_standalone_train.sh
+  bash scripts/run_standalone_train.sh 0
   ```
 
   The command above will run in the background, you can view the results through the file train.log.

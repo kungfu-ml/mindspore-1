@@ -25,6 +25,7 @@ from mindspore.common.initializer import TruncatedNormal, initializer, Normal
 from mindspore.ops import operations as P
 from mindspore.ops import functional as F
 
+
 class LayerNorm(nn.Cell):
     """
     Layer Normalization
@@ -195,7 +196,7 @@ class EmbeddingLookup(nn.Cell):
         self.vocab_size = config.vocab_size
         self.embedding_size = config.embedding_size
         self.embedding_table = Parameter(initializer(TruncatedNormal(0.02), [self.vocab_size, self.embedding_size]))
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.shape = (-1, config.seq_length, config.embedding_size)
     def construct(self, input_ids):
         output = self.gather(self.embedding_table, input_ids, 0)
@@ -265,7 +266,7 @@ class Attention(nn.Cell):
             past_key = self.transpose(layer_past[0], (0, 1, 3, 2))
             key = self.concat_k((past_key, key))
             value = self.concat_v(past_value, value)
-        layer_present = P.Pack()([self.transpose(key, (0, 1, 3, 2)), value])
+        layer_present = P.Stack()([self.transpose(key, (0, 1, 3, 2)), value])
         attention = self._attn(query, key, value, attention_mask)
         attention_merge = self.merge_heads(attention)
         output = self.projection(attention_merge)

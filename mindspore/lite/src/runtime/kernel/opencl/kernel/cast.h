@@ -20,15 +20,13 @@
 #include <vector>
 #include <string>
 #include "src/runtime/kernel/opencl/opencl_kernel.h"
-#include "nnacl/fp32/cast_fp32.h"
+#include "nnacl/cast_parameter.h"
 
 namespace mindspore::kernel {
 
 class CastOpenCLKernel : public OpenCLKernel {
  public:
-  CastOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                   const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
 
   ~CastOpenCLKernel() override = default;
   int Prepare() override;
@@ -40,7 +38,7 @@ class CastOpenCLKernel : public OpenCLKernel {
   int Run() override;
 
  private:
-  int GetKernelName(std::string *kernel_name, CastParameter *param);
+  GpuTensorInfo shape_;
 };
 
 }  // namespace mindspore::kernel

@@ -16,7 +16,6 @@
 
 #include "src/runtime/kernel/arm/int8/pooling_int8.h"
 #include "nnacl/int8/pooling_int8.h"
-#include "nnacl/fp32/cast_fp32.h"
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
 #include "src/kernel_registry.h"
@@ -27,7 +26,8 @@ using mindspore::lite::RET_OK;
 
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_MEMORY_FAILED;
-using mindspore::schema::PrimitiveType_Pooling;
+using mindspore::schema::PrimitiveType_AvgPoolFusion;
+using mindspore::schema::PrimitiveType_MaxPoolFusion;
 
 namespace mindspore::kernel {
 int PoolingInt8CPUKernel::Init() {
@@ -104,5 +104,6 @@ int PoolingInt8CPUKernel::Run() {
   return RET_OK;
 }
 
-REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_Pooling, LiteKernelCreator<PoolingInt8CPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_AvgPoolFusion, LiteKernelCreator<PoolingInt8CPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_MaxPoolFusion, LiteKernelCreator<PoolingInt8CPUKernel>)
 }  // namespace mindspore::kernel

@@ -187,7 +187,7 @@ def test_random_vertical_flip_with_bbox_op_invalid_c():
 
     except ValueError as err:
         logger.info("Got an exception in DE: {}".format(str(err)))
-        assert "Input prob is not within the required interval of (0.0 to 1.0)." in str(err)
+        assert "Input prob is not within the required interval of [0.0, 1.0]." in str(err)
 
 
 def test_random_vertical_flip_with_bbox_op_bad_c():
@@ -202,7 +202,7 @@ def test_random_vertical_flip_with_bbox_op_bad_c():
     data_voc2 = ds.VOCDataset(DATA_DIR_VOC, task="Detection", usage="train", shuffle=False, decode=True)
     check_bad_bbox(data_voc2, test_op, InvalidBBoxType.HeightOverflow, "bounding boxes is out of bounds of the image")
     data_voc2 = ds.VOCDataset(DATA_DIR_VOC, task="Detection", usage="train", shuffle=False, decode=True)
-    check_bad_bbox(data_voc2, test_op, InvalidBBoxType.NegativeXY, "min_x")
+    check_bad_bbox(data_voc2, test_op, InvalidBBoxType.NegativeXY, "negative value")
     data_voc2 = ds.VOCDataset(DATA_DIR_VOC, task="Detection", usage="train", shuffle=False, decode=True)
     check_bad_bbox(data_voc2, test_op, InvalidBBoxType.WrongShape, "4 features")
 

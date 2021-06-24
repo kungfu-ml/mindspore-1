@@ -70,6 +70,24 @@ class ManifestNode : public MappableSourceNode {
   Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
                         int64_t *dataset_size) override;
 
+  /// \brief Getter functions
+  const std::string &DatasetFile() const { return dataset_file_; }
+  const std::string &Usage() const { return usage_; }
+  bool Decode() const { return decode_; }
+  const std::map<std::string, int32_t> &ClassIndex() const { return class_index_; }
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
+
+  /// \brief Sampler getter
+  /// \return SamplerObj of the current node
+  std::shared_ptr<SamplerObj> Sampler() override { return sampler_; }
+
+  /// \brief Sampler setter
+  void SetSampler(std::shared_ptr<SamplerObj> sampler) override { sampler_ = sampler; }
+
  private:
   std::string dataset_file_;
   std::string usage_;

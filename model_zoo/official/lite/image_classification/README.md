@@ -1,38 +1,36 @@
-## MindSpore Lite 端侧图像分类demo（Android）
+# MindSpore Lite 端侧图像分类demo（Android）
 
 本示例程序演示了如何在端侧利用MindSpore Lite C++ API（Android JNI）以及MindSpore Lite 图像分类模型完成端侧推理，实现对设备摄像头捕获的内容进行分类，并在App图像预览界面中显示出最可能的分类结果。
 
-### 运行依赖
+## 运行依赖
 
 - Android Studio >= 3.2 (推荐4.0以上版本)
-- NDK 21.3
-- CMake 3.10.2   [CMake](https://cmake.org/download)
-- Android SDK >= 26
-- JDK >= 1.8
 
-### 构建与运行
+## 构建与运行
 
-1. 在Android Studio中加载本示例源码，并安装相应的SDK（指定SDK版本后，由Android Studio自动安装）。
+1. 在Android Studio中加载本示例源码。
 
     ![start_home](images/home.png)
 
-    启动Android Studio后，点击`File->Settings->System Settings->Android SDK`，勾选相应的SDK。如下图所示，勾选后，点击`OK`，Android Studio即可自动安装SDK。
+    启动Android Studio后，点击`File->Settings->System Settings->Android SDK`，勾选相应的`SDK Tools`。如下图所示，勾选后，点击`OK`，Android Studio即可自动安装SDK。
 
-    ![start_sdk](images/sdk_management.png)
+    ![start_sdk](images/sdk_management.jpg)
 
-    使用过程中若出现Android Studio配置问题，可参考第4项解决。
+    > Android SDK Tools为默认安装项，取消`Hide Obsolete Packages`选框之后可看到。
+    >
+    > 使用过程中若出现问题，可参考第4项解决。
 
-2. 连接Android设备，运行图像分类应用程序。
+2. 连接Android设备，运行该应用程序。
 
-    通过USB连接Android设备调试，点击`Run 'app'`即可在您的设备上运行本示例项目。
+    通过USB连接Android手机。待成功识别到设备后，点击`Run 'app'`即可在您的手机上运行本示例项目。
 
     > 编译过程中Android Studio会自动下载MindSpore Lite、模型文件等相关依赖项，编译过程需做耐心等待。
+    >
+    > Android Studio连接设备调试操作，可参考<https://developer.android.com/studio/run/device?hl=zh-cn>。
+    >
+    > 手机需开启“USB调试模式”，Android Studio 才能识别到手机。 华为手机一般在设置->系统和更新->开发人员选项->USB调试中开始“USB调试模型”。
 
     ![run_app](images/run_app.PNG)
-
-    Android Studio连接设备调试操作，可参考<https://developer.android.com/studio/run/device?hl=zh-cn>。
-
-    手机需开启“USB调试模式”，Android Studio 才能识别到手机。 华为手机一般在设置->系统和更新->开发人员选项->USB调试中开始“USB调试模型”。
 
 3. 在Android设备上，点击“继续安装”，安装完即可查看到设备摄像头捕获的内容和推理结果。
 
@@ -42,16 +40,32 @@
 
     ![result](images/app_result.jpg)
 
-4. Android Studio 配置问题解决方案可参考下表：
+4. Demo部署问题解决方案。
 
-    |      | 报错                                                         | 解决方案                                                     |
-    | ---- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-    | 1    | Gradle sync failed: NDK not configured.                      | 在local.properties中指定安装的ndk目录：ndk.dir={ndk的安装目录} |
-    | 2    | Requested NDK version did not match the version requested by ndk.dir | 可手动下载相应的[NDK版本](https://developer.android.com/ndk/downloads?hl=zh-cn)，并在Project Structure - Android NDK location设置中指定SDK的位置（可参考下图完成） |
-    | 3    | This version of Android Studio cannot open this project, please retry with Android Studio or newer. | 在工具栏-help-Checkout for Updates中更新版本                 |
-    | 4    | SSL peer shut down incorrectly                               | 重新构建                                                     |
+    4.1 NDK、CMake、JDK等工具问题：
 
-    ![project_structure](images/project_structure.png)
+    如果Android Studio内安装的工具出现无法识别等问题，可重新从相应官网下载和安装，并配置路径。
+
+    - NDK >= 21.3 [NDK](https://developer.android.google.cn/ndk/downloads?hl=zh-cn)
+    - CMake >= 3.10.2   [CMake](https://cmake.org/download)
+    - Android SDK >= 26 [SDK](https://developer.microsoft.com/zh-cn/windows/downloads/windows-10-sdk/)
+    - JDK >= 1.8 [JDK](https://www.oracle.com/cn/java/technologies/javase/javase-jdk8-downloads.html)
+
+        ![project_structure](images/project_structure.png)
+
+    4.2 NDK版本不匹配问题：
+
+    打开`Android SDK`，点击`Show Package Details`，根据报错信息选择安装合适的NDK版本。
+    ![NDK_version](images/NDK_version.jpg)
+
+    4.3 Android Studio版本问题：
+
+    在`工具栏-help-Checkout for Updates`中更新Android Studio版本。
+
+    4.4 Gradle下依赖项安装过慢问题：
+
+   如图所示， 打开Demo根目录下`build.gradle`文件，加入华为镜像源地址：`maven {url 'https://developer.huawei.com/repo/'}`，修改classpath为4.0.0，点击`sync`进行同步。下载完成后，将classpath版本复原，再次进行同步。
+    ![maven](images/maven.jpg)
 
 ## 示例程序详细说明  
 
@@ -69,7 +83,7 @@ app
 │   |
 │   ├── cpp # 模型加载和预测主要逻辑封装类
 |   |   ├── ..
-|   |   ├── mindspore_lite_x.x.x-minddata-arm64-cpu #MindSpore Lite版本
+|   |   ├── mindspore_lite_x.x.x-runtime-arm64-cpu #MindSpore Lite版本
 |   |   ├── MindSporeNetnative.cpp # MindSpore调用相关的JNI方法
 │   |   └── MindSporeNetnative.h # 头文件
 |   |   └── MsNetWork.cpp # MindSpre接口封装
@@ -105,7 +119,7 @@ Android JNI层调用MindSpore C++ API时，需要相关库文件支持。可通�
 
 > 若自动下载失败，请手动下载相关库文件，解压并放在对应位置：
 
-  mindspore-lite-1.0.1-runtime-arm64-cpu.tar.gz [下载链接](https://ms-release.obs.cn-north-4.myhuaweicloud.com/1.0.1/lite/android_aarch64/mindspore-lite-1.0.1-runtime-arm64-cpu.tar.gz)
+  mindspore-lite-1.1.1-runtime-arm64-cpu.tar.gz [下载链接](https://ms-release.obs.cn-north-4.myhuaweicloud.com/1.1.1/MindSpore/lite/release_0220/android/mindspore-lite-1.1.1-runtime-arm64-cpu.tar.gz)
 
 在app的`build.gradle`文件中配置CMake编译支持，以及`arm64-v8a`的编译支持，如下所示：
 
@@ -115,6 +129,7 @@ android{
         externalNativeBuild{
             cmake{
                 arguments "-DANDROID_STL=c++_shared"
+                cppFlags "-std=c++17 -fexceptions -frtti"
             }
         }
 
@@ -130,19 +145,16 @@ android{
 ```text
 # ============== Set MindSpore Dependencies. =============
 include_directories(${CMAKE_SOURCE_DIR}/src/main/cpp)
-include_directories(${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/third_party/flatbuffers/include)
 include_directories(${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION})
 include_directories(${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/include)
-include_directories(${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/include/ir/dtype)
-include_directories(${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/include/schema)
 
-add_library(mindspore-lite SHARED IMPORTED )
-add_library(minddata-lite SHARED IMPORTED )
+add_library(mindspore-lite SHARED IMPORTED)
+add_library(minddata-lite SHARED IMPORTED)
 
 set_target_properties(mindspore-lite PROPERTIES IMPORTED_LOCATION
         ${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/lib/libmindspore-lite.so)
 set_target_properties(minddata-lite PROPERTIES IMPORTED_LOCATION
-        ${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/lib/libminddata-lite.so)
+        ${CMAKE_SOURCE_DIR}/src/main/cpp/${MINDSPORELITE_VERSION}/minddata/lib/libminddata-lite.so)
 # --------------- MindSpore Lite set End. --------------------
 
 # Link target library.

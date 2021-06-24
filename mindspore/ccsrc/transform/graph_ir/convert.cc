@@ -21,6 +21,7 @@
 #include <stack>
 #include "utils/utils.h"
 
+#include "base/core_ops.h"
 #include "frontend/operator/ops.h"
 #include "utils/log_adapter.h"
 #include "ir/graph_utils.h"
@@ -51,6 +52,37 @@ using Variable = ge::op::Variable;
 using Constant = ge::op::Constant;
 using Assign = ge::op::Assign;
 using Data = ge::op::Data;
+
+namespace {
+std::vector<AnfNodePtr> GetOrderedCNodes(const FuncGraphPtr fg) {
+  auto BelongSameGraph = std::bind(IncludeBelongGraph, fg, std::placeholders::_1);
+  auto succ_include_fv = [&fg](const AnfNodePtr &node) -> std::vector<AnfNodePtr> {
+    std::vector<AnfNodePtr> vecs;
+    if (node == nullptr) {
+      return vecs;
+    }
+    if (node->isa<CNode>()) {
+      auto cnode = node->cast<CNodePtr>();
+      auto &inputs = cnode->inputs();
+      // Check if free variables used.
+      for (const auto &input : inputs) {
+        auto input_fg = GetValueNode<FuncGraphPtr>(input);
+        if (input_fg) {
+          for (auto &fv : input_fg->free_variables_nodes()) {
+            if (fv->func_graph() == fg && fg->nodes().contains(fv)) {
+              vecs.push_back(fv);
+            }
+          }
+        }
+      }
+      (void)vecs.insert(vecs.end(), inputs.begin(), inputs.end());
+    }
+    return vecs;
+  };
+
+  return TopoSort(fg->get_return(), succ_include_fv, BelongSameGraph);
+}
+}  // namespace
 
 // ---------------implement of DfGraphConvertor-------------
 PrimType GetCNodeFuncType(const CNodePtr cnode) {
@@ -213,14 +245,14 @@ void DfGraphConvertor::DrawParamInitSubGraph(const std::string &name, const AnfN
 
 void DfGraphConvertor::SetupParamInitSubGraph(const TensorOrderMap &tensors, std::vector<ge::Operator> *init_input) {
   DfGraphPtr init_graph = std::make_shared<DfGraph>("init");
-  std::vector<AnfNodePtr> nodes = TopoSort(anf_graph_->get_return());
+  std::vector<AnfNodePtr> nodes = GetOrderedCNodes(anf_graph_);
 
   for (auto &it : nodes) {
     if (it->isa<ValueNode>()) {
       if (IsValueNode<SymbolicKeyInstance>(it)) {
         auto symbolic = GetValueNode<SymbolicKeyInstancePtr>(it);
         auto name = std::static_pointer_cast<Parameter>(symbolic->node())->name();
-        auto iter = vars_.find(name);  // get correspoding varaible op
+        auto iter = vars_.find(name);  // get corresponding variable op
         if (iter != vars_.end()) {
           op_cache_[it.get()] = iter->second;
           // #ifdef DRAW_GE_GRAPH
@@ -231,7 +263,7 @@ void DfGraphConvertor::SetupParamInitSubGraph(const TensorOrderMap &tensors, std
       } else if (IsValueNode<RefKey>(it)) {
         auto refkey = GetValueNode<RefKeyPtr>(it);
         auto name = refkey->tag();
-        auto iter = vars_.find(name);  // get correspoding varaible op
+        auto iter = vars_.find(name);  // get corresponding variable op
         if (iter != vars_.end()) {
           op_cache_[it.get()] = iter->second;
           compute_sout_ << op_draw_name_[params_[name].get()] << " -> " << op_draw_name_[it.get()]
@@ -323,7 +355,7 @@ void DfGraphConvertor::InitParamWithData(const TensorOrderMap &tensors) {
 
       auto const_op_desc = TransformUtil::GetGeTensorDesc(it.second->shape_c(), it.second->data_type(), kOpFormat_NCHW);
       if (const_op_desc == nullptr) {
-        MS_LOG(ERROR) << "Create variable " << name << " ouptut descriptor failed!";
+        MS_LOG(ERROR) << "Create variable " << name << " output descriptor failed!";
         continue;
       }
       (void)std::static_pointer_cast<Constant>(const_op)->update_output_desc_y(*const_op_desc);
@@ -336,7 +368,7 @@ void DfGraphConvertor::InitParamWithData(const TensorOrderMap &tensors) {
     // create tensor descriptor for output descriptor
     auto desc = TransformUtil::GetGeTensorDesc(it.second->shape_c(), it.second->data_type(), kOpFormat_NCHW);
     if (desc == nullptr) {
-      MS_LOG(ERROR) << "Create variable " << name << " ouptut descriptor failed!";
+      MS_LOG(ERROR) << "Create variable " << name << " output descriptor failed!";
       continue;
     }
 
@@ -483,7 +515,7 @@ DfGraphConvertor &DfGraphConvertor::GenerateBroadcastGraph(const TensorOrderMap 
         // create tensor descriptor for output descriptor
         auto desc = TransformUtil::GetGeTensorDesc(shape_ge, tensor->data_type(), kOpFormat_NCHW);
         if (desc == nullptr) {
-          MS_LOG(ERROR) << "Create variable " << name << " ouptut descriptor failed!";
+          MS_LOG(ERROR) << "Create variable " << name << " output descriptor failed!";
           continue;
         }
 
@@ -539,14 +571,16 @@ DfGraphConvertor &DfGraphConvertor::ConvertAllNode() {
   compute_sout_ << "digraph {" << endl;
   init_sout_.clear();
   init_sout_ << "digraph {" << endl;
+#if (defined ENABLE_GE)
   checkpoint_sout_.clear();
   checkpoint_sout_ << "digraph {" << endl;
+#endif
   restore_checkpoint_sout_.clear();
   restore_checkpoint_sout_ << "digraph {" << endl;
 
   // Convert all anf node to Operator
   MS_LOG(DEBUG) << "convert all node";
-  std::vector<AnfNodePtr> nodes = TopoSort(anf_graph_->get_return());
+  std::vector<AnfNodePtr> nodes = GetOrderedCNodes(anf_graph_);
   for (auto &it : nodes) {
     (void)Convert(it);
     if (this->error_ != 0) {
@@ -622,16 +656,16 @@ void DfGraphConvertor::TraceOutput(const AnfNodePtr node) {
     name = GetCNodeTargetFuncName(c);
   }
 
-  if (name == "make_tuple") {
+  if (name == "MakeTuple") {
     for (unsigned int i = 1; i < c->inputs().size(); i++) {
       TraceOutput(c->input(i));
     }
-  } else if (name == "Depend") {
+  } else if (name == prim::kPrimDepend->name()) {
     if (c->inputs().size() < 3) {  // "Depend" primitive have 3 inputs
       MS_LOG(EXCEPTION) << "length of inputs is " << c->inputs().size() << ", which is less than 3";
     }
     TraceOutput(c->input(1));
-  } else if (name == "tuple_getitem") {
+  } else if (name == prim::kTupleGetItem) {
     TraceOutputFromTupleGetItem(anf_out);
   } else {
     // add outputs;
@@ -643,7 +677,7 @@ void DfGraphConvertor::TraceOutput(const AnfNodePtr node) {
         if (item != out_handle_cache_.end()) {
           index = item->second.out;
         } else {
-          MS_LOG(WARNING) << "Can't get operater: " << anf_out->fullname_with_scope() << " 's output item";
+          MS_LOG(WARNING) << "Can't get operator: " << anf_out->fullname_with_scope() << " 's output item";
         }
       }
       MS_LOG(INFO) << "Add graph output: " << anf_out->fullname_with_scope() << ":" << index;
@@ -743,7 +777,6 @@ void DfGraphConvertor::GetCaseNodeInput(const CNodePtr node, const CNodePtr inpu
   for (size_t i = 1; i < node->inputs().size(); i++) {
     case_inputs.emplace_back(node->input(i));
   }
-  std::shared_ptr<std::vector<DfGraph>> branches = std::make_shared<std::vector<DfGraph>>();
   auto bnode = input_node->input(2)->cast<CNodePtr>();
 
   for (size_t i = 1; i < bnode->inputs().size(); i++) {
@@ -767,12 +800,12 @@ void DfGraphConvertor::GetCaseNodeInput(const CNodePtr node, const CNodePtr inpu
     auto item = case_inputs[i];
     auto op = Convert(item);
     if (op != nullptr) {
-      tuple_items->emplace_back(OutHandler(op, ""));
+      tuple_items->emplace_back(OutHandler(op, "", item));
     } else if (out_handle_cache_.find(item.get()) != out_handle_cache_.end()) {
       tuple_items->push_back(out_handle_cache_[item.get()]);
     } else {
-      MS_LOG(WARNING) << "This anf node is not supported as a case input: " << item->ToString();
-      continue;
+      MS_LOG(DEBUG) << "Add an empty out handler: " << item->ToString();
+      tuple_items->push_back(OutHandler());
     }
   }
 
@@ -784,6 +817,23 @@ void DfGraphConvertor::GetCaseNodeInput(const CNodePtr node, const CNodePtr inpu
   case_input_handle_cache_[node.get()] = case_input_items;
 }
 
+void DfGraphConvertor::UpdateTupleOutCache() {
+  for (auto &it : tuple_out_handle_cache_) {
+    std::size_t len = it.second->size();
+    for (std::size_t i = 0; i < len; i++) {
+      OutHandler handle = (*it.second)[i];
+      if (handle.op == nullptr) {
+        continue;
+      }
+      string name = handle.op->GetName();
+      if (vars_.count(name) && (vars_[name] != nullptr)) {
+        (*it.second)[i] = OutHandler(vars_[name], handle.out, handle.node);
+        MS_LOG(INFO) << "update tuple_out_handle_cache_ " << name;
+      }
+    }
+  }
+}
+
 DfGraphConvertor &DfGraphConvertor::BuildGraph() {
   SetupDatasetIterGetNextNode(dataset_iter_getnext_);
 
@@ -792,7 +842,7 @@ DfGraphConvertor &DfGraphConvertor::BuildGraph() {
   }
 
   // Case node set input.
-  std::vector<AnfNodePtr> nodes = ::mindspore::TopoSort(anf_graph_->get_return());
+  std::vector<AnfNodePtr> nodes = GetOrderedCNodes(anf_graph_);
   for (auto &it : nodes) {
     if (it->isa<CNode>() && IsCaseNode(it->cast<CNodePtr>())) {
       auto node = it->cast<CNodePtr>();
@@ -802,26 +852,11 @@ DfGraphConvertor &DfGraphConvertor::BuildGraph() {
   }
 
   // update tuple_out_handle_cache_
-  for (auto it : tuple_out_handle_cache_) {
-    std::size_t len = it.second->size();
-    for (std::size_t i = 0; i < len; i++) {
-      OutHandler handle = (*it.second)[i];
-      if (handle.op) {
-        string name = handle.op->GetName();
-        if (vars_.count(name)) {
-          OperatorPtr new_op = vars_[name];
-          if (new_op != nullptr) {
-            MS_LOG(INFO) << "update tuple_out_handle_cache_ " << name;
-            (*it.second)[i] = OutHandler(new_op, handle.out);
-          }
-        }
-      }
-    }
-  }
+  UpdateTupleOutCache();
 
-  // set up dependices
-  MS_LOG(DEBUG) << "set up dependices";
-  nodes = ::mindspore::TopoSort(anf_graph_->get_return());
+  // set up dependencies
+  MS_LOG(DEBUG) << "set up dependencies";
+  nodes = GetOrderedCNodes(anf_graph_);
   for (auto &it : nodes) {
     SetNodeInput(it);
     SetOpControlInput(it);
@@ -946,7 +981,195 @@ DfGraphPtr DfGraphConvertor::GetSaveCheckpointGraph() { return save_ckp_graph_; 
 
 DfGraphPtr DfGraphConvertor::GetBroadcastGraph() { return broadcast_graph_; }
 
-void DfGraphConvertor::SetOpControlInput(const AnfNodePtr node) {
+bool DfGraphConvertor::IsSourceEdgeNode(const AnfNodePtr &node) {
+  if (!node->isa<CNode>()) {
+    return false;
+  }
+  auto cnode = node->cast<CNodePtr>();
+  if (!IsCustomCNode(cnode)) {
+    std::string name = GetCNodeTargetFuncName(cnode);
+    if (name.empty()) {
+      return false;
+    }
+
+    // Ignore apply node Depend, UpdateState, make_tuple. make_tuple in ge pipeline.
+    if ((name == prim::kPrimDepend->name()) || (name == prim::kPrimUpdateState->name()) ||
+        (name == prim::kPrimReturn->name()) || (name == prim::kPrimMakeTuple->name())) {
+      return false;
+    }
+  }
+  // Load and other normal primitives which contain monad node.
+  auto has_monad = std::any_of(cnode->inputs().begin(), cnode->inputs().end(),
+                               [](const AnfNodePtr &node) -> bool { return HasAbstractMonad(node); });
+  if (has_monad) {
+    return true;
+  }
+
+  // primitive with make_tuple as input
+  for (auto &input : cnode->inputs()) {
+    if (IsPrimitiveCNode(input, prim::kPrimMakeTuple)) {
+      auto tuple = input->cast<CNodePtr>();
+      auto ret = std::any_of(tuple->inputs().begin(), tuple->inputs().end(),
+                             [](const AnfNodePtr &node) -> bool { return HasAbstractMonad(node); });
+      if (ret) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+bool DfGraphConvertor::IsControlEdgeNode(const AnfNodePtr &node) {
+  if (!node->isa<CNode>()) {
+    return false;
+  }
+  auto cnode = node->cast<CNodePtr>();
+  if (!IsCustomCNode(cnode)) {
+    std::string name = GetCNodeTargetFuncName(cnode);
+    if (name.empty()) {
+      return false;
+    }
+
+    // Ignore apply node of Load, Depend, UpdateState, make_tuple, return
+    if ((name == prim::kPrimLoad->name()) || (name == prim::kPrimDepend->name()) ||
+        (name == prim::kPrimUpdateState->name()) || (name == prim::kPrimMakeTuple->name()) ||
+        (name == prim::kPrimReturn->name())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+OperatorPtr DfGraphConvertor::ToOperatorPtr(const AnfNodePtr &node) {
+  auto op = Convert(GetRealOpNode(node));
+  if (op == nullptr) {
+    MS_LOG(ERROR) << "Convert control depend node to operator failed, " << node->ToString();
+    error_ = FAILED;
+    return nullptr;
+  }
+  return op;
+}
+
+void DfGraphConvertor::AddEdgeToCache(const AnfNodePtr &src, const AnfNodePtr &dest) {
+  auto item = monad_control_edge_cache_.find(src);
+  if (item == monad_control_edge_cache_.end()) {
+    monad_control_edge_cache_[src] = std::set<AnfNodePtr>{dest};
+  } else {
+    item->second.insert(dest);
+  }
+}
+
+void DfGraphConvertor::AddEdgeForLoad(const AnfNodePtr &node) {
+  auto func_graph = node->func_graph();
+  MS_EXCEPTION_IF_NULL(func_graph);
+  auto mng = func_graph->manager();
+  if (mng == nullptr) {
+    mng = Manage(func_graph, true);
+    func_graph->set_manager(mng);
+  }
+  auto manager = func_graph->manager();
+  MS_EXCEPTION_IF_NULL(manager);
+
+  auto &users = manager->node_users()[node];
+  std::shared_ptr<std::vector<AnfNodePtr>> src_node_list = std::make_shared<std::vector<AnfNodePtr>>();
+  std::shared_ptr<std::vector<AnfNodePtr>> dst_node_list = std::make_shared<std::vector<AnfNodePtr>>();
+  for (const auto &iter : users) {
+    auto user_node = iter.first;
+    auto name = GetCNodeTargetFuncName(user_node->cast<CNodePtr>());
+    if (name == prim::kPrimUpdateState->name()) {
+      FindDestOps(user_node, dst_node_list, false);
+      continue;
+    }
+    if (IsControlEdgeNode(user_node)) {
+      src_node_list->push_back(user_node);
+      continue;
+    }
+    FindDestOps(user_node, src_node_list, false);
+  }
+
+  // add to cache
+  for (auto &dest : *dst_node_list) {
+    for (auto &src : *src_node_list) {
+      AddEdgeToCache(src, dest);
+    }
+  }
+}
+
+void DfGraphConvertor::FindDestOps(const AnfNodePtr &node, const std::shared_ptr<std::vector<AnfNodePtr>> &node_list,
+                                   bool top) {
+  auto func_graph = node->func_graph();
+  MS_EXCEPTION_IF_NULL(func_graph);
+  auto mng = func_graph->manager();
+  if (mng == nullptr) {
+    mng = Manage(func_graph, true);
+    func_graph->set_manager(mng);
+  }
+  auto manager = func_graph->manager();
+  MS_EXCEPTION_IF_NULL(manager);
+
+  auto users = manager->node_users()[node];
+  for (const auto &iter : users) {
+    auto user_node = iter.first;
+    if (IsControlEdgeNode(user_node)) {
+      if (!top) {
+        node_list->push_back(user_node);
+      }
+    } else {
+      FindDestOps(user_node, node_list, false);
+    }
+  }
+}
+
+void DfGraphConvertor::AutoMonadCollectInput(const AnfNodePtr &node) {
+  if (!IsSourceEdgeNode(node)) {
+    return;
+  }
+
+  // Add control edge if contain monad input.
+  std::string name = GetCNodeTargetFuncName(node->cast<CNodePtr>());
+  if (name == prim::kPrimLoad->name()) {
+    AddEdgeForLoad(node);
+  } else {
+    auto src_ops = ToOperatorPtr(node);
+    if (src_ops != nullptr) {
+      // Find dest ops list
+      std::shared_ptr<std::vector<AnfNodePtr>> dst_node_list = std::make_shared<std::vector<AnfNodePtr>>();
+      FindDestOps(node, dst_node_list, true);
+      for (auto &dest : *dst_node_list) {
+        AddEdgeToCache(node, dest);
+      }
+    }
+  }
+}
+
+void DfGraphConvertor::AutoMonadSetInput(const AnfNodePtr &node) {
+  if (monad_control_edge_cache_.find(node) == monad_control_edge_cache_.end()) {
+    return;
+  }
+
+  auto src_ops = ToOperatorPtr(node);
+  if (src_ops != nullptr) {
+    for (auto &dest : monad_control_edge_cache_[node]) {
+      auto dest_ops = ToOperatorPtr(dest);
+      if (dest_ops == nullptr) {
+        continue;
+      }
+      (void)dest_ops->AddControlInput(*src_ops);
+#ifdef DRAW_GE_GRAPH
+      compute_sout_ << op_draw_name_[node.get()] << " -> " << op_draw_name_[dest.get()] << "[style=\"dotted\"]" << endl;
+#endif
+    }
+  }
+}
+
+void DfGraphConvertor::AutoMonadSetControlInput(const AnfNodePtr &node) {
+  AutoMonadCollectInput(node);
+  AutoMonadSetInput(node);
+}
+
+void DfGraphConvertor::SetOpControlInput(const AnfNodePtr &node) {
+  AutoMonadSetControlInput(node);
   if (control_depend_cache_.find(node.get()) == control_depend_cache_.end()) {
     return;
   }
@@ -963,6 +1186,91 @@ void DfGraphConvertor::SetOpControlInput(const AnfNodePtr node) {
 }
 
 const std::vector<std::string> trans_var_list = {string(kNameAssign), string(kNameAssignAdd), string(kNameAssignSub)};
+
+AnfNodePtr DfGraphConvertor::ParseLoadInput(const CNodePtr &cnode) {
+  if (cnode->inputs().size() < 3) {
+    MS_LOG(EXCEPTION) << "input size error, " << cnode->ToString();
+  }
+  const size_t para_index = 1;
+  return cnode->input(para_index);
+}
+
+void DfGraphConvertor::SetTupleOpInput(const OpAdapterPtr &adpt, const CNodePtr &node, const AnfNodePtr &pred,
+                                       const OperatorPtr &src, int index) {
+  std::shared_ptr<std::vector<OutHandler>> handler_vec = tuple_out_handle_cache_[pred.get()];
+  std::shared_ptr<std::vector<OutHandler>> handler_vec_without_monad = std::make_shared<std::vector<OutHandler>>();
+  bool with_monad = false;
+  for (auto &handler : *handler_vec) {
+    // when tuple with monad type element, the handler operator is nullptr, should be ignored.
+    if (handler.op == nullptr) {
+      if ((handler.node != nullptr) && !HasAbstractMonad(handler.node)) {
+        MS_LOG(WARNING) << "Unsupported node in tuple : " << node->ToString();
+      }
+      continue;
+    }
+    with_monad = true;
+    handler_vec_without_monad->push_back(handler);
+  }
+  int ret = adpt->setInput(src, index, handler_vec_without_monad);
+
+  if ((ret == 0) && pred->isa<CNode>() && (pred->cast<CNodePtr>()->inputs().size() == handler_vec->size() + 1)) {
+    for (unsigned int j = 0; j < handler_vec_without_monad->size(); j++) {
+      AnfNodePtr input_node = pred->cast<CNodePtr>()->input(j + 1);
+      if (with_monad) {
+        input_node = handler_vec_without_monad->at(j).node;
+      }
+      compute_sout_ << op_draw_name_[input_node.get()] << " -> " << op_draw_name_[node.get()] << ":" << index << endl;
+      AddGraphConstInput(handler_vec_without_monad->at(j).op);
+    }
+    return;
+  }
+  MS_LOG(WARNING) << "This anf node is not supported as a tuple item : " << node->ToString();
+}
+AnfNodePtr DfGraphConvertor::GetRealInputNode(const CNodePtr &node, const AnfNodePtr &input) {
+  if (input == nullptr || node == nullptr) {
+    return nullptr;
+  }
+  AnfNodePtr pred = input;
+  while (pred->isa<CNode>() && GetCNodeTargetFuncName(pred->cast<CNodePtr>()) == prim::kPrimDepend->name()) {
+    pred = pred->cast<CNodePtr>()->input(1);
+  }
+
+  // skip input of UMonad, IOMonad
+  if (IsValueNode<UMonad>(pred) || IsValueNode<IOMonad>(pred)) {
+    return nullptr;
+  }
+
+  // skip input of the None, UpdateState
+  if (IsValueNode<None>(pred) || IsPrimitiveCNode(pred, prim::kPrimUpdateState)) {
+    return nullptr;
+  }
+
+  if (IsPrimitiveCNode(pred, prim::kPrimLoad)) {
+    pred = ParseLoadInput(pred->cast<CNodePtr>());
+  }
+
+  // transform "Const" op to "Variable" op when the next node is "Assign" op.
+  std::string c_name = GetCNodeTargetFuncName(node);
+  auto pos = std::find(trans_var_list.begin(), trans_var_list.end(), c_name);
+  if (!training_ && pos != trans_var_list.end() && pred->isa<Parameter>()) {
+    std::string name = std::static_pointer_cast<Parameter>(pred)->name();
+    auto op_itor = op_cache_.find(pred.get());
+    if (op_itor == op_cache_.end()) {
+      MS_LOG(EXCEPTION) << "Can not find op for node " << pred->ToString() << ".";
+    }
+    if (op_itor->second != nullptr &&
+        (op_itor->second->GetOpType() == "Constant" || op_itor->second->GetOpType() == "Const") &&
+        vars_.find(name) != vars_.end()) {
+      auto variable = std::make_shared<Variable>(name);
+      auto desc = vars_[name]->GetOutputDesc("y");
+      (void)variable->update_output_desc_y(desc);
+      MS_LOG(DEBUG) << "Trans to variable, var = " << variable->GetName() << ".";
+      op_itor->second = variable;  // replace parameter with variable
+      vars_[name] = variable;
+    }
+  }
+  return pred;
+}
 
 void DfGraphConvertor::SetOpInput(const OpAdapterPtr &adpt, const CNodePtr &node) {
   OperatorPtr src = Convert(node);
@@ -981,40 +1289,18 @@ void DfGraphConvertor::SetOpInput(const OpAdapterPtr &adpt, const CNodePtr &node
     } else {
       pred = inputs[i];
     }
-
-    while (pred->isa<CNode>() && GetCNodeTargetFuncName(pred->cast<CNodePtr>()) == "Depend") {
-      pred = pred->cast<CNodePtr>()->input(1);
-    }
-    // skip the None input
-    if (IsValueNode<None>(pred)) {
+    pred = GetRealInputNode(node, pred);
+    if (pred == nullptr) {
       continue;
     }
-    // transform "Const" op to "Variable" op when the next node is "Assign" op.
-    std::string c_name = GetCNodeTargetFuncName(node);
-    auto pos = std::find(trans_var_list.begin(), trans_var_list.end(), c_name);
-    if (!training_ && pos != trans_var_list.end() && pred->isa<Parameter>()) {
-      std::string name = std::static_pointer_cast<Parameter>(pred)->name();
-      auto op_itor = op_cache_.find(pred.get());
-      if (op_itor == op_cache_.end()) {
-        MS_LOG(EXCEPTION) << "Can not find op for node " << pred->ToString() << ".";
-      }
-      if (op_itor->second != nullptr &&
-          (op_itor->second->GetOpType() == "Constant" || op_itor->second->GetOpType() == "Const") &&
-          vars_.find(name) != vars_.end()) {
-        auto variable = std::make_shared<Variable>(name);
-        auto desc = vars_[name]->GetOutputDesc("y");
-        (void)variable->update_output_desc_y(desc);
-        MS_LOG(DEBUG) << "Trans to variable, var = " << variable->GetName() << ".";
-        op_itor->second = variable;  // replace parameter with variable
-        vars_[name] = variable;
-      }
-    }
+
+    int index = SizeToInt(i);
     // find in out_hadnle_cache_ first
     auto it = out_handle_cache_.find(pred.get());
     if (it != out_handle_cache_.end()) {
-      int ret = adpt->setInput(src, SizeToInt(i), it->second);
+      int ret = adpt->setInput(src, index, it->second);
       if (ret == 0) {
-        if (pred->isa<CNode>() && GetCNodeTargetFuncName(pred->cast<CNodePtr>()) == "tuple_getitem") {
+        if (pred->isa<CNode>() && GetCNodeTargetFuncName(pred->cast<CNodePtr>()) == prim::kTupleGetItem) {
           compute_sout_ << op_draw_name_[pred->cast<CNodePtr>()->input(1).get()] << " -> " << op_draw_name_[node.get()]
                         << ":" << i << endl;
         } else if (pred->isa<Parameter>()) {
@@ -1026,20 +1312,10 @@ void DfGraphConvertor::SetOpInput(const OpAdapterPtr &adpt, const CNodePtr &node
         AddGraphConstInput(it->second.op);
       }
     } else if (tuple_out_handle_cache_.find(pred.get()) != tuple_out_handle_cache_.end()) {
-      std::shared_ptr<std::vector<OutHandler>> handler_vec = tuple_out_handle_cache_[pred.get()];
-      int ret = adpt->setInput(src, SizeToInt(i), handler_vec);
-      if ((ret == 0) && pred->isa<CNode>() && (pred->cast<CNodePtr>()->inputs().size() == handler_vec->size() + 1)) {
-        for (unsigned int j = 0; j < handler_vec->size(); j++) {
-          compute_sout_ << op_draw_name_[pred->cast<CNodePtr>()->input(j + 1).get()] << " -> "
-                        << op_draw_name_[node.get()] << ":" << i << endl;
-          AddGraphConstInput(handler_vec->at(j).op);
-        }
-      } else {
-        MS_LOG(WARNING) << "Convert tuple node setInput failed : " << node->ToString();
-      }
+      SetTupleOpInput(adpt, node, pred, src, index);
     } else {
       auto op = Convert(pred);
-      int ret = adpt->setInput(src, SizeToInt(i), op);
+      int ret = adpt->setInput(src, index, op);
       if (ret == 0) {
         compute_sout_ << op_draw_name_[pred.get()] << " -> " << op_draw_name_[node.get()] << ":" << i << endl;
         AddGraphConstInput(op);
@@ -1078,15 +1354,15 @@ void DfGraphConvertor::ProcessSubgraph(AnfNodePtr node, const std::vector<AnfNod
   }
   auto graph_node = node->cast<CNodePtr>()->input(1)->cast<ValueNodePtr>();
   FuncGraphPtr anf_graph = graph_node->value()->cast<FuncGraphPtr>();
-  DfGraphConvertor convertor(anf_graph);
-  convertor.use_inputs_ = true;
-  convertor.inputs_ = inputs;
-  (void)convertor.ConvertAllNode().BuildGraph();
+  DfGraphConvertor converter(anf_graph);
+  converter.use_inputs_ = true;
+  converter.inputs_ = inputs;
+  (void)converter.ConvertAllNode().BuildGraph();
   std::string name = graph_node->ToString() + "_ge_graph.dot";
   if (MsContext::GetInstance()->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG)) {
-    convertor.DrawComputeGraph(name);
+    converter.DrawComputeGraph(name);
   }
-  branches_map_[node.get()] = *(convertor.df_graph_);
+  branches_map_[node.get()] = *(converter.df_graph_);
 }
 
 // Update GE op's shape and type info
@@ -1122,8 +1398,9 @@ OperatorPtr DfGraphConvertor::Convert(const AnfNodePtr node) {
     return op_cache_[node.get()];
   }
 
-  // do not convert primitive node
-  if (IsValueNode<Primitive>(node)) {
+  // do not convert primitive node, Load, UpdateState
+  if (IsValueNode<Primitive>(node) || IsPrimitiveCNode(node, prim::kPrimLoad) ||
+      IsPrimitiveCNode(node, prim::kPrimUpdateState)) {
     return nullptr;
   }
 
@@ -1135,10 +1412,13 @@ OperatorPtr DfGraphConvertor::Convert(const AnfNodePtr node) {
     return ConvertParameter(node);
   }
   if (node->isa<ValueNode>()) {
+    if (IsValueNode<Monad>(node)) {
+      return nullptr;
+    }
     return ConvertValueNode(node->cast<ValueNodePtr>());
   }
 
-  MS_LOG(ERROR) << "Invalide AnfNode";
+  MS_LOG(ERROR) << "Invalid AnfNode";
   error_ = INVALID_ARGUMENT;
   return nullptr;
 }
@@ -1148,19 +1428,35 @@ void DfGraphConvertor::ConvertMakeTuple(const CNodePtr node) {
   // convert each tuple item to a OutHandler
   for (size_t i = 1; i < node->inputs().size(); i++) {
     AnfNodePtr item = node->input(i);
+    if (IsPrimitiveCNode(item, prim::kPrimLoad)) {
+      item = ParseLoadInput(item->cast<CNodePtr>());
+    }
     OperatorPtr op = Convert(item);
     if (op != nullptr) {
-      tuple_items->emplace_back(OutHandler(op, ""));
+      tuple_items->emplace_back(OutHandler(op, "", item));
     } else if (out_handle_cache_.find(item.get()) != out_handle_cache_.end()) {
       tuple_items->push_back(out_handle_cache_[item.get()]);
     } else {
-      MS_LOG(WARNING) << "This anf node is not supported as a tuple item : " << item->ToString();
-      return;
+      tuple_items->push_back(OutHandler(nullptr, "", item));
     }
   }
 
   MS_LOG(DEBUG) << "ConvertMakeTuple: " << node.get() << " " << tuple_items->size();
   tuple_out_handle_cache_[node.get()] = tuple_items;
+}
+
+void DfGraphConvertor::ConvertTopK(const CNodePtr node) {
+  MS_LOG(INFO) << "Convert TopK second input's type from int64 to int32.";
+  auto value_ptr = node->input(2)->cast<ValueNodePtr>();
+  std::ostringstream ss;
+  ss << "op" << value_ptr.get();
+  op_draw_name_[value_ptr.get()] = ss.str();
+  compute_sout_ << ss.str() << "[label= \"" << value_ptr->value()->ToString() << "\" shape=ellipse]" << endl;
+  auto int64_value = value_ptr->value()->cast<Int64ImmPtr>()->value();
+  OpAdapterPtr adpt = FindAdapter(value_ptr, training_);
+  auto op = adpt->generate(value_ptr);
+  adpt->setAttr(op, "value", static_cast<int32_t>(int64_value));
+  op_cache_[value_ptr.get()] = op;
 }
 
 AnfNodePtr DfGraphConvertor::TraceTupleGetItem(const CNodePtr &node, uint64_t *index) {
@@ -1519,31 +1815,31 @@ void DfGraphConvertor::ConvertControlDependNode(const CNodePtr node) {
 
 bool DfGraphConvertor::CheckCNode(const std::string &name, const CNodePtr node) {
   // ignore apply node of return
-  if (name == "return" || name == "Depend") {
+  if (name == "" || name == prim::kPrimReturn->name() || name == prim::kPrimDepend->name() ||
+      name == prim::kPrimSwitchLayer->name() || name == prim::kPrimPartial->name()) {
     return false;
   }
 
-  if (name == "" && GetCNodeFuncName(node) == "switch_layer") {
-    return false;
-  }
-
-  if (name == "Partial") {
-    return false;
+  // Convert TopK second input from int64 to int32.
+  if (name == prim::kPrimTopK->name()) {
+    ConvertTopK(node);
+    return true;
   }
 
   // make_tuple is used for a dynamic_input, convert it to a vector of OutHandlers
-  if (name == "make_tuple") {
+  if (name == prim::kPrimMakeTuple->name()) {
     ConvertMakeTuple(node);
     return false;
   }
 
   // As for nodes with multi outputs, convert tuple_getitem to OutHandle
-  if (name == "tuple_getitem") {
+  if (name == prim::kPrimTupleGetItem->name()) {
     ConvertTupleGetItem(node);
     return false;
   }
 
-  if (name == "ControlDepend") {
+  // ControlDepend
+  if (name == prim::kPrimControlDepend->name()) {
     ConvertControlDependNode(node);
     return false;
   }

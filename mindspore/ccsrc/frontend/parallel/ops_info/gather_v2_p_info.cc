@@ -24,13 +24,15 @@
 
 #include "frontend/parallel/device_matrix.h"
 #include "frontend/parallel/graph_util/generate_graph.h"
+#include "frontend/parallel/context.h"
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-#include "ps/ps_cache/ps_data/ps_data_prefetch.h"
+#include "ps/ps_cache/ps_cache_manager.h"
+#include "utils/ms_context.h"
 #endif
 
 namespace mindspore {
 namespace parallel {
-Status GatherV2PInfo::GetManualSplitWithoutOffsetAttr() {
+Status GatherPInfo::GetManualSplitWithoutOffsetAttr() {
   auto manual_split_without_offset_iter = attrs_.find("manual_split");
   if (manual_split_without_offset_iter != attrs_.end()) {
     manual_split_ = true;
@@ -66,7 +68,7 @@ Status GatherV2PInfo::GetManualSplitWithoutOffsetAttr() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::GetManualSplitAttr() {
+Status GatherPInfo::GetManualSplitAttr() {
   auto manual_split_with_offset_iter = attrs_.find("manual_split_with_offset");
   if (manual_split_with_offset_iter != attrs_.end()) {
     manual_split_ = true;
@@ -116,7 +118,7 @@ Status GatherV2PInfo::GetManualSplitAttr() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::GetAttrs() {
+Status GatherPInfo::GetAttrs() {
   // get axis, the third input is the axis, is a ValueNode, embeddinglookup doesn't have axis.
   if (target_ != CPU) {
     if (input_value_.at(2) == nullptr) {
@@ -158,10 +160,19 @@ Status GatherV2PInfo::GetAttrs() {
   if (std::find(inputs_shape_[1].begin(), inputs_shape_[1].end(), -1) != inputs_shape_[1].end()) {
     dynamic_shape_indices_ = true;
   }
+#if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
+  MS_EXCEPTION_IF_NULL(ParallelContext::GetInstance());
+  std::string parallel_mode = ParallelContext::GetInstance()->parallel_mode();
+  MS_EXCEPTION_IF_NULL(MsContext::GetInstance());
+  bool enable_sparse = MsContext::GetInstance()->get_param<bool>(MS_CTX_ENABLE_SPARSE);
+  if (ps::PsDataPrefetch::GetInstance().cache_enable() && enable_sparse) {
+    dynamic_shape_indices_ = true;
+  }
+#endif
   return SUCCESS;
 }
 
-Status GatherV2PInfo::CheckManualSplit(const Strategys &strategy) {
+Status GatherPInfo::CheckManualSplit(const Strategys &strategy) {
   if (strategy.size() != 2) {
     MS_LOG(ERROR) << name_ << ": The size of strategy must be 2, but got " << strategy.size();
     return FAILED;
@@ -217,7 +228,34 @@ Status GatherV2PInfo::CheckManualSplit(const Strategys &strategy) {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::CheckStrategy(const StrategyPtr &strategy) {
+Status GatherPInfo::CheckSplitAxisStrategy(const StrategyPtr &strategy) {
+  auto param_strategy = strategy->GetInputDim().at(0);
+  auto index_strategy = strategy->GetInputDim().at(1);
+  // param_strategy(axis) != 1, index can't be split
+  auto product_i = std::accumulate(index_strategy.begin(), index_strategy.end(), 1, std::multiplies<int64_t>());
+  if ((param_strategy.at(LongToSize(axis_)) != 1) && (product_i != 1)) {
+    MS_LOG(DEBUG) << name_ << ": param is split at dim (axis)" << axis_ << " ,index can't be split.";
+    return FAILED;
+  }
+
+  // param_strategy(axis) != 1, and axis != 0, don't support repeated calc
+  auto product_p = std::accumulate(param_strategy.begin(), param_strategy.end(), 1, std::multiplies<int64_t>());
+  if ((product_p != stage_device_size_) && (param_strategy.at(IntToSize(axis_)) != 1) && (axis_ != 0)) {
+    MS_LOG(DEBUG) << name_ << ": Invalid strategy. Don't support repeated calc.";
+    return FAILED;
+  }
+
+  if ((product_p != stage_device_size_) && (param_strategy.at(IntToSize(axis_)) != 1) && (axis_ == 0)) {
+    if ((param_strategy.size() == 2) && (param_strategy[1] != 1)) {
+      MS_LOG(DEBUG) << name_ << ": axis(0) is split, and param_strategy[1] != 1, don't support repeated calc.";
+      return FAILED;
+    }
+    MS_LOG(INFO) << name_ << ": split axis(0) and repeat calculation";
+  }
+  return SUCCESS;
+}
+
+Status GatherPInfo::CheckStrategy(const StrategyPtr &strategy) {
   if (CheckStrategyValue(strategy, inputs_shape_) != SUCCESS) {
     return FAILED;
   }
@@ -264,38 +302,19 @@ Status GatherV2PInfo::CheckStrategy(const StrategyPtr &strategy) {
     return FAILED;
   }
 
-  // param_strategy(axis) != 1, index can't be split
-  auto index_strategy = strategy->GetInputDim().at(1);
-  auto product_i = std::accumulate(index_strategy.begin(), index_strategy.end(), 1, std::multiplies<int64_t>());
-  if ((param_strategy.at(LongToSize(axis_)) != 1) && (product_i != 1)) {
-    MS_LOG(DEBUG) << name_ << ": param is split at dim (axis)" << axis_ << " ,index can't be split.";
+  if (CheckSplitAxisStrategy(strategy) != SUCCESS) {
     return FAILED;
   }
 
-  // param_strategy(axis) != 1, and axis != 0, don't support repeated calc
-  auto product_p = std::accumulate(param_strategy.begin(), param_strategy.end(), 1, std::multiplies<int64_t>());
-  if ((product_p != stage_device_size_) && (param_strategy.at(IntToSize(axis_)) != 1) && (axis_ != 0)) {
-    MS_LOG(DEBUG) << name_ << ": Invalid strategy. Don't support repeated calc.";
-    return FAILED;
-  }
-
-  // param_strategy(axis) != 1, and axis == 0, and repeated calculation, need to set repeated num to the right
-  // of dev-matrix. For example, parameter strategy is [2, 1], indices strategy is [1, 1], dev num is 16,
-  // and dev_matrix is [2, 1, 1, 1, 8], the communication groups are [0, 8] and [0, 1, 2, 3, 4, 5, 6, 7], they
-  // can communicate normally.
-  if ((product_p != stage_device_size_) && (param_strategy.at(IntToSize(axis_)) != 1) && (axis_ == 0)) {
-    if ((param_strategy.size() == 2) && (param_strategy[1] != 1)) {
-      MS_LOG(DEBUG) << name_ << ": axis(0) is split, and param_strategy[1] != 1, don't support repeated calc.";
-      return FAILED;
-    }
-    MS_LOG(INFO) << name_ << ": split axis(0) and repeat calculation";
-    repeated_num_in_dev_matrix_right_ = true;
-  }
-
+  // If repeated calculation, need to set repeated num to the left of dev-matrix. For example,
+  // parameter strategy is [8, 1], indices strategy is [1, 1], dev num is 16,
+  // and dev_matrix is [2, 1, 8, 1, 1], the communication groups are [0, 8] and [0, 1, 2, 3, 4, 5, 6, 7], they
+  // can communicate normally, and dev0 to dev7 have the all parameters.
+  repeated_num_in_dev_matrix_right_ = false;
   return SUCCESS;
 }
 
-Status GatherV2PInfo::InferMirrorOps() {
+Status GatherPInfo::InferMirrorOps() {
   // There is no mirror operators for manual split
   if (manual_split_) {
     return SUCCESS;
@@ -325,7 +344,7 @@ Status GatherV2PInfo::InferMirrorOps() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::InferDevMatrixShape() {
+Status GatherPInfo::InferDevMatrixShape() {
   dev_matrix_shape_.clear();
   out_dev_matrix_shape_.clear();
   // infer input dev_matrix_shape
@@ -340,17 +359,14 @@ Status GatherV2PInfo::InferDevMatrixShape() {
 
   dev_matrix_shape_ = param_strategy;
 
-  // param_strategy(axis)!=1,
-  if (param_strategy.at(LongToSize(axis_)) != 1) {
-    std::reverse(dev_matrix_shape_.begin(), dev_matrix_shape_.end());
-  } else {
+  // param_strategy(axis)==1,
+  if (param_strategy.at(LongToSize(axis_)) == 1) {
     dev_matrix_shape_.insert(dev_matrix_shape_.end(), index_strategy.begin(), index_strategy.end());
   }
 
   // infer out dev_matrix_shape
   // axis!=0, split axis
   if (axis_ != 0 && param_strategy.at(LongToSize(axis_)) != 1) {
-    out_dev_matrix_shape_.push_back(param_strategy.at(0) * param_strategy.at(LongToSize(axis_)));
     for (size_t i = 1; i < param_strategy.size(); ++i) {
       if (i == LongToSize(axis_)) {
         out_dev_matrix_shape_.push_back(1);
@@ -358,20 +374,25 @@ Status GatherV2PInfo::InferDevMatrixShape() {
         out_dev_matrix_shape_.push_back(param_strategy.at(i));
       }
     }
+    out_dev_matrix_shape_.push_back(param_strategy.at(0) * param_strategy.at(LongToSize(axis_)));
   } else {
     out_dev_matrix_shape_ = dev_matrix_shape_;
   }
   auto param_product = std::accumulate(param_strategy.begin(), param_strategy.end(), 1, std::multiplies<int64_t>());
   auto index_product = std::accumulate(index_strategy.begin(), index_strategy.end(), 1, std::multiplies<int64_t>());
   if (param_product * index_product < stage_device_size_) {
-    // add the repeated calculation num to the last dimension of dev matrix
-    out_dev_matrix_shape_.push_back(stage_device_size_ / (param_product * index_product));
+    auto repeated_calc_num = stage_device_size_ / (param_product * index_product);
+    if (repeated_num_in_dev_matrix_right_) {
+      out_dev_matrix_shape_.push_back(repeated_calc_num);
+    } else {
+      (void)out_dev_matrix_shape_.insert(out_dev_matrix_shape_.begin(), repeated_calc_num);
+    }
   }
 
   return SUCCESS;
 }
 
-void GatherV2PInfo::InferInputsTensorMap() {
+void GatherPInfo::InferInputsTensorMap() {
   // infer input tensor map
   // param_strategy(axis) != 1
   size_t param_size = inputs_shape_.at(0).size();
@@ -383,7 +404,7 @@ void GatherV2PInfo::InferInputsTensorMap() {
   if (param_strategy.at(LongToSize(axis_)) != 1) {
     tensor_map_index.insert(tensor_map_index.begin(), index_size, MAP_NONE);
     for (size_t i = 0; i < param_size; ++i) {
-      tensor_map_params.push_back(SizeToLong(i));
+      tensor_map_params.push_back(SizeToLong(param_size - i - 1));
     }
   } else {
     // param_strategy(axis) == 1
@@ -398,7 +419,7 @@ void GatherV2PInfo::InferInputsTensorMap() {
   inputs_tensor_map_.emplace_back(std::move(tensor_map_index));
 }
 
-void GatherV2PInfo::InferOutputsTensorMap() {
+void GatherPInfo::InferOutputsTensorMap() {
   // infer output tensor map
   size_t param_size = inputs_shape_.at(0).size();
   size_t index_size = inputs_shape_.at(1).size();
@@ -423,11 +444,11 @@ void GatherV2PInfo::InferOutputsTensorMap() {
         // the output is repeat calculation
         tensor_map_out.insert(tensor_map_out.end(), MAP_NONE);
       } else {
-        tensor_map_out.insert(tensor_map_out.end(), 0);
+        tensor_map_out.insert(tensor_map_out.end(), param_size - 1);
       }
       tensor_map_out.insert(tensor_map_out.end(), index_size - 1, MAP_NONE);
       for (size_t i = 1; i < param_size; ++i) {
-        tensor_map_out.push_back(i);
+        tensor_map_out.push_back(param_size - 1 - i);
       }
     } else {
       for (size_t i = 0; i < param_size; ++i) {
@@ -437,7 +458,7 @@ void GatherV2PInfo::InferOutputsTensorMap() {
           if (i == 0 && dynamic_shape_indices_ && target_ != CPU) {
             tensor_map_out.push_back(MAP_NONE);
           }
-          tensor_map_out.push_back(SizeToLong(param_size - i - 1));
+          tensor_map_out.push_back(SizeToLong(i));
         }
       }
     }
@@ -445,7 +466,7 @@ void GatherV2PInfo::InferOutputsTensorMap() {
   outputs_tensor_map_.emplace_back(std::move(tensor_map_out));
 }
 
-Status GatherV2PInfo::InferTensorMap() {
+Status GatherPInfo::InferTensorMap() {
   if (manual_split_) {
     inputs_tensor_map_.push_back({1, 0});
     inputs_tensor_map_.push_back({-1, 1});
@@ -457,7 +478,7 @@ Status GatherV2PInfo::InferTensorMap() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::InferTensorInfo() {
+Status GatherPInfo::InferTensorInfo() {
   // infer tensor shape
   Shape input_shape = inputs_shape_.at(0);
   Shape input_index_shape = inputs_shape_.at(1);
@@ -490,7 +511,7 @@ Status GatherV2PInfo::InferTensorInfo() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::InferBias() {
+Status GatherPInfo::InferBias() {
   CheckGlobalDeviceManager();
   int64_t rank = g_device_manager->rank_index_in_stage();
   auto input_shape = inputs_shape_.at(0);
@@ -505,7 +526,11 @@ Status GatherV2PInfo::InferBias() {
     slice_size_ = input_shape.at(0) / params_strategy.at(0);
     // if repeated calculation, because the repeated num in the right of dev-matrix, so rank need to div repeated num
     if (repeated_calc_num_ > 1) {
-      rank = rank / repeated_calc_num_;
+      if (repeated_num_in_dev_matrix_right_) {
+        rank = rank / repeated_calc_num_;
+      } else {
+        rank = rank % params_strategy[0];
+      }
     }
     bias_ = rank * slice_size_;
     return SUCCESS;
@@ -515,11 +540,15 @@ Status GatherV2PInfo::InferBias() {
     slice_size_ = input_shape.at(0) / params_strategy.at(0);
     // if repeated calculation, because the repeated num in the right of dev-matrix, so rank need to div repeated num
     if (repeated_calc_num_ > 1) {
-      rank = rank / repeated_calc_num_;
+      if (repeated_num_in_dev_matrix_right_) {
+        rank = rank / repeated_calc_num_;
+      } else {
+        rank = rank % (params_strategy[0] * params_strategy[1]);
+      }
     }
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
     if (ps::PsDataPrefetch::GetInstance().cache_enable()) {
-      bias_ = 0;
+      bias_ = static_cast<int64_t>(ps::PsCacheManager::GetInstance().cache_indices_lower_bound());
       return SUCCESS;
     }
 #endif
@@ -536,7 +565,7 @@ Status GatherV2PInfo::InferBias() {
   return FAILED;
 }
 
-Status GatherV2PInfo::InferOffset() {
+Status GatherPInfo::InferOffset() {
   CheckGlobalDeviceManager();
   size_t rank = g_device_manager->rank_index_in_stage();
 
@@ -557,30 +586,33 @@ Status GatherV2PInfo::InferOffset() {
   return FAILED;
 }
 
-Status GatherV2PInfo::InferGroup() {
-  auto param_strategy = strategy_->GetInputDim().at(0);
+Status GatherPInfo::InferGroup() {
   size_t dim = LongToSize(axis_);
-  if (param_strategy.at(LongToSize(axis_)) != 1 && inputs_shape_.at(0).size() == 2) {
-    dim = (axis_ + 1) % 2;
-  }
 
   int64_t rank = g_device_manager->global_rank();
   DeviceMatrix dev_matrix(rank, stage_device_list_, dev_matrix_shape_);
   RankList group_devices;
+
+  // the dev_matrix[0] is repeated_calc_num, so the dim need to add 1
+  if ((repeated_calc_num_ > 1) && !repeated_num_in_dev_matrix_right_) {
+    dim = dim + 1;
+  }
+
   if (dev_matrix.GetDevicesAlongDim(SizeToUlong(dim), &group_devices) != SUCCESS) {
     MS_LOG(ERROR) << name_ << ": Create group failed.";
     return FAILED;
   }
   if (group_devices.size() == 1) {
-    MS_LOG(INFO) << "the group is empty";
+    MS_LOG(INFO) << name_ << ": The group is empty";
     return SUCCESS;
   }
 
+  MS_LOG(INFO) << name_ << ": The group ranks is " << group_devices;
   group_ = g_device_manager->CreateGroup(group_devices);
   return SUCCESS;
 }
 
-Status GatherV2PInfo::InferForwardCommunication() {
+Status GatherPInfo::InferForwardCommunication() {
   if (manual_split_) {
     return SUCCESS;
   }
@@ -617,7 +649,7 @@ Status GatherV2PInfo::InferForwardCommunication() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::ComputeReplaceGraph(const CNodePtr &cnode) {
+Status GatherPInfo::ComputeReplaceGraph(const CNodePtr &cnode) {
   GenerateGraph gen_g = GenerateGraph();
   if (gen_g.Init(cnode) != SUCCESS) {
     MS_LOG(ERROR) << "GenerateGraph Init failed";
@@ -640,6 +672,7 @@ Status GatherV2PInfo::ComputeReplaceGraph(const CNodePtr &cnode) {
     MS_LOG(ERROR) << name_ << ": Infer Bias failed.";
     return FAILED;
   }
+  MS_LOG(INFO) << name_ << ": The rank is " << g_device_manager->rank_index_in_stage() << ", the bias is " << bias_;
   auto sub = gen_g.PushBack({gen_g.NewOpInst(SUB), gen_g.virtual_input_node(), CreateInt32Tensor(bias_)});
   auto relu = gen_g.PushBack({gen_g.NewOpInst(RELU), sub});
   auto minimum = gen_g.PushBack({gen_g.NewOpInst(MINIMUM), relu, CreateInt32Tensor(slice_size_ - 1)});
@@ -674,7 +707,7 @@ Status GatherV2PInfo::ComputeReplaceGraph(const CNodePtr &cnode) {
   return SUCCESS;
 }
 
-ReplaceGraphPtr GatherV2PInfo::replace_graph(const CNodePtr &cnode) {
+ReplaceGraphPtr GatherPInfo::replace_graph(const CNodePtr &cnode) {
   if (manual_split_ && target_ != CPU) {
     if (ComputeReplaceGraph(cnode) != SUCCESS) {
       MS_LOG(EXCEPTION) << name_ << ": ComputeReplaceGraph failed.";
@@ -683,7 +716,7 @@ ReplaceGraphPtr GatherV2PInfo::replace_graph(const CNodePtr &cnode) {
   }
 
   auto param_strategy = strategy_->GetInputDim().at(0);
-  // target_ == CPU, no need to raplace graph
+  // target_ == CPU, no need to replace graph
   if (target_ == CPU) {
     return nullptr;
   }
@@ -693,7 +726,7 @@ ReplaceGraphPtr GatherV2PInfo::replace_graph(const CNodePtr &cnode) {
   return replace_graph_;
 }
 
-Status GatherV2PInfo::ComputeReplaceOp() {
+Status GatherPInfo::ComputeReplaceOp() {
   int64_t bias = 0;
   if (manual_split_) {
     if (InferOffset() != SUCCESS) {
@@ -721,7 +754,7 @@ Status GatherV2PInfo::ComputeReplaceOp() {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::Init(const StrategyPtr &strategy) {
+Status GatherPInfo::Init(const StrategyPtr &strategy) {
   if (InitWithAutoRepeatCalc(strategy) != SUCCESS) {
     MS_LOG(ERROR) << name_ << ": Init failed.";
     return FAILED;
@@ -734,7 +767,7 @@ Status GatherV2PInfo::Init(const StrategyPtr &strategy) {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::InitForCostModel(const StrategyPtr &strategy) {
+Status GatherPInfo::InitForCostModel(const StrategyPtr &strategy) {
   if (InitForCostModelWithAutoRepeatCalc(strategy) != SUCCESS) {
     if (is_auto_parallel_) {
       MS_LOG(DEBUG) << name_ << ": Init for cost model failed.";
@@ -752,9 +785,9 @@ Status GatherV2PInfo::InitForCostModel(const StrategyPtr &strategy) {
   return SUCCESS;
 }
 
-Status GatherV2PInfo::SetCostUnderStrategy(const StrategyPtr &strategy) { return SetCostUnderStrategyBase(strategy); }
+Status GatherPInfo::SetCostUnderStrategy(const StrategyPtr &strategy) { return SetCostUnderStrategyBase(strategy); }
 
-Status GatherV2PInfo::GenerateStrategies(int64_t stage_id) {
+Status GatherPInfo::GenerateStrategies(int64_t stage_id) {
   if (GetAttrs() != SUCCESS) {
     return FAILED;
   }
@@ -783,7 +816,7 @@ Status GatherV2PInfo::GenerateStrategies(int64_t stage_id) {
   return SUCCESS;
 }
 
-std::shared_ptr<Strategys> GatherV2PInfo::GenerateBatchStrategies() {
+std::shared_ptr<Strategys> GatherPInfo::GenerateBatchStrategies() {
   if (GetAttrs() != SUCCESS) {
     MS_LOG(EXCEPTION) << name_ << ": Get attr failed";
   }

@@ -34,11 +34,13 @@ kernel::KernelBuildInfoPtr GenerateKernelBuildInfo(CNodePtr node) {
   std::vector<TypeId> outputs_type;
   kernel::KernelBuildInfo::KernelBuildInfoBuilder builder;
 
-  for (size_t input_index = 0; input_index < AnfAlgo::GetInputTensorNum(node); ++input_index) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(node);
+  for (size_t input_index = 0; input_index < input_num; ++input_index) {
     inputs_type.push_back(AnfAlgo::GetPrevNodeOutputInferDataType(node, input_index));
     inputs_format.push_back(kOpFormat_DEFAULT);
   }
-  for (size_t output_index = 0; output_index < AnfAlgo::GetOutputTensorNum(node); ++output_index) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(node);
+  for (size_t output_index = 0; output_index < output_num; ++output_index) {
     outputs_type.push_back(AnfAlgo::GetOutputInferDataType(node, output_index));
     outputs_format.push_back(kOpFormat_DEFAULT);
   }
@@ -51,7 +53,7 @@ kernel::KernelBuildInfoPtr GenerateKernelBuildInfo(CNodePtr node) {
 }  // namespace
 
 const BaseRef AddReluGradV2Fusion::DefinePattern() const {
-  VectorRef relu_grad = VectorRef({prim::kPrimReluGradV2, VectorRef({prim::kPrimTensorAdd, x1_, x2_}), mask_});
+  VectorRef relu_grad = VectorRef({prim::kPrimReluGradV2, VectorRef({prim::kPrimAdd, x1_, x2_}), mask_});
   return relu_grad;
 }
 
@@ -68,6 +70,12 @@ const AnfNodePtr AddReluGradV2Fusion::Process(const FuncGraphPtr &graph, const A
   MS_EXCEPTION_IF_NULL(tensor_add);
   auto users = GetRealNodeUsedList(graph, tensor_add);
   if (users->size() > 1) {
+    return nullptr;
+  }
+
+  std::vector<size_t> shape1 = AnfAlgo::GetPrevNodeOutputInferShape(tensor_add, 0);
+  std::vector<size_t> shape2 = AnfAlgo::GetPrevNodeOutputInferShape(tensor_add, 1);
+  if (shape1 != shape2) {
     return nullptr;
   }
 

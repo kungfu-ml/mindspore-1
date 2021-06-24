@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,19 +19,23 @@ import filecmp
 import glob
 import json
 import os
+import pytest
 
 import numpy as np
 from test_minddataset_sampler import add_and_remove_cv_file, get_data, CV_DIR_NAME, CV_FILE_NAME
-from util import config_get_set_num_parallel_workers
+from util import config_get_set_num_parallel_workers, config_get_set_seed
 
+import mindspore.common.dtype as mstype
 import mindspore.dataset as ds
 import mindspore.dataset.transforms.c_transforms as c
+import mindspore.dataset.transforms.py_transforms as py
 import mindspore.dataset.vision.c_transforms as vision
+import mindspore.dataset.vision.py_transforms as py_vision
 from mindspore import log as logger
 from mindspore.dataset.vision import Inter
 
 
-def test_imagefolder(remove_json_files=True):
+def test_serdes_imagefolder_dataset(remove_json_files=True):
     """
     Test simulating resnet50 dataset pipeline.
     """
@@ -46,6 +50,8 @@ def test_imagefolder(remove_json_files=True):
 
     # Constructing DE pipeline
     sampler = ds.WeightedRandomSampler(weights, 11)
+    child_sampler = ds.SequentialSampler()
+    sampler.add_child(child_sampler)
     data1 = ds.ImageFolderDataset(data_dir, sampler=sampler)
     data1 = data1.repeat(1)
     data1 = data1.map(operations=[vision.Decode(True)], input_columns=["image"])
@@ -98,7 +104,10 @@ def test_imagefolder(remove_json_files=True):
         delete_json_files()
 
 
-def test_mnist_dataset(remove_json_files=True):
+def test_serdes_mnist_dataset(remove_json_files=True):
+    """
+    Test serdes on mnist dataset pipeline.
+    """
     data_dir = "../data/dataset/testMnistData"
     ds.config.set_seed(1)
 
@@ -136,7 +145,10 @@ def test_mnist_dataset(remove_json_files=True):
         delete_json_files()
 
 
-def test_zip_dataset(remove_json_files=True):
+def test_serdes_zip_dataset(remove_json_files=True):
+    """
+    Test serdes on zip dataset pipeline.
+    """
     files = ["../data/dataset/testTFTestAllTypes/test.data"]
     schema_file = "../data/dataset/testTFTestAllTypes/datasetSchema.json"
     ds.config.set_seed(1)
@@ -177,10 +189,14 @@ def test_zip_dataset(remove_json_files=True):
         delete_json_files()
 
 
-def test_random_crop():
+def test_serdes_random_crop():
+    """
+    Test serdes on RandomCrop pipeline.
+    """
     logger.info("test_random_crop")
     DATA_DIR = ["../data/dataset/test_tf_file_3_images/train-0000-of-0001.data"]
     SCHEMA_DIR = "../data/dataset/test_tf_file_3_images/datasetSchema.json"
+    original_seed = config_get_set_seed(1)
     original_num_parallel_workers = config_get_set_num_parallel_workers(1)
 
     # First dataset
@@ -209,7 +225,224 @@ def test_random_crop():
         _ = item2["image"]
 
     # Restore configuration num_parallel_workers
+    ds.config.set_seed(original_seed)
     ds.config.set_num_parallel_workers(original_num_parallel_workers)
+
+
+def test_serdes_cifar10_dataset(remove_json_files=True):
+    """
+    Test serdes on Cifar10 dataset pipeline
+    """
+    data_dir = "../data/dataset/testCifar10Data"
+    original_seed = config_get_set_seed(1)
+    original_num_parallel_workers = config_get_set_num_parallel_workers(1)
+
+    data1 = ds.Cifar10Dataset(data_dir, num_samples=10, shuffle=False)
+    data1 = data1.take(6)
+
+    trans = [
+        vision.RandomCrop((32, 32), (4, 4, 4, 4)),
+        vision.Resize((224, 224)),
+        vision.Rescale(1.0 / 255.0, 0.0),
+        vision.Normalize([0.4914, 0.4822, 0.4465], [0.2023, 0.1994, 0.2010]),
+        vision.HWC2CHW()
+    ]
+
+    type_cast_op = c.TypeCast(mstype.int32)
+    data1 = data1.map(operations=type_cast_op, input_columns="label")
+    data1 = data1.map(operations=trans, input_columns="image")
+    data1 = data1.batch(3, drop_remainder=True)
+    data1 = data1.repeat(1)
+    data2 = util_check_serialize_deserialize_file(data1, "cifar10_dataset_pipeline", remove_json_files)
+
+    num_samples = 0
+    # Iterate and compare the data in the original pipeline (data1) against the deserialized pipeline (data2)
+    for item1, item2 in zip(data1.create_dict_iterator(num_epochs=1, output_numpy=True),
+                            data2.create_dict_iterator(num_epochs=1, output_numpy=True)):
+        np.testing.assert_array_equal(item1['image'], item2['image'])
+        num_samples += 1
+
+    assert num_samples == 2
+
+    # Restore configuration num_parallel_workers
+    ds.config.set_seed(original_seed)
+    ds.config.set_num_parallel_workers(original_num_parallel_workers)
+
+
+def test_serdes_celeba_dataset(remove_json_files=True):
+    """
+    Test serdes on Celeba dataset pipeline.
+    """
+    DATA_DIR = "../data/dataset/testCelebAData/"
+    data1 = ds.CelebADataset(DATA_DIR, decode=True, num_shards=1, shard_id=0)
+    # define map operations
+    data1 = data1.repeat(2)
+    center_crop = vision.CenterCrop((80, 80))
+    pad_op = vision.Pad(20, fill_value=(20, 20, 20))
+    data1 = data1.map(operations=[center_crop, pad_op], input_columns=["image"], num_parallel_workers=8)
+    data2 = util_check_serialize_deserialize_file(data1, "celeba_dataset_pipeline", remove_json_files)
+
+    num_samples = 0
+    # Iterate and compare the data in the original pipeline (data1) against the deserialized pipeline (data2)
+    for item1, item2 in zip(data1.create_dict_iterator(num_epochs=1, output_numpy=True),
+                            data2.create_dict_iterator(num_epochs=1, output_numpy=True)):
+        np.testing.assert_array_equal(item1['image'], item2['image'])
+        num_samples += 1
+
+    assert num_samples == 8
+
+
+def test_serdes_csv_dataset(remove_json_files=True):
+    """
+    Test serdes on Csvdataset pipeline.
+    """
+    DATA_DIR = "../data/dataset/testCSV/1.csv"
+    data1 = ds.CSVDataset(
+        DATA_DIR,
+        column_defaults=["1", "2", "3", "4"],
+        column_names=['col1', 'col2', 'col3', 'col4'],
+        shuffle=False)
+    columns = ["col1", "col4", "col2"]
+    data1 = data1.project(columns=columns)
+    data2 = util_check_serialize_deserialize_file(data1, "csv_dataset_pipeline", remove_json_files)
+
+    num_samples = 0
+    # Iterate and compare the data in the original pipeline (data1) against the deserialized pipeline (data2)
+    for item1, item2 in zip(data1.create_dict_iterator(num_epochs=1, output_numpy=True),
+                            data2.create_dict_iterator(num_epochs=1, output_numpy=True)):
+        np.testing.assert_array_equal(item1['col1'], item2['col1'])
+        np.testing.assert_array_equal(item1['col2'], item2['col2'])
+        np.testing.assert_array_equal(item1['col4'], item2['col4'])
+        num_samples += 1
+
+    assert num_samples == 3
+
+
+def test_serdes_voc_dataset(remove_json_files=True):
+    """
+    Test serdes on VOC dataset pipeline.
+    """
+    data_dir = "../data/dataset/testVOC2012"
+    original_seed = config_get_set_seed(1)
+    original_num_parallel_workers = config_get_set_num_parallel_workers(1)
+
+    # define map operations
+    random_color_adjust_op = vision.RandomColorAdjust(brightness=(0.5, 0.5))
+    random_rotation_op = vision.RandomRotation((0, 90), expand=True, resample=Inter.BILINEAR, center=(50, 50),
+                                               fill_value=150)
+
+    data1 = ds.VOCDataset(data_dir, task="Detection", usage="train", decode=True)
+    data1 = data1.map(operations=random_color_adjust_op, input_columns=["image"])
+    data1 = data1.map(operations=random_rotation_op, input_columns=["image"])
+    data1 = data1.skip(2)
+    data2 = util_check_serialize_deserialize_file(data1, "voc_dataset_pipeline", remove_json_files)
+
+    num_samples = 0
+    # Iterate and compare the data in the original pipeline (data1) against the deserialized pipeline (data2)
+    for item1, item2 in zip(data1.create_dict_iterator(num_epochs=1, output_numpy=True),
+                            data2.create_dict_iterator(num_epochs=1, output_numpy=True)):
+        np.testing.assert_array_equal(item1['image'], item2['image'])
+        num_samples += 1
+
+    assert num_samples == 7
+
+    # Restore configuration num_parallel_workers
+    ds.config.set_seed(original_seed)
+    ds.config.set_num_parallel_workers(original_num_parallel_workers)
+
+
+def test_serdes_to_device(remove_json_files=True):
+    """
+    Test serdes on transfer dataset pipeline.
+    """
+    data_dir = ["../data/dataset/test_tf_file_3_images/train-0000-of-0001.data"]
+    schema_file = "../data/dataset/test_tf_file_3_images/datasetSchema.json"
+    data1 = ds.TFRecordDataset(data_dir, schema_file, columns_list=["image", "label"], shuffle=False)
+    data1 = data1.to_device()
+    util_check_serialize_deserialize_file(data1, "transfer_dataset_pipeline", remove_json_files)
+
+
+def test_serdes_pyvision(remove_json_files=True):
+    """
+    Test serdes on py_transform pipeline.
+    """
+    data_dir = ["../data/dataset/test_tf_file_3_images/train-0000-of-0001.data"]
+    schema_file = "../data/dataset/test_tf_file_3_images/datasetSchema.json"
+    data1 = ds.TFRecordDataset(data_dir, schema_file, columns_list=["image", "label"], shuffle=False)
+    transforms = [
+        py_vision.Decode(),
+        py_vision.CenterCrop([32, 32]),
+        py_vision.ToTensor()
+    ]
+    data1 = data1.map(operations=py.Compose(transforms), input_columns=["image"])
+    # Current python function derialization will be failed for pickle, so we disable this testcase
+    # as an exception testcase.
+    try:
+        util_check_serialize_deserialize_file(data1, "pyvision_dataset_pipeline", remove_json_files)
+        assert False
+    except NotImplementedError as e:
+        assert "python function is not yet supported" in str(e)
+
+
+def test_serdes_uniform_augment(remove_json_files=True):
+    """
+    Test serdes on uniform augment.
+    """
+    data_dir = "../data/dataset/testPK/data"
+    data = ds.ImageFolderDataset(dataset_dir=data_dir, shuffle=False)
+    ds.config.set_seed(1)
+
+    transforms_ua = [vision.RandomHorizontalFlip(),
+                     vision.RandomVerticalFlip(),
+                     vision.RandomColor(),
+                     vision.RandomSharpness(),
+                     vision.Invert(),
+                     vision.AutoContrast(),
+                     vision.Equalize()]
+    transforms_all = [vision.Decode(), vision.Resize(size=[224, 224]),
+                      vision.UniformAugment(transforms=transforms_ua, num_ops=5)]
+    data = data.map(operations=transforms_all, input_columns="image", num_parallel_workers=1)
+    util_check_serialize_deserialize_file(data, "uniform_augment_pipeline", remove_json_files)
+
+
+def test_serdes_exception():
+    """
+    Test exception case in serdes
+    """
+    data_dir = ["../data/dataset/test_tf_file_3_images/train-0000-of-0001.data"]
+    schema_file = "../data/dataset/test_tf_file_3_images/datasetSchema.json"
+    data1 = ds.TFRecordDataset(data_dir, schema_file, columns_list=["image", "label"], shuffle=False)
+    data1 = data1.filter(input_columns=["image", "label"], predicate=lambda data: data < 11, num_parallel_workers=4)
+    data1_json = ds.serialize(data1)
+    with pytest.raises(RuntimeError) as msg:
+        ds.deserialize(input_dict=data1_json)
+    assert "Filter is not yet supported by ds.engine.deserialize" in str(msg)
+
+
+def util_check_serialize_deserialize_file(data_orig, filename, remove_json_files):
+    """
+    Utility function for testing serdes files. It is to check if a json file is indeed created with correct name
+    after serializing and if it remains the same after repeatedly saving and loading.
+    :param data_orig: original data pipeline to be serialized
+    :param filename: filename to be saved as json format
+    :param remove_json_files: whether to remove the json file after testing
+    :return: The data pipeline after serializing and deserializing using the original pipeline
+    """
+    file1 = filename + ".json"
+    file2 = filename + "_1.json"
+    ds.serialize(data_orig, file1)
+    assert validate_jsonfile(file1) is True
+    assert validate_jsonfile("wrong_name.json") is False
+
+    data_changed = ds.deserialize(json_filepath=file1)
+    ds.serialize(data_changed, file2)
+    assert validate_jsonfile(file2) is True
+    assert filecmp.cmp(file1, file2)
+
+    # Remove the generated json file
+    if remove_json_files:
+        delete_json_files()
+    return data_changed
 
 
 def validate_jsonfile(filepath):
@@ -232,7 +465,7 @@ def delete_json_files():
 
 
 # Test save load minddataset
-def test_minddataset(add_and_remove_cv_file):
+def skip_test_minddataset(add_and_remove_cv_file):
     """tutorial for cv minderdataset."""
     columns_list = ["data", "file_name", "label"]
     num_readers = 4
@@ -263,7 +496,12 @@ def test_minddataset(add_and_remove_cv_file):
 
 
 if __name__ == '__main__':
-    test_imagefolder()
-    test_zip_dataset()
-    test_mnist_dataset()
-    test_random_crop()
+    test_serdes_imagefolder_dataset()
+    test_serdes_mnist_dataset()
+    test_serdes_cifar10_dataset()
+    test_serdes_celeba_dataset()
+    test_serdes_csv_dataset()
+    test_serdes_voc_dataset()
+    test_serdes_zip_dataset()
+    test_serdes_random_crop()
+    test_serdes_exception()

@@ -1,6 +1,6 @@
 # This is the Python adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
 #
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -114,72 +114,72 @@ class GradOperation(GradOperation_):
     To generate a gradient function that returns gradients with respect to the first input
     (see `GradNetWrtX` in Examples).
 
-        1. Construct a `GradOperation` higher-order function with default arguments:
-           `grad_op = GradOperation()`.
+    1. Construct a `GradOperation` higher-order function with default arguments:
+       `grad_op = GradOperation()`.
 
-        2. Call it with input function as argument to get the gradient function: `gradient_function = grad_op(net)`.
+    2. Call it with input function as argument to get the gradient function: `gradient_function = grad_op(net)`.
 
-        3. Call the gradient function with input function's inputs to get the gradients with respect to the first input:
-           `grad_op(net)(x, y)`.
+    3. Call the gradient function with input function's inputs to get the gradients with respect to the first input:
+       `grad_op(net)(x, y)`.
 
     To generate a gradient function that returns gradients with respect to all inputs (see `GradNetWrtXY` in Examples).
 
-        1. Construct a `GradOperation` higher-order function with `get_all=True` which
-           indicates getting gradients with respect to all inputs, they are `x` and `y` in example function `Net()`:
-           `grad_op = GradOperation(get_all=True)`.
+    1. Construct a `GradOperation` higher-order function with `get_all=True` which
+       indicates getting gradients with respect to all inputs, they are `x` and `y` in example function `Net()`:
+       `grad_op = GradOperation(get_all=True)`.
 
-        2. Call it with input function as argument to get the gradient function: `gradient_function = grad_op(net)`.
+    2. Call it with input function as argument to get the gradient function: `gradient_function = grad_op(net)`.
 
-        3. Call the gradient function with input function's inputs to get the gradients with respect to all inputs:
-           `gradient_function(x, y)`.
+    3. Call the gradient function with input function's inputs to get the gradients with respect to all inputs:
+       `gradient_function(x, y)`.
 
     To generate a gradient function that returns gradients with respect to given parameters
     (see `GradNetWithWrtParams` in Examples).
 
-        1. Construct a `GradOperation` higher-order function with `get_by_list=True`:
-           `grad_op = GradOperation(get_by_list=True)`.
+    1. Construct a `GradOperation` higher-order function with `get_by_list=True`:
+       `grad_op = GradOperation(get_by_list=True)`.
 
-        2. Construct a `ParameterTuple` that will be passed to the input function when constructing
-           `GradOperation` higher-order function, it will be used as a parameter filter that determine
-           which gradient to return: `params = ParameterTuple(net.trainable_params())`.
+    2. Construct a `ParameterTuple` that will be passed to the input function when constructing
+       `GradOperation` higher-order function, it will be used as a parameter filter that determine
+       which gradient to return: `params = ParameterTuple(net.trainable_params())`.
 
-        3. Call it with input function and `params` as arguments to get the gradient function:
-           `gradient_function = grad_op(net, params)`.
+    3. Call it with input function and `params` as arguments to get the gradient function:
+       `gradient_function = grad_op(net, params)`.
 
-        4. Call the gradient function with input function's inputs to get the gradients with
-        respect to given parameters: `gradient_function(x, y)`.
+    4. Call the gradient function with input function's inputs to get the gradients with
+       respect to given parameters: `gradient_function(x, y)`.
 
     To generate a gradient function that returns gradients with respect to all inputs and given parameters
     in the format of ((dx, dy), (dz))(see `GradNetWrtInputsAndParams` in Examples).
 
-        1. Construct a `GradOperation` higher-order function with `get_all=True` and `get_by_list=True`:
-           `grad_op = GradOperation(get_all=True, get_by_list=True)`.
+    1. Construct a `GradOperation` higher-order function with `get_all=True` and `get_by_list=True`:
+       `grad_op = GradOperation(get_all=True, get_by_list=True)`.
 
-        2. Construct a `ParameterTuple` that will be passed along input function when constructing
-           `GradOperation` higher-order function: `params = ParameterTuple(net.trainable_params())`.
+    2. Construct a `ParameterTuple` that will be passed along input function when constructing
+       `GradOperation` higher-order function: `params = ParameterTuple(net.trainable_params())`.
 
-        3. Call it with input function and `params` as arguments to get the gradient function:
-           `gradient_function = grad_op(net, params)`.
+    3. Call it with input function and `params` as arguments to get the gradient function:
+       `gradient_function = grad_op(net, params)`.
 
-        4. Call the gradient function with input function's inputs
-           to get the gradients with respect to all inputs and given parameters: `gradient_function(x, y)`.
+    4. Call the gradient function with input function's inputs
+       to get the gradients with respect to all inputs and given parameters: `gradient_function(x, y)`.
 
     We can configure the sensitivity(gradient with respect to output) by setting `sens_param` as True and
     passing an extra sensitivity input to the gradient function, the sensitivity input should has the
     same shape and type with input function's output(see `GradNetWrtXYWithSensParam` in Examples).
 
-        1. Construct a `GradOperation` higher-order function with `get_all=True` and `sens_param=True`:
-           `grad_op = GradOperation(get_all=True, sens_param=True)`.
+    1. Construct a `GradOperation` higher-order function with `get_all=True` and `sens_param=True`:
+       `grad_op = GradOperation(get_all=True, sens_param=True)`.
 
-        2. Define `grad_wrt_output` as `sens_param` which works as the gradient with respect to output:
-           `grad_wrt_output = Tensor(np.ones([2, 2]).astype(np.float32))`.
+    2. Define `grad_wrt_output` as `sens_param` which works as the gradient with respect to output:
+       `grad_wrt_output = Tensor(np.ones([2, 2]).astype(np.float32))`.
 
-        3. Call it with input function as argument to get the gradient function:
-           `gradient_function = grad_op(net)`.
+    3. Call it with input function as argument to get the gradient function:
+       `gradient_function = grad_op(net)`.
 
-        4. Call the gradient function with input function's inputs and `sens_param` to
-           get the gradients with respect to all inputs:
-           `gradient_function(x, y, grad_wrt_output)`.
+    4. Call the gradient function with input function's inputs and `sens_param` to
+       get the gradients with respect to all inputs:
+       `gradient_function(x, y, grad_wrt_output)`.
 
     Args:
         get_all (bool): If True, get all the gradients with respect to inputs. Default: False.
@@ -197,6 +197,12 @@ class GradOperation(GradOperation_):
 
     Returns:
         The higher-order function which takes a function as argument and returns gradient function for it.
+
+    Raises:
+        TypeError: If `get_all`, `get_by_list` or `sens_param` is not a bool.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> from mindspore.common import ParameterTuple
@@ -319,36 +325,30 @@ class GradOperation(GradOperation_):
         GradOperation_.__init__(self, 'grad', get_all, get_by_list, sens_param)
         self.grad_fn = None
         self.fn = None
-        self.need_forward = False
 
     def _pynative_forward_run(self, args, kwargs, fn):
         """ Pynative forward run to build grad graph. """
-        new_kwargs = {}
+        new_kwargs = kwargs
         if self.sens_param:
             if not 'sens' in kwargs.keys():
                 args = args[:-1]
-                new_kwargs = kwargs
             else:
-                for key, value in kwargs.items():
-                    if key != 'sens':
-                        new_kwargs[key] = value
+                new_kwargs = kwargs.copy()
+                new_kwargs.pop('sens')
         for arg in args:
             if not isinstance(arg, Tensor):
                 raise TypeError("grad inputs should be tensor in pynative mode")
         if isinstance(fn, FunctionType):
-            _pynative_exec.set_grad_flag(True)
-            _pynative_exec.new_graph(fn, *args, **new_kwargs)
-            output = fn(*args, **new_kwargs)
-            _pynative_exec.end_graph(fn, output, *args, **new_kwargs)
+            if not _pynative_exec.check_run(fn, *args, **new_kwargs):
+                _pynative_exec.set_grad_flag(True)
+                _pynative_exec.new_graph(fn, *args, **new_kwargs)
+                output = fn(*args, **new_kwargs)
+                _pynative_exec.end_graph(fn, output, *args, **new_kwargs)
         else:
-            if fn.already_run and not fn.requires_grad:
-                raise ValueError("obj must set_grad.")
-            if not fn.already_run:
-                self.need_forward = True
-            if self.need_forward:
+            # Check if fn have run already
+            if not _pynative_exec.check_run(fn, *args, **new_kwargs):
                 fn.set_grad()
                 fn(*args, **new_kwargs)
-                fn.already_run = False
 
     def __call__(self, fn, weights=None):
         grad_ = GradOperation(self.get_all, self.get_by_list, self.sens_param)
@@ -367,11 +367,10 @@ class GradOperation(GradOperation_):
                 def after_grad(*args, **kwargs):
                     if _pynative_exec.check_graph(fn, *args, **kwargs):
                         print("Another grad step is running")
-                        fn.already_run = False
                     self._pynative_forward_run(args, kwargs, fn)
                     _pynative_exec.grad(grad_, fn, weights, *args, **kwargs)
                     out = _pynative_exec(fn, *args, **kwargs)
-                    _pynative_exec.clear()
+                    _pynative_exec.clear_grad(fn, *args, **kwargs)
                     return out
             self.grad_fn = after_grad
             self.fn = fn
@@ -384,7 +383,7 @@ class MultitypeFuncGraph(MultitypeFuncGraph_):
 
     MultitypeFuncGraph is a class used to generate overloaded functions, considering different types as inputs.
     Initialize an `MultitypeFuncGraph` object with name, and use `register` with input types as the decorator
-    for the function to be registed. And the object can be called with different types of inputs,
+    for the function to be registered. And the object can be called with different types of inputs,
     and work with `HyperMap` and `Map`.
 
     Args:
@@ -395,6 +394,9 @@ class MultitypeFuncGraph(MultitypeFuncGraph_):
     Raises:
         ValueError: If failed to find find a matching function for the given arguments.
 
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
+
     Examples:
         >>> # `add` is a metagraph object which will add two objects according to
         >>> # input type using ".register" decorator.
@@ -402,7 +404,7 @@ class MultitypeFuncGraph(MultitypeFuncGraph_):
         >>> from mindspore.ops import Primitive, operations as P
         >>> from mindspore import dtype as mstype
         >>>
-        >>> tensor_add = P.TensorAdd()
+        >>> tensor_add = P.Add()
         >>> add = MultitypeFuncGraph('add')
         >>> @add.register("Number", "Number")
         ... def add_scala(x, y):
@@ -485,6 +487,13 @@ class HyperMap(HyperMap_):
     Outputs:
         Sequence or nested sequence, the sequence of output after applying the function.
         e.g. `operation(args[0][i], args[1][i])`.
+
+    Raises:
+        TypeError: If `ops` is neither MultitypeFuncGraph nor None.
+        TypeError: If `args` is not a Tuple.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
 
     Examples:
         >>> from mindspore import dtype as mstype

@@ -51,12 +51,9 @@ TEST_F(MindDataTestConcatOp, TestConcatProject) {
   // TFReaderOp1
   std::shared_ptr<TFReaderOp> my_tfreader_op1;
   TFReaderOp::Builder builder1;
-  builder1.SetDatasetFilesList({dataset_path})
-    .SetRowsPerBuffer(16)
-    .SetWorkerConnectorSize(16)
-    .SetNumWorkers(16);
+  builder1.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(16).SetWorkerConnectorSize(16);
   std::unique_ptr<DataSchema> schema1 = std::make_unique<DataSchema>();
-  schema1->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
+  schema1->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema1Row.json", {});
   builder1.SetDataSchema(std::move(schema1));
   Status rc = builder1.Build(&my_tfreader_op1);
   ASSERT_TRUE(rc.IsOk());
@@ -66,12 +63,9 @@ TEST_F(MindDataTestConcatOp, TestConcatProject) {
   // TFReaderOp2
   std::shared_ptr<TFReaderOp> my_tfreader_op2;
   TFReaderOp::Builder builder2;
-  builder2.SetDatasetFilesList({dataset_path})
-    .SetRowsPerBuffer(16)
-    .SetWorkerConnectorSize(16)
-    .SetNumWorkers(16);
+  builder2.SetDatasetFilesList({dataset_path}).SetRowsPerBuffer(16).SetWorkerConnectorSize(16);
   std::unique_ptr<DataSchema> schema2 = std::make_unique<DataSchema>();
-  schema2->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema.json", {});
+  schema2->LoadSchemaFile(datasets_root_path_ + "/testTFTestAllTypes/datasetSchema1Row.json", {});
   builder2.SetDataSchema(std::move(schema2));
   rc = builder2.Build(&my_tfreader_op2);
   ASSERT_TRUE(rc.IsOk());
@@ -121,5 +115,5 @@ TEST_F(MindDataTestConcatOp, TestConcatProject) {
     EXPECT_TRUE(rc.IsOk());
     row_count++;
   }
-  ASSERT_EQ(row_count, 24); // Should be 24 rows fetched
+  ASSERT_EQ(row_count, 2); // Should be 2 rows fetched
 }

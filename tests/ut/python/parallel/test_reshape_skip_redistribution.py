@@ -24,7 +24,7 @@ from mindspore.ops import operations as P
 class Net(Cell):
     def __init__(self, matmul_weight, strategy1=None):
         super().__init__()
-        self.gatherv2 = P.GatherV2().shard(strategy1)
+        self.gatherv2 = P.Gather().shard(strategy1)
         self.reshape = P.Reshape().add_prim_attr("skip_redistribution", True)
         self.matmul = P.MatMul(transpose_b=False)
         self.index = Tensor(np.ones([64, 64]), dtype=ms.int32)
@@ -43,7 +43,7 @@ _x = Tensor(np.ones([64, 64]), dtype=ms.float32)
 _b = Tensor(np.ones([128, 64, 32]), dtype=ms.float32)
 
 def compile_net(net):
-    context.set_context(save_graphs=True)
+    context.set_context(save_graphs=False)
     optimizer = Momentum(net.trainable_params(), learning_rate=0.1, momentum=0.9)
     train_net = TrainOneStepCell(net, optimizer)
     train_net.set_auto_parallel()

@@ -37,10 +37,11 @@ class EXPORT PsDataPrefetch {
   EXPORT bool cache_enable() const { return cache_enable_; }
   EXPORT void set_cache_enable(bool cache_enable) { cache_enable_ = cache_enable; }
   EXPORT void CreateDataChannel(const std::string &channel_name, size_t step_num);
-  EXPORT bool PrefetchData(const std::string &channel_name, void *data, const size_t data_size);
+  EXPORT bool PrefetchData(const std::string &channel_name, void *data, const size_t data_size,
+                           const std::string &data_type);
   EXPORT bool FinalizeData(const std::string &channel_name);
   EXPORT void NotifyFinalize();
-  EXPORT void *data(const std::string &channel_name) const;
+  EXPORT bool QueryData(const std::string &channel_name, void **data_ptr) const;
   EXPORT size_t data_size(const std::string &channel_name) const;
   EXPORT bool TryWakeChannel(const std::string &channel_name);
 
@@ -58,6 +59,7 @@ class EXPORT PsDataPrefetch {
   std::condition_variable data_prefetch_;
   std::condition_variable data_process_;
   std::atomic_bool need_wait_{true};
+  std::atomic_bool invalid_data_type_{false};
 };
 }  // namespace ps
 }  // namespace mindspore

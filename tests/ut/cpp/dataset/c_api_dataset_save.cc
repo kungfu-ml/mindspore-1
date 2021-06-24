@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 #include "minddata/dataset/include/transforms.h"
 
 using namespace mindspore::dataset;
-using mindspore::dataset::Tensor;
 
 class MindDataTestPipeline : public UT::DatasetOpTesting {
  protected:
@@ -31,7 +30,7 @@ TEST_F(MindDataTestPipeline, TestSaveCifar10AndLoad) {
   // Stage 1: load original dataset
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", SequentialSampler(0, 10));
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<SequentialSampler>(0, 10));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -40,8 +39,8 @@ TEST_F(MindDataTestPipeline, TestSaveCifar10AndLoad) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
-  std::vector<std::shared_ptr<Tensor>> original_data;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
+  std::vector<mindspore::MSTensor> original_data;
   iter->GetNextRow(&row);
 
   // Save original data for comparison
@@ -49,7 +48,8 @@ TEST_F(MindDataTestPipeline, TestSaveCifar10AndLoad) {
   while (row.size() != 0) {
     auto label = row["label"];
     original_data.push_back(label);
-    MS_LOG(INFO) << "Tensor label: " << *label;
+    TEST_MS_LOG_MSTENSOR(INFO, "Tensor label: ", label);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -71,11 +71,11 @@ TEST_F(MindDataTestPipeline, TestSaveCifar10AndLoad) {
 
   // Stage 3: Load dataset from file output by stage 2
   // Create a MindData Dataset
-  std::shared_ptr<Dataset> ds_minddata = MindData(temp_file, {}, SequentialSampler(0, 10));
+  std::shared_ptr<Dataset> ds_minddata = MindData(temp_file, {}, std::make_shared<SequentialSampler>(0, 10));
 
   // Create objects for the tensor ops
   // uint32 will be casted to int64 implicitly in mindrecord file, so we have to cast it back to uint32
-  std::shared_ptr<TensorOperation> type_cast = transforms::TypeCast("uint32");
+  std::shared_ptr<TensorTransform> type_cast = std::make_shared<transforms::TypeCast>("uint32");
   EXPECT_NE(type_cast, nullptr);
 
   // Create a Map operation on ds
@@ -88,7 +88,7 @@ TEST_F(MindDataTestPipeline, TestSaveCifar10AndLoad) {
   EXPECT_NE(iter_minddata, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row_minddata;
+  std::unordered_map<std::string, mindspore::MSTensor> row_minddata;
   iter_minddata->GetNextRow(&row_minddata);
 
   // Check column name for each row
@@ -99,8 +99,9 @@ TEST_F(MindDataTestPipeline, TestSaveCifar10AndLoad) {
   uint64_t j = 0;
   while (row_minddata.size() != 0) {
     auto label = row_minddata["label"];
-    EXPECT_EQ(*original_data[j], *label);
-    MS_LOG(INFO) << "Tensor label: " << *label;
+    EXPECT_MSTENSOR_EQ(original_data[j], label);
+    TEST_MS_LOG_MSTENSOR(INFO, "Tensor label: ", label);
+
     iter_minddata->GetNextRow(&row_minddata);
     j++;
   }
@@ -120,7 +121,7 @@ TEST_F(MindDataTestPipeline, TestSaveFail) {
 
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", SequentialSampler(0, 10));
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<SequentialSampler>(0, 10));
   EXPECT_NE(ds, nullptr);
 
   // fail with invalid dataset_path

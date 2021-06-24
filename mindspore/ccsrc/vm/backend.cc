@@ -135,6 +135,9 @@ void PushInputTensor(const BaseRef &arg, std::vector<tensor::TensorPtr> *inputs)
     } else if (value->isa<Scalar>()) {
       tensor::TensorPtr scalar_tensor = ScalarToTensor(value->cast<ScalarPtr>());
       inputs->push_back(scalar_tensor);
+    } else if (value->isa<Monad>()) {
+      // If value is a monad, replace it with an unused tensor.
+      inputs->push_back(std::make_shared<tensor::Tensor>(int64_t(0), kBool));
     } else {
       inputs->push_back(value->cast<tensor::TensorPtr>());
     }
@@ -160,19 +163,15 @@ VectorRef MsBackend::MsRunGraph(const GraphId &g, const VectorRef &args, const s
     PushInputTensor(arg, &inputs);
   }
 
+  VectorRef outputs;
+  // Call ms RunGraphAsync or RunOpsInGraph (graphId, input ,output)
+  const session::SessionPtr &exe_session = ((target != target_device_ && !target.empty()) ? other_sess_ : target_sess_);
   auto ms_context = MsContext::GetInstance();
   const bool pynative_mode = (ms_context->get_param<int>(MS_CTX_EXECUTION_MODE) == kPynativeMode);
-
-  VectorRef outputs;
-  // call ms rungraph (graphId, input ,output)
-  if (target != target_device_ && !target.empty()) {
-    other_sess_->RunGraphAsync(g, inputs, &outputs);
+  if (pynative_mode) {
+    exe_session->RunOpsInGraph(g, inputs, &outputs);
   } else {
-    if (pynative_mode && target == "Ascend") {
-      target_sess_->RunOpsInGraph(g, inputs, &outputs);
-    } else {
-      target_sess_->RunGraphAsync(g, inputs, &outputs);
-    }
+    exe_session->RunGraphAsync(g, inputs, &outputs);
   }
 
   MS_LOG(DEBUG) << "RunGraph finished:" << outputs.size();

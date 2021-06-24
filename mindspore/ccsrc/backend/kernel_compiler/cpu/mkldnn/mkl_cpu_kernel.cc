@@ -23,8 +23,9 @@
 namespace mindspore {
 namespace kernel {
 void MKLCPUKernel::GetPadding(const CNodePtr &kernel_node, const std::string &pad_mode,
-                              const std::vector<size_t> &src_shape, const std::vector<size_t> &kernel_size, int stride,
-                              std::vector<int> *padding_l, std::vector<int> *padding_r) {
+                              const std::vector<size_t> &src_shape, const std::vector<size_t> &kernel_size,
+                              const std::vector<int> &stride, std::vector<int> *padding_l, std::vector<int> *padding_r,
+                              const std::vector<int> &dilation) {
   MS_EXCEPTION_IF_NULL(kernel_node);
   if (src_shape.size() < 2) {
     MS_LOG(EXCEPTION) << "set pad only support src dim >= 2!";
@@ -37,13 +38,9 @@ void MKLCPUKernel::GetPadding(const CNodePtr &kernel_node, const std::string &pa
   if (pad_mode == PAD_MODE_LOWER_SAME || pad_mode == PAD_MODE_UPPER_SAME) {
     for (size_t i = 0; i < weight_height.size(); ++i) {
       auto wh = weight_height[i];
-      int re = wh % stride;
-      int pad_along;
-      if (re == 0) {
-        pad_along = std::max(SizeToInt(kernel_size[i]) - stride, 0);
-      } else {
-        pad_along = std::max(SizeToInt(kernel_size[i]) - re, 0);
-      }
+      int out = (wh + stride[i] - 1) / stride[i];
+      int effective_k = (SizeToInt(kernel_size[i]) - 1) * dilation[i] + 1;
+      int pad_along = std::max(0, (out - 1) * stride[i] + effective_k - wh);
       int pad = pad_along / 2;
       padding_l->emplace_back(pad);
       padding_r->emplace_back(pad_along - pad);
@@ -60,8 +57,8 @@ void MKLCPUKernel::GetPadding(const CNodePtr &kernel_node, const std::string &pa
     (void)std::transform(pad_me.begin(), pad_me.end(), std::back_inserter(pad),
                          [](const int64_t &value) { return static_cast<int>(value); });
     padding_l->emplace_back(pad[0]);
-    padding_l->emplace_back(pad[1]);
-    padding_r->emplace_back(pad[2]);
+    padding_l->emplace_back(pad[2]);
+    padding_r->emplace_back(pad[1]);
     padding_r->emplace_back(pad[3]);
   }
 }
@@ -133,7 +130,11 @@ dnnl::memory::format_tag MKLCPUKernel::GetDefaultFormatTag(const dnnl::memory::d
 
 dnnl::memory::desc MKLCPUKernel::GetDefaultMemDesc(const std::vector<size_t> &shape) {
   dnnl::memory::dims dims;
-  dims.insert(dims.end(), shape.begin(), shape.end());
+  if (shape.size() == 0) {
+    dims.insert(dims.end(), 1);
+  } else {
+    dims.insert(dims.end(), shape.begin(), shape.end());
+  }
   dnnl::memory::format_tag mem_tag = GetDefaultFormatTag(dims);
   dnnl::memory::desc mem_desc(dims, dnnl::memory::data_type::f32, mem_tag);
   return mem_desc;

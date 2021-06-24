@@ -36,10 +36,17 @@ int SmoothL1LossGradCPUKernel::Execute(int task_id) {
   auto d_loss = reinterpret_cast<float *>(in_tensors_.at(2)->MutableData());
   auto *out = reinterpret_cast<float *>(out_tensors_.at(0)->MutableData());
 
-  const size_t tensor_len = in_tensors_.at(0)->ElementsNum();
+  int length = in_tensors_.at(0)->ElementsNum();
+
+  int stride = UP_DIV(length, thread_count_);
+  int count = MSMIN(stride, length - stride * task_id);
+  count = (count < 0) ? 0 : count;
+  int start = stride * task_id;
+  int end = start + count;
+
   const float beta = smooth_l1_loss_param->beta_;
 
-  for (uint64_t i = 0; i < tensor_len; ++i) {
+  for (int i = start; i < end; ++i) {
     float diff = predict[i] - target[i];
     if (diff > beta) {
       out[i] = d_loss[i];
@@ -63,7 +70,7 @@ int SmoothL1LossGradRun(void *cdata, int task_id) {
 }
 
 int SmoothL1LossGradCPUKernel::Run() {
-  int error_code = ParallelLaunch(this->context_->thread_pool_, SmoothL1LossGradRun, this, 1);
+  int error_code = ParallelLaunch(this->context_->thread_pool_, SmoothL1LossGradRun, this, thread_count_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "SmoothL1LossGrad function error error_code[" << error_code << "]";
     return RET_ERROR;
@@ -76,11 +83,10 @@ int SmoothL1LossGradCPUKernel::Init() { return RET_OK; }
 kernel::LiteKernel *CpuSmoothL1LossGradFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                          const std::vector<lite::Tensor *> &outputs,
                                                          OpParameter *opParameter, const lite::InnerContext *ctx,
-                                                         const kernel::KernelKey &desc,
-                                                         const mindspore::lite::PrimitiveC *primitive) {
+                                                         const kernel::KernelKey &desc) {
   MS_ASSERT(opParameter != nullptr);
   MS_ASSERT(desc.type == schema::PrimitiveType_SmoothL1LossGrad);
-  auto *kernel = new (std::nothrow) SmoothL1LossGradCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  auto *kernel = new (std::nothrow) SmoothL1LossGradCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new SmoothL1LossGradWithLogitsCPUKernel failed";
     return nullptr;

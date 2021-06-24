@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef MINDSPORE_LITE_NNACL_FP32_LAYER_NORM_H_
-#define MINDSPORE_LITE_NNACL_FP32_LAYER_NORM_H_
+#ifndef MINDSPORE_LITE_NNACL_FP32_LAYER_NORM_FP32_H_
+#define MINDSPORE_LITE_NNACL_FP32_LAYER_NORM_FP32_H_
 
 #include "nnacl/op_base.h"
 #include "nnacl/layer_norm_parameter.h"
@@ -23,11 +23,10 @@
 extern "C" {
 #endif
 
-int LayerNorm(size_t outer_size, size_t inner_size, const float *src_data, const float *gamma_data,
-              const float *beta_data, enum ElementwiseMode elementwise_mode, float epsilon, float *dst_data,
-              size_t task_id, size_t thread_num);
+int LayerNorm(const float *src_data, const float *gamma_data, const float *beta_data, float *dst_data, float *out_mean,
+              float *out_deno, LayerNormParameter *param, size_t task_id);
 #ifdef __cplusplus
 }
 #endif
 
-#endif  // MINDSPORE_LITE_NNACL_FP32_LAYER_NORM_H_
+#endif  //  MINDSPORE_LITE_NNACL_FP32_LAYER_NORM_FP32_H_

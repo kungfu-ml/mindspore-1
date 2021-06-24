@@ -52,7 +52,7 @@ The classical first-order optimization algorithm, such as SGD, has a small amoun
 ## Environment Requirements
 
 - Hardware（Ascend/GPU）
-    - Prepare hardware environment with Ascend or GPU processor. If you want to try Ascend  , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend or GPU processor.
 
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
@@ -180,7 +180,7 @@ We need three parameters for this scripts.
 - `DATASET_PATH`：the path of train dataset.
 - `DEVICE_NUM`: the device number for distributed train.
 
-Training result will be stored in the current path, whose folder name begins with "train_parallel".  Under this, you can find checkpoint file together with result like the followings in log.
+Training result will be stored in the current path, whose folder name begins with "train_parallel".  Under this, you can find checkpoint file together with result like the following in log.
 
 ```shell
 ...
@@ -202,7 +202,7 @@ epoch: 42 step: 5004, loss is 1.6453942
 sh run_distribute_train_gpu.sh [DATASET_PATH] [DEVICE_NUM]
 ```
 
-Training result will be stored in the current path, whose folder name begins with "train_parallel".  Under this, you can find checkpoint file together with result like the followings in log.
+Training result will be stored in the current path, whose folder name begins with "train_parallel".  Under this, you can find checkpoint file together with result like the following in log.
 
 ```shell
 ...
@@ -233,7 +233,7 @@ We need two parameters for this scripts.
 
 > checkpoint can be produced in training process.
 
-Inference result will be stored in the example path, whose folder name is "eval". Under this, you can find result like the followings in log.
+Inference result will be stored in the example path, whose folder name is "eval". Under this, you can find result like the following in log.
 
 ```shell
   result: {'top_5_accuracy': 0.9295574583866837, 'top_1_accuracy': 0.761443661971831} ckpt=train_parallel0/resnet-42_5004.ckpt
@@ -245,7 +245,7 @@ Inference result will be stored in the example path, whose folder name is "eval"
   sh run_eval_gpu.sh [DATASET_PATH] [CHECKPOINT_PATH]
 ```
 
-Inference result will be stored in the example path, whose folder name is "eval". Under this, you can find result like the followings in log.
+Inference result will be stored in the example path, whose folder name is "eval". Under this, you can find result like the following in log.
 
 ```shell
   result: {'top_5_accuracy': 0.9287972151088348, 'top_1_accuracy': 0.7597031049935979} ckpt=train_parallel/resnet-36_5004.ckpt

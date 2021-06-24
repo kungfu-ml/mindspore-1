@@ -15,20 +15,12 @@
  */
 
 #include "src/runtime/kernel/arm/fp32/convolution_depthwise_fp32.h"
-#include "src/runtime/kernel/arm/fp32/convolution_depthwise_slidewindow_fp32.h"
-#include "src/runtime/kernel/arm/fp32/convolution_depthwise_indirect_fp32.h"
-#include "schema/model_generated.h"
-#include "src/kernel_registry.h"
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
-#include "src/runtime/kernel/arm/base/dequant.h"
 
-using mindspore::kernel::KERNEL_ARCH::kCPU;
-using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_INFER_INVALID;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_DepthwiseConv2D;
 
 namespace mindspore::kernel {
 ConvolutionDepthwiseCPUKernel::~ConvolutionDepthwiseCPUKernel() {
@@ -105,6 +97,10 @@ int ConvDwRun(void *cdata, int task_id) {
 }
 
 int ConvolutionDepthwiseCPUKernel::Run() {
+  if (IsTrain() && is_trainable()) {
+    PackWeight();
+  }
+
   auto input_tensor = in_tensors_.at(kInputIndex);
   input_ptr_ = reinterpret_cast<float *>(input_tensor->MutableData());
 
@@ -119,78 +115,18 @@ int ConvolutionDepthwiseCPUKernel::Run() {
   return RET_OK;
 }
 
-kernel::LiteKernel *CpuConvDwFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
-                                               const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                               const InnerContext *ctx, const kernel::KernelKey &desc,
-                                               const mindspore::lite::PrimitiveC *primitive) {
-  MS_ASSERT(opParameter != nullptr);
-  MS_ASSERT(desc.type == schema::PrimitiveType_DepthwiseConv2D);
-
-  auto *weight_tensor = inputs.at(kWeightIndex);
-  auto *restore_data = weight_tensor->data_c();
-  auto restore_type = weight_tensor->data_type();
-  if (weight_tensor->data_type() == kNumberTypeInt8 || weight_tensor->data_type() == kNumberTypeInt16) {
-    auto *dequant_weight = kernel::DequantUtil::DequantWeight(weight_tensor);
-    if (dequant_weight == nullptr) {
-      MS_LOG(ERROR) << "dequant data is nullptr.";
-      free(opParameter);
-      return nullptr;
-    }
-    weight_tensor->set_data(dequant_weight);
-  }
-
-  auto conv_param = reinterpret_cast<ConvParameter *>(opParameter);
-  kernel::LiteKernel *kernel = nullptr;
-  if (primitive != nullptr && primitive->infer_flag()) {
-    conv_param->input_h_ = inputs[kInputIndex]->Height();
-    conv_param->input_w_ = inputs[kInputIndex]->Width();
-    conv_param->input_channel_ = inputs[kInputIndex]->Channel();
-    conv_param->output_h_ = outputs[kOutputIndex]->Height();
-    conv_param->output_w_ = outputs[kOutputIndex]->Width();
-#if defined(ENABLE_ARM64) || defined(ENABLE_AVX)
-    if (CheckConvDwUseIndirectBuffer(conv_param)) {
-      kernel =
-        new (std::nothrow) kernel::ConvolutionDepthwiseIndirectCPUKernel(opParameter, inputs, outputs, ctx, primitive);
-    }
-#endif
-    if (kernel == nullptr && conv_param->input_channel_ < 32) {
-      kernel = new (std::nothrow) kernel::ConvolutionDepthwiseSWCPUKernel(opParameter, inputs, outputs, ctx, primitive);
-    }
-  }
-  if (kernel == nullptr) {
-    kernel = new (std::nothrow) kernel::ConvolutionDepthwiseCPUKernel(opParameter, inputs, outputs, ctx, primitive);
-  }
-  if (kernel == nullptr) {
-    MS_LOG(ERROR) << "kernel is nullptr.";
-    if (weight_tensor->data_type() == kNumberTypeInt8 || weight_tensor->data_type() == kNumberTypeInt16) {
-      weight_tensor->FreeData();
-      weight_tensor->set_data(restore_data);
-      weight_tensor->set_data_type(restore_type);
-    }
-    free(opParameter);
-    return nullptr;
-  }
-  auto ret = kernel->Init();
-  if (ret != RET_OK && ret != RET_INFER_INVALID) {
-    MS_LOG(ERROR) << "Init kernel failed, name: " << opParameter->name_ << ", type: "
-                  << schema::EnumNamePrimitiveType(static_cast<schema::PrimitiveType>(opParameter->type_));
-    if (weight_tensor->data_type() == kNumberTypeInt8 || weight_tensor->data_type() == kNumberTypeInt16) {
-      weight_tensor->FreeData();
-      weight_tensor->set_data(restore_data);
-      weight_tensor->set_data_type(restore_type);
-    }
-    delete kernel;
-    return nullptr;
-  }
-
-  if (weight_tensor->data_type() == kNumberTypeInt8 || weight_tensor->data_type() == kNumberTypeInt16) {
-    weight_tensor->FreeData();
-    weight_tensor->set_data(restore_data);
-    weight_tensor->set_data_type(restore_type);
-  }
-
-  return kernel;
+void ConvolutionDepthwiseCPUKernel::PackWeight() {
+  auto weight_tensor = in_tensors_.at(kWeightIndex);
+  auto origin_weight = reinterpret_cast<float *>(weight_tensor->MutableData());
+  PackWeightKHWToHWKFp32(origin_weight, packed_weight_, weight_tensor->Height() * weight_tensor->Width(),
+                         weight_tensor->Batch());
 }
 
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_DepthwiseConv2D, CpuConvDwFp32KernelCreator)
+int ConvolutionDepthwiseCPUKernel::Eval() {
+  LiteKernel::Eval();
+  if (is_trainable()) {
+    PackWeight();
+  }
+  return RET_OK;
+}
 }  // namespace mindspore::kernel

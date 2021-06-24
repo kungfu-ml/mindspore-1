@@ -37,27 +37,21 @@
 #include "pybind11/stl.h"
 #endif
 
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/core/data_type.h"
 #include "minddata/dataset/core/tensor_helpers.h"
 #include "minddata/dataset/core/tensor_shape.h"
+#include "minddata/dataset/core/de_tensor.h"
 #include "minddata/dataset/util/status.h"
 #include "utils/ms_utils.h"
 #ifndef ENABLE_ANDROID
 #include "proto/example.pb.h"
-#else
-#include "minddata/dataset/include/de_tensor.h"
 #endif
 
 #ifdef ENABLE_PYTHON
 namespace py = pybind11;
 #endif
 namespace mindspore {
-#ifdef ENABLE_ANDROID
-namespace tensor {
-class DETensor;
-}  // namespace tensor
-#endif
 namespace dataset {
 class Tensor;
 template <typename T>
@@ -85,7 +79,7 @@ class Tensor {
   /// \param other Tensor to be moved
   Tensor(Tensor &&other) noexcept;
 
-  /// Move assigment operator
+  /// Move assignment operator
   /// \param other Tensor to be moved
   Tensor &operator=(Tensor &&other) noexcept;
 
@@ -123,6 +117,11 @@ class Tensor {
     return CreateFromMemory(in->shape(), in->type(), in->GetBuffer(), in->SizeInBytes(), out);
   }
 
+  /// Create a copy of the input tensor
+  /// \param[in] MSTensor to create DETensorFrom
+  /// \return Status
+  static Status CreateFromMSTensor(const MSTensor &in, TensorPtr *out);
+
 #ifdef ENABLE_PYTHON
   /// Create a Tensor from a given py::array
   /// \param[in] arr py::array
@@ -134,7 +133,7 @@ class Tensor {
 #ifndef ENABLE_ANDROID
   /// Create a tensor of type DE_STRING from a BytesList.
   /// \param[in] bytes_list protobuf's Bytelist
-  /// \param[in] shape shape of the outout tensor
+  /// \param[in] shape shape of the output tensor
   /// \param[out] out created Tensor
   /// \return Status Code
   static Status CreateFromByteList(const dataengine::BytesList &bytes_list, const TensorShape &shape, TensorPtr *out);
@@ -292,7 +291,7 @@ class Tensor {
       std::string err;
       err += (data_ == nullptr) ? "data_ is nullptr \t" : "";
       err += type_.IsCompatible<T>() ? "data type not compatible\t" : "";
-      return Status(StatusCode::kUnexpectedError, err);
+      return Status(StatusCode::kMDUnexpectedError, err);
     }
   }
 
@@ -343,7 +342,7 @@ class Tensor {
   void Invalidate();
 
   /// Copy input tensor into self at the location index.
-  /// Index is a vector of axises which can be incomplete:
+  /// Index is a vector of axes which can be incomplete:
   /// Ex: shape <2,3>, inserting into index {0} will replace the first row. index {1,2} will replace the last cell.
   /// \param index
   /// \param input
@@ -411,6 +410,13 @@ class Tensor {
   /// \return Status error code
   Status Slice(TensorPtr *out, const std::vector<mindspore::dataset::SliceOption> slice_options);
 
+  /// Get slice_option according to shape and index.
+  /// \param[in] slice_option input SliceOption object
+  /// \param[in] slice_index index of SliceOption object
+  /// \param[out] output slice_option with shape info
+  /// \return Status error code
+  Status GetSliceOption(const SliceOption &slice_option, const int32_t &slice_index, SliceOption *slice_option_ptr);
+
 #ifdef ENABLE_PYTHON
   /// Constructs numpy array from input tensor
   /// \param[in] data this data is the location of python data
@@ -421,6 +427,15 @@ class Tensor {
 
   static Status GetBufferInfo(Tensor *t, py::buffer_info *out);
 #endif
+
+  Status SetYuvShape(const uint32_t &width, const uint32_t &widthStride, const uint32_t &height,
+                     const uint32_t &heightStride) {
+    std::vector<uint32_t> tmp{width, widthStride, height, heightStride};
+    yuv_shape_ = tmp;
+    return Status::OK();
+  }
+
+  std::vector<uint32_t> GetYuvShape() { return yuv_shape_; }
 
   /// TensorIterator is a linear iterator that can be used to iterate over the elements of the Tensor
   /// The order  elements  is as the memory layout (i.e., row-major) [[1,2,3],[4,5,6] --> 1,2,3,4,5,6
@@ -685,10 +700,11 @@ class Tensor {
   /// pointer to the end of the physical data
   unsigned char *data_end_ = nullptr;
 
+  /// shape for interpretation of YUV image
+  std::vector<uint32_t> yuv_shape_;
+
  private:
-#ifdef ENABLE_ANDROID
-  friend class tensor::DETensor;
-#endif
+  friend class DETensor;
 
   /// Slice numeric tensors.
   Status SliceNumeric(TensorPtr *out, const std::vector<std::vector<dsize_t>> &indices, const TensorShape &shape);

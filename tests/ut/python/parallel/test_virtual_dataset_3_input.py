@@ -57,7 +57,7 @@ def test_virtual_dataset_3_input():
             self.virtual_dataset = _VirtualDataset().shard(strategy0)
             self.matmul1 = P.MatMul().shard(strategy1)
             self.matmul2 = P.MatMul().shard(strategy2)
-            self.gelu = P.Gelu().shard(strategy3)
+            self.gelu = P.GeLU().shard(strategy3)
 
         def construct(self, x, y, b):
             x, y, b = self.virtual_dataset(x, y, b)
@@ -86,14 +86,14 @@ def test_virtualdataset_cell_3_inputs():
             super().__init__()
             self.matmul1 = P.MatMul().shard(strategy1)
             self.matmul2 = P.MatMul().shard(strategy2)
-            self.gelu = P.Gelu().shard(strategy3)
+            self.gelu = P.GeLU().shard(strategy3)
 
         def construct(self, x, y, b):
             out = self.gelu(self.matmul1(x, y))
             out = self.matmul2(out, b)
             return out
 
-    context.set_context(save_graphs=True)
+    context.set_context(save_graphs=False)
     context.set_auto_parallel_context(parallel_mode="auto_parallel")
     context.set_auto_parallel_context(device_num=8, global_rank=0)
     net = GradWrap(VirtualDatasetCellTriple(NetWithLoss(Net(None, None, None))))

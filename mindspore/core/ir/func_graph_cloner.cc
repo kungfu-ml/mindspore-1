@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@
 
 // namespace to support intermediate representation definition
 namespace mindspore {
-Cloner::Cloner(const FuncGraphPtrList &func_graphs, bool clone_all_valuenodes, bool clone_all_child_graphs,
+Cloner::Cloner(const FuncGraphVector &func_graphs, bool clone_all_valuenodes, bool clone_all_child_graphs,
                bool clone_all_used_graphs, const TraceInfoPtr &relation, const TraceInfoPtr &target_relation)
     : clone_all_valuenodes_(clone_all_valuenodes),
       clone_all_child_graphs_(clone_all_child_graphs),
@@ -91,8 +91,10 @@ void Cloner::CloneCNode(const AnfNodePtr &node, const FuncGraphPtr &target) {
   new_node->set_forward(old_node->forward().first, old_node->forward().second);
   new_node->set_inputs_value(old_node->inputs_value());
   new_node->set_attrs(old_node->attrs());
+  new_node->set_load_flag(old_node->get_load_flag());
   ScopePtr scope = (node->scope() != kDefaultScope) ? node->scope() : this->scope();
   new_node->set_scope(scope);
+  new_node->CloneUserData(old_node);
   if (IsParallelConsiderCNode(old_node) && new_node->scope() == kDefaultScope) {
     new_node->set_fullname_with_scope(old_node->fullname_with_scope());
   }
@@ -469,6 +471,32 @@ void Cloner::CloneAllNodes(const FuncGraphPtr &func_graph, const FuncGraphPtr &t
   for (auto &node : nodes) {
     CloneNode(node, target_func_graph);
   }
+  // Only func_graph is inlined, it cannot be found in repl;
+  if (repl_func_graph_.find(func_graph) != repl_func_graph_.end()) {
+    CloneOrderList(func_graph, target_func_graph);
+  }
+}
+
+void Cloner::CloneOrderList(const FuncGraphPtr &func_graph, const FuncGraphPtr &target_func_graph) {
+  for (auto &cnode : func_graph->order_list()) {
+    auto it = repl_node_.find(cnode);
+    if (it == repl_node_.end()) {
+      // For cnode which generated in Analyze phase, it cannot got from nodes API of func_graph,
+      // so it cannot be cloned in normal Clone API.
+      // If we ignore it, the order will be lost.
+      // Therefore we put this old node as placeholder to the order list of target func_graph to
+      // keep the order.
+      // It may be replaced in ProgramSpecialize.
+      // If this disconnected node is not used in target func_graph, it will be cleared after
+      // ProgramSpecialize;
+      target_func_graph->AppendOrderList(cnode);
+      continue;
+    }
+    auto repl_cnode = dyn_cast<CNode>(it->second);
+    if (repl_cnode) {
+      target_func_graph->AppendOrderList(repl_cnode);
+    }
+  }
 }
 
 void Cloner::Run() {
@@ -478,7 +506,7 @@ void Cloner::Run() {
 
   if (type_ < kLifting) {
     // Basic and Inline Clone
-    FuncGraphPtrList func_graphs;
+    FuncGraphVector func_graphs;
     (void)std::transform(todo_.begin(), todo_.end(), std::back_inserter(func_graphs),
                          [](const CloneInfo &item) -> FuncGraphPtr { return item.origin; });
     manager_ = Manage(func_graphs, false);
@@ -617,7 +645,7 @@ FuncGraphPtr LiftingClone(const FuncGraphPtr &func_graph) {
 
 ClonerPtr SpecializerClone(const FuncGraphPtr &func_graph, const TraceInfoPtr &relation) {
   MS_EXCEPTION_IF_NULL(func_graph);
-  FuncGraphPtrList func_graphs = {func_graph};
+  FuncGraphVector func_graphs = {func_graph};
   ClonerPtr cloner =
     std::make_shared<Cloner>(func_graphs, false, false, false, std::make_shared<TraceCopy>(), relation);
 #ifdef ENABLE_PROFILE

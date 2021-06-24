@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,12 +33,13 @@ TEST_F(MindDataTestPipeline, TestComposeSuccess) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, RandomSampler(false, 3));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, std::make_shared<RandomSampler>(false, 3));
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> compose = transforms::Compose({vision::Decode(), vision::Resize({777, 777})});
-  EXPECT_NE(compose, nullptr);
+  std::shared_ptr<TensorTransform> decode_op(new vision::Decode());
+  std::shared_ptr<TensorTransform> resize_op(new vision::Resize({777, 777}));
+  transforms::Compose compose({decode_op, resize_op});
 
   // Create a Map operation on ds
   ds = ds->Map({compose}, {"image"});
@@ -50,7 +51,7 @@ TEST_F(MindDataTestPipeline, TestComposeSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -58,10 +59,10 @@ TEST_F(MindDataTestPipeline, TestComposeSuccess) {
     i++;
     auto image = row["image"];
     auto label = row["label"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    MS_LOG(INFO) << "Label shape: " << label->shape();
-    EXPECT_EQ(image->shape()[0], 777);
-    EXPECT_EQ(image->shape()[1], 777);
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    MS_LOG(INFO) << "Label shape: " << label.Shape();
+    EXPECT_EQ(image.Shape()[0], 777);
+    EXPECT_EQ(image.Shape()[1], 777);
     iter->GetNextRow(&row);
   }
 
@@ -71,21 +72,69 @@ TEST_F(MindDataTestPipeline, TestComposeSuccess) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestComposeFail) {
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestComposeFail with invalid transform.";
+TEST_F(MindDataTestPipeline, TestComposeFail1) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestComposeFail1 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // Resize: Non-positive size value: -1 at element: 0
   // Compose: transform ops must not be null
-  std::shared_ptr<TensorOperation> compose1 = transforms::Compose({vision::Decode(), vision::Resize({-1})});
-  EXPECT_EQ(compose1, nullptr);
+  auto decode_op = vision::Decode();
+  auto resize_op = vision::Resize({-1});
+  auto compose = transforms::Compose({decode_op, resize_op});
+
+  // Create a Map operation on ds
+  ds = ds->Map({compose}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Compose parameter(invalid transform op)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestComposeFail2) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestComposeFail2 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // Compose: transform ops must not be null
-  std::shared_ptr<TensorOperation> compose2 = transforms::Compose({vision::Decode(), nullptr});
-  EXPECT_EQ(compose2, nullptr);
+  std::shared_ptr<TensorTransform> decode_op = std::make_shared<vision::Decode>();
+  std::shared_ptr<TensorTransform> compose(new transforms::Compose({decode_op, nullptr}));
+
+  // Create a Map operation on ds
+  ds = ds->Map({compose}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Compose parameter (transform ops must not be null)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestComposeFail3) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestComposeFail3 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // Compose: transform list must not be empty
-  std::shared_ptr<TensorOperation> compose3 = transforms::Compose({});
-  EXPECT_EQ(compose3, nullptr);
+  std::vector<std::shared_ptr<TensorTransform>> list = {};
+  auto compose = transforms::Compose(list);
+
+  // Create a Map operation on ds
+  ds = ds->Map({compose}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Compose parameter (transform list must not be empty)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestDuplicateSuccess) {
@@ -93,12 +142,11 @@ TEST_F(MindDataTestPipeline, TestDuplicateSuccess) {
 
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", RandomSampler(false, 10));
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> duplicate = transforms::Duplicate();
-  EXPECT_NE(duplicate, nullptr);
+  transforms::Duplicate duplicate = transforms::Duplicate();
 
   // Create a Map operation on ds
   ds = ds->Map({duplicate}, {"image"}, {"image", "image_copy"});
@@ -110,7 +158,7 @@ TEST_F(MindDataTestPipeline, TestDuplicateSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -118,8 +166,8 @@ TEST_F(MindDataTestPipeline, TestDuplicateSuccess) {
     i++;
     auto image = row["image"];
     auto image_copy = row["image_copy"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    EXPECT_EQ(*image, *image_copy);
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    EXPECT_MSTENSOR_EQ(image, image_copy);
     iter->GetNextRow(&row);
   }
 
@@ -130,16 +178,16 @@ TEST_F(MindDataTestPipeline, TestDuplicateSuccess) {
 }
 
 TEST_F(MindDataTestPipeline, TestOneHotSuccess1) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestOneHotSuccess1.";
   // Testing CutMixBatch on a batch of CHW images
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
   int number_of_classes = 10;
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", RandomSampler(false, 10));
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> hwc_to_chw = vision::HWC2CHW();
-  EXPECT_NE(hwc_to_chw, nullptr);
+  std::shared_ptr<TensorTransform> hwc_to_chw = std::make_shared<vision::HWC2CHW>();
 
   // Create a Map operation on ds
   ds = ds->Map({hwc_to_chw}, {"image"});
@@ -151,16 +199,14 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> one_hot_op = transforms::OneHot(number_of_classes);
-  EXPECT_NE(one_hot_op, nullptr);
+  std::shared_ptr<TensorTransform> one_hot_op = std::make_shared<transforms::OneHot>(number_of_classes);
 
   // Create a Map operation on ds
   ds = ds->Map({one_hot_op}, {"label"});
   EXPECT_NE(ds, nullptr);
 
-  std::shared_ptr<TensorOperation> cutmix_batch_op =
-    vision::CutMixBatch(mindspore::dataset::ImageBatchFormat::kNCHW, 1.0, 1.0);
-  EXPECT_NE(cutmix_batch_op, nullptr);
+  std::shared_ptr<TensorTransform> cutmix_batch_op =
+    std::make_shared<vision::CutMixBatch>(mindspore::dataset::ImageBatchFormat::kNCHW, 1.0, 1.0);
 
   // Create a Map operation on ds
   ds = ds->Map({cutmix_batch_op}, {"image", "label"});
@@ -172,7 +218,7 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -180,13 +226,12 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess1) {
     i++;
     auto image = row["image"];
     auto label = row["label"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    MS_LOG(INFO) << "Label shape: " << label->shape();
-    EXPECT_EQ(image->shape().AsVector().size() == 4 && batch_size == image->shape()[0] && 3 == image->shape()[1] &&
-                32 == image->shape()[2] && 32 == image->shape()[3],
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    MS_LOG(INFO) << "Label shape: " << label.Shape();
+    EXPECT_EQ(image.Shape().size() == 4 && batch_size == image.Shape()[0] && 3 == image.Shape()[1] &&
+                32 == image.Shape()[2] && 32 == image.Shape()[3],
               true);
-    EXPECT_EQ(label->shape().AsVector().size() == 2 && batch_size == label->shape()[0] &&
-                number_of_classes == label->shape()[1],
+    EXPECT_EQ(label.Shape().size() == 2 && batch_size == label.Shape()[0] && number_of_classes == label.Shape()[1],
               true);
     iter->GetNextRow(&row);
   }
@@ -198,9 +243,10 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess1) {
 }
 
 TEST_F(MindDataTestPipeline, TestOneHotSuccess2) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestOneHotSuccess2.";
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", RandomSampler(false, 10));
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
   EXPECT_NE(ds, nullptr);
 
   // Create a Batch operation on ds
@@ -209,15 +255,13 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess2) {
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> one_hot_op = transforms::OneHot(10);
-  EXPECT_NE(one_hot_op, nullptr);
+  std::shared_ptr<TensorTransform> one_hot_op = std::make_shared<transforms::OneHot>(10);
 
   // Create a Map operation on ds
   ds = ds->Map({one_hot_op}, {"label"});
   EXPECT_NE(ds, nullptr);
 
-  std::shared_ptr<TensorOperation> mixup_batch_op = vision::MixUpBatch(2.0);
-  EXPECT_NE(mixup_batch_op, nullptr);
+  std::shared_ptr<TensorTransform> mixup_batch_op = std::make_shared<vision::MixUpBatch>(2.0);
 
   // Create a Map operation on ds
   ds = ds->Map({mixup_batch_op}, {"image", "label"});
@@ -229,14 +273,14 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -246,16 +290,44 @@ TEST_F(MindDataTestPipeline, TestOneHotSuccess2) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestOneHotFail) {
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestOneHotFail with invalid params.";
+TEST_F(MindDataTestPipeline, TestOneHotFail1) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestOneHotFail1 with invalid params.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // incorrect num_class
-  std::shared_ptr<TensorOperation> one_hot_op1 = transforms::OneHot(0);
-  EXPECT_EQ(one_hot_op1, nullptr);
+  std::shared_ptr<TensorTransform> one_hot_op = std::make_shared<transforms::OneHot>(0);
+
+  // Create a Map operation on ds
+  ds = ds->Map({one_hot_op}, {"label"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid OneHot input
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestOneHotFail2) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestOneHotFail2 with invalid params.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // incorrect num_class
-  std::shared_ptr<TensorOperation> one_hot_op2 = transforms::OneHot(-5);
-  EXPECT_EQ(one_hot_op2, nullptr);
+  std::shared_ptr<TensorTransform> one_hot_op = std::make_shared<transforms::OneHot>(-5);
+
+  // Create a Map operation on ds
+  ds = ds->Map({one_hot_op}, {"label"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid OneHot input
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestRandomApplySuccess) {
@@ -263,12 +335,12 @@ TEST_F(MindDataTestPipeline, TestRandomApplySuccess) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, RandomSampler(false, 5));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, std::make_shared<RandomSampler>(false, 5));
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> random_apply = transforms::RandomApply({vision::Resize({777, 777})}, 0.8);
-  EXPECT_NE(random_apply, nullptr);
+  auto resize_op = vision::Resize({777, 777});
+  auto random_apply = transforms::RandomApply({resize_op}, 0.8);
 
   // Create a Map operation on ds
   ds = ds->Map({random_apply}, {"image"});
@@ -280,7 +352,7 @@ TEST_F(MindDataTestPipeline, TestRandomApplySuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -288,8 +360,8 @@ TEST_F(MindDataTestPipeline, TestRandomApplySuccess) {
     i++;
     auto image = row["image"];
     auto label = row["label"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    MS_LOG(INFO) << "Label shape: " << label->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    MS_LOG(INFO) << "Label shape: " << label.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -299,25 +371,90 @@ TEST_F(MindDataTestPipeline, TestRandomApplySuccess) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestRandomApplyFail) {
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomApplyFail with invalid transform.";
+TEST_F(MindDataTestPipeline, TestRandomApplyFail1) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomApplyFail1 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // Resize: Non-positive size value: -1 at element: 0
   // RandomApply: transform ops must not be null
-  std::shared_ptr<TensorOperation> random_apply1 = transforms::RandomApply({vision::Decode(), vision::Resize({-1})});
-  EXPECT_EQ(random_apply1, nullptr);
+  auto decode_op = vision::Decode();
+  auto resize_op = vision::Resize({-1});
+  auto random_apply = transforms::RandomApply({decode_op, resize_op});
+
+  // Create a Map operation on ds
+  ds = ds->Map({random_apply}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (transform ops must not be null)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestRandomApplyFail2) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomApplyFail2 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // RandomApply: transform ops must not be null
-  std::shared_ptr<TensorOperation> random_apply2 = transforms::RandomApply({vision::Decode(), nullptr});
-  EXPECT_EQ(random_apply2, nullptr);
+  std::shared_ptr<TensorTransform> decode_op = std::make_shared<vision::Decode>();
+  std::shared_ptr<TensorTransform> random_apply(new transforms::RandomApply({decode_op, nullptr}));
 
-  // RandomApply: transform list must not be empty
-  std::shared_ptr<TensorOperation> random_apply3 = transforms::RandomApply({});
-  EXPECT_EQ(random_apply3, nullptr);
+  // Create a Map operation on ds
+  ds = ds->Map({random_apply}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (transform ops must not be null)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestRandomApplyFail3) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomApplyFail3 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
 
   // RandomApply: Probability has to be between 0 and 1
-  std::shared_ptr<TensorOperation> random_apply4 = transforms::RandomApply({vision::Resize({100})}, -1);
-  EXPECT_EQ(random_apply4, nullptr);
+  auto resize_op = vision::Resize({100});
+  auto random_apply = transforms::RandomApply({resize_op}, -1);
+
+  // Create a Map operation on ds
+  ds = ds->Map({random_apply}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (Probability has to be between 0 and 1)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestRandomApplyFail4) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomApplyFail4 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
+
+  // RandomApply: transform list must not be empty
+  std::vector<std::shared_ptr<TensorTransform>> list = {};
+  auto random_apply = transforms::RandomApply(list);
+
+  // Create a Map operation on ds
+  ds = ds->Map({random_apply}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (transform list must not be empty)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestRandomChoiceSuccess) {
@@ -325,13 +462,13 @@ TEST_F(MindDataTestPipeline, TestRandomChoiceSuccess) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, RandomSampler(false, 3));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, std::make_shared<RandomSampler>(false, 3));
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> random_choice =
-    transforms::RandomChoice({vision::Resize({777, 777}), vision::Resize({888, 888})});
-  EXPECT_NE(random_choice, nullptr);
+  std::shared_ptr<TensorTransform> resize_op1(new vision::Resize({777, 777}));
+  std::shared_ptr<TensorTransform> resize_op2(new vision::Resize({888, 888}));
+  auto random_choice = transforms::RandomChoice({resize_op1, resize_op2});
 
   // Create a Map operation on ds
   ds = ds->Map({random_choice}, {"image"});
@@ -343,7 +480,7 @@ TEST_F(MindDataTestPipeline, TestRandomChoiceSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -351,8 +488,8 @@ TEST_F(MindDataTestPipeline, TestRandomChoiceSuccess) {
     i++;
     auto image = row["image"];
     auto label = row["label"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    MS_LOG(INFO) << "Label shape: " << label->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    MS_LOG(INFO) << "Label shape: " << label.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -362,30 +499,70 @@ TEST_F(MindDataTestPipeline, TestRandomChoiceSuccess) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestRandomChoiceFail) {
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomChoiceFail with invalid transform.";
+TEST_F(MindDataTestPipeline, TestRandomChoiceFail1) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomChoiceFail1 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  RandomSampler sampler = RandomSampler(false, 10);
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", sampler);
+  EXPECT_NE(ds, nullptr);
 
   // Resize: Non-positive size value: -1 at element: 0
   // RandomChoice: transform ops must not be null
-  std::shared_ptr<TensorOperation> random_choice1 = transforms::RandomChoice({vision::Decode(), vision::Resize({-1})});
-  EXPECT_EQ(random_choice1, nullptr);
+  auto decode_op = vision::Decode();
+  auto resize_op = vision::Resize({-1});
+  auto random_choice = transforms::RandomChoice({decode_op, resize_op});
 
-  // RandomChoice: transform ops must not be null
-  std::shared_ptr<TensorOperation> random_choice2 = transforms::RandomChoice({vision::Decode(), nullptr});
-  EXPECT_EQ(random_choice2, nullptr);
+  // Create a Map operation on ds
+  ds = ds->Map({random_choice}, {"image"});
+  EXPECT_NE(ds, nullptr);
 
-  // RandomChoice: transform list must not be empty
-  std::shared_ptr<TensorOperation> random_choice3 = transforms::RandomChoice({});
-  EXPECT_EQ(random_choice3, nullptr);
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (transform ops must not be null)
+  EXPECT_EQ(iter, nullptr);
 }
 
-TEST_F(MindDataTestPipeline, TestTransformOperationName) {
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestTransformOperationName.";
+TEST_F(MindDataTestPipeline, TestRandomChoiceFail2) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomChoiceFail2 with invalid transform.";
 
-  // Create object for the tensor op, and check the name
-  std::shared_ptr<TensorOperation> duplicate_op = transforms::Duplicate();
-  std::string correct_name = "Duplicate";
-  EXPECT_EQ(correct_name, duplicate_op->Name());
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
+
+  // RandomChoice: transform ops must not be null
+  std::shared_ptr<TensorTransform> decode_op = std::make_shared<vision::Decode>();
+  std::shared_ptr<TensorTransform> random_choice(new transforms::RandomApply({decode_op, nullptr}));
+
+  // Create a Map operation on ds
+  ds = ds->Map({random_choice}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (transform ops must not be null)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestRandomChoiceFail3) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestRandomChoiceFail3 with invalid transform.";
+
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
+
+  // RandomChoice: transform list must not be empty
+  std::vector<std::shared_ptr<TensorTransform>> list = {};
+  auto random_choice = transforms::RandomChoice(list);
+
+  // Create a Map operation on ds
+  ds = ds->Map({random_choice}, {"image"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid RandomApply parameter (transform list must not be empty)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestTypeCastSuccess) {
@@ -393,7 +570,7 @@ TEST_F(MindDataTestPipeline, TestTypeCastSuccess) {
 
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", RandomSampler(false, 1));
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 1));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -402,21 +579,20 @@ TEST_F(MindDataTestPipeline, TestTypeCastSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   // Check original data type of dataset
   auto image = row["image"];
-  std::string ori_type = image->type().ToString();
-  MS_LOG(INFO) << "Original data type: " << ori_type;
-  EXPECT_NE(ori_type.c_str(), "uint8");
+  auto ori_type = image.DataType();
+  MS_LOG(INFO) << "Original data type id: " << ori_type;
+  EXPECT_EQ(ori_type, mindspore::DataType(mindspore::TypeId::kNumberTypeUInt8));
 
   // Manually terminate the pipeline
   iter->Stop();
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> type_cast = transforms::TypeCast("uint16");
-  EXPECT_NE(type_cast, nullptr);
+  std::shared_ptr<TensorTransform> type_cast = std::make_shared<transforms::TypeCast>("uint16");
 
   // Create a Map operation on ds
   std::shared_ptr<Dataset> ds2 = ds->Map({type_cast}, {"image"});
@@ -430,9 +606,9 @@ TEST_F(MindDataTestPipeline, TestTypeCastSuccess) {
   // Check current data type of dataset
   iter2->GetNextRow(&row);
   auto image2 = row["image"];
-  std::string cur_type = image2->type().ToString();
-  MS_LOG(INFO) << "Current data type: " << cur_type;
-  EXPECT_NE(cur_type.c_str(), "uint16");
+  auto cur_type = image2.DataType();
+  MS_LOG(INFO) << "Current data type id: " << cur_type;
+  EXPECT_EQ(cur_type, mindspore::DataType(mindspore::TypeId::kNumberTypeUInt16));
 
   // Manually terminate the pipeline
   iter2->Stop();
@@ -441,7 +617,19 @@ TEST_F(MindDataTestPipeline, TestTypeCastSuccess) {
 TEST_F(MindDataTestPipeline, TestTypeCastFail) {
   MS_LOG(INFO) << "Doing MindDataTestPipeline-TestTypeCastFail with invalid params.";
 
+  // Create a Cifar10 Dataset
+  std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10));
+  EXPECT_NE(ds, nullptr);
+
   // incorrect data type
-  std::shared_ptr<TensorOperation> type_cast = transforms::TypeCast("char");
-  EXPECT_EQ(type_cast, nullptr);
+  std::shared_ptr<TensorTransform> type_cast = std::make_shared<transforms::TypeCast>("char");
+
+  // Create a Map operation on ds
+  ds = ds->Map({type_cast}, {"image", "label"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid TypeCast input
+  EXPECT_EQ(iter, nullptr);
 }

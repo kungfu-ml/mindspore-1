@@ -24,8 +24,6 @@ import numpy as np
 from mindspore.train.serialization import load_checkpoint
 import mindspore.nn as nn
 
-from src.mobile_v2 import DepthWiseConv
-
 def load_backbone(net, ckpt_path, args):
     """
     Load backbone
@@ -52,7 +50,7 @@ def load_backbone(net, ckpt_path, args):
     for name, cell in net.cells_and_names():
         if name.startswith(centerface_backbone_prefix):
             name = name.replace(centerface_backbone_prefix, mobilev2_backbone_prefix)
-            if isinstance(cell, (nn.Conv2d, nn.Dense, DepthWiseConv)):
+            if isinstance(cell, (nn.Conv2d, nn.Dense)):
                 name, replace_name, replace_idx = replace_names(name, replace_name, replace_idx)
                 mobilev2_weight = '{}.weight'.format(name)
                 mobilev2_bias = '{}.bias'.format(name)
@@ -111,15 +109,12 @@ def get_param_groups(network):
         parameter_name = x.name
         if parameter_name.endswith('.bias'):
             # all bias not using weight decay
-            # print('no decay:{}'.format(parameter_name))
             no_decay_params.append(x)
         elif parameter_name.endswith('.gamma'):
             # bn weight bias not using weight decay, be carefully for now x not include BN
-            # print('no decay:{}'.format(parameter_name))
             no_decay_params.append(x)
         elif parameter_name.endswith('.beta'):
             # bn weight bias not using weight decay, be carefully for now x not include BN
-            # print('no decay:{}'.format(parameter_name))
             no_decay_params.append(x)
         else:
             decay_params.append(x)
@@ -226,7 +221,6 @@ class LOGGER(logging.Logger):
         self.info('Args:')
         args_dict = vars(args)
         for key in args_dict.keys():
-            # self.info('--> {}: {}'.format(key, args_dict[key]))
             self.info('--> %s', key)
         self.info('')
 

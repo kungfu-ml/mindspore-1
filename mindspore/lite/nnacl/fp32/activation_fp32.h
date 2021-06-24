@@ -18,7 +18,7 @@
 
 #include <math.h>
 #include "nnacl/op_base.h"
-#include "nnacl/quantization/fixed_point.h"
+#include "nnacl/int8/fixed_point.h"
 
 typedef struct ActivationParameter {
   OpParameter op_parameter_;
@@ -40,6 +40,7 @@ int HSigmoid(const float *src, int length, float *dst);
 int Swish(const float *src, int length, float *dst);
 int HSwish(const float *src, int length, float *dst);
 int HardTanh(const float *src, int length, float *dst, float min_val, float max_val);
+int Gelu(const float *src, int length, float *dst, bool approximate);
 
 float TanhOpt(float src);
 #ifdef __cplusplus

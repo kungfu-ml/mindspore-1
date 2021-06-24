@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # ============================================================================
 """ test ops """
 import functools
+import pytest
 
 import numpy as np
 
@@ -115,9 +116,9 @@ class NetForConcat4(nn.Cell):
         return self.concat((x1, x2, x3))
 
 
-class NetForPackInput(nn.Cell):
+class NetForStackInput(nn.Cell):
     def __init__(self, op):
-        super(NetForPackInput, self).__init__()
+        super(NetForStackInput, self).__init__()
         self.op = op
         self.mul = P.Mul()
 
@@ -198,7 +199,7 @@ class SummaryNet(nn.Cell):
     def __init__(self):
         super(SummaryNet, self).__init__()
         self.s = P.ScalarSummary()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x, y):
         self.s("x1", x)
@@ -209,7 +210,7 @@ class HistogramSummaryNet(nn.Cell):
     def __init__(self):
         super(HistogramSummaryNet, self).__init__()
         self.summary = P.HistogramSummary()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x, y):
         out = self.add(x, y)
@@ -240,6 +241,18 @@ class BatchNorm3d(nn.Cell):
     def construct(self, input_x):
         bn3d_out = self.bn3d(input_x)
         return bn3d_out
+
+
+class NLLLoss(nn.Cell):
+    """NLLLoss net definition"""
+
+    def __init__(self, reduction):
+        super(NLLLoss, self).__init__()
+        self.nll_loss = P.NLLLoss(reduction=reduction)
+
+    def construct(self, input_x, target, weight):
+        loss = self.nll_loss(input_x, target, weight)
+        return loss
 
 
 class ClipByNorm(nn.Cell):
@@ -306,6 +319,42 @@ class CountNonZero(nn.Cell):
     def construct(self, input_x):
         nonzero_num = C.count_nonzero(input_x, self.axis, self.keep_dims, self.dtype)
         return nonzero_num
+
+
+class Mish(nn.Cell):
+    """Mish net definition"""
+
+    def __init__(self):
+        super(Mish, self).__init__()
+        self.mish = P.Mish()
+
+    def construct(self, input_x):
+        out = self.mish(input_x)
+        return out
+
+
+class SeLU(nn.Cell):
+    """Selu net definition"""
+
+    def __init__(self):
+        super(SeLU, self).__init__()
+        self.selu = P.SeLU()
+
+    def construct(self, input_x):
+        out = self.selu(input_x)
+        return out
+
+
+class MulNoNan(nn.Cell):
+    """MulNoNan net definition"""
+
+    def __init__(self):
+        super(MulNoNan, self).__init__()
+        self.mul_no_nan = P.MulNoNan()
+
+    def construct(self, input_x, input_y):
+        out = self.mul_no_nan(input_x, input_y)
+        return out
 
 
 class ScatterUpdate(nn.Cell):
@@ -842,7 +891,7 @@ class StridedSliceNet(nn.Cell):
         out_3 = self.strided_slice_3(x, self.begins, self.ends, self.strides) + self.const_3
         return out_0, out_1, out_2, out_3
 
-
+@pytest.mark.skip(reason='0 in shape is not support')
 def test_strided_slice_const():
     class StridedSLiceConstNet(nn.Cell):
         """StridedSLiceConstNet net definition"""
@@ -952,8 +1001,8 @@ test_case_math_ops = [
         'block': P.Sub(),
         'desc_inputs': [[3, 5], [2, 3, 3, 5]],
         'desc_bprop': [[2, 3, 3, 5]]}),
-    ('TensorAdd', {
-        'block': P.TensorAdd(),
+    ('Add', {
+        'block': P.Add(),
         'desc_inputs': [[3, 5], [2, 3, 3, 5]],
         'desc_bprop': [[2, 3, 3, 5]]}),
     ('Mul0', {
@@ -980,26 +1029,26 @@ test_case_math_ops = [
         'desc_bprop': [[2, 3, 3, 5]],
         'skip': ['backward']}),
     ('Add0', {
-        'block': P.TensorAdd(),
+        'block': P.Add(),
         'desc_inputs': [[2, 3, 3, 5], [2, 3, 3, 5]],
         'desc_bprop': [[2, 3, 3, 5]]}),
     ('Add1', {
-        'block': P.TensorAdd(),
+        'block': P.Add(),
         'desc_inputs': [[3, 5], [2, 3, 3, 5]],
         'desc_bprop': [[2, 3, 3, 5]],
         'skip': ['backward']}),
     ('Add2', {
-        'block': P.TensorAdd(),
+        'block': P.Add(),
         'desc_inputs': [[2, 3, 3, 5], [3, 5]],
         'desc_bprop': [[2, 3, 3, 5]],
         'skip': ['backward']}),
     ('Add3', {
-        'block': P.TensorAdd(),
+        'block': P.Add(),
         'desc_inputs': [[2, 3, 1, 1], [2, 3, 3, 5]],
         'desc_bprop': [[2, 3, 3, 5]],
         'skip': ['backward']}),
     ('Add4', {
-        'block': P.TensorAdd(),
+        'block': P.Add(),
         'desc_inputs': [[2, 3, 3, 5], [2, 3, 1, 1]],
         'desc_bprop': [[2, 3, 3, 5]],
         'skip': ['backward']}),
@@ -1253,6 +1302,12 @@ test_case_math_ops = [
         'block': Moments(axis=(), keep_dims=False),
         'desc_inputs': [Tensor(np.random.rand(3, 16, 5, 4).astype(np.float32))],
         'skip': ['backward']}),
+    ('NLLLoss', {
+        'block': NLLLoss(reduction="mean"),
+        'desc_inputs': [Tensor(np.random.rand(3, 16), mstype.float32),
+                        Tensor(np.random.rand(3), mstype.int32),
+                        Tensor(np.random.rand(16), mstype.float32)],
+        'desc_bprop': [(Tensor(np.random.rand(1), mstype.float32), Tensor(np.random.rand(1), mstype.float32))]}),
     ('BatchNorm3d', {
         'block': BatchNorm3d(num_features=3),
         'desc_inputs': [Tensor(np.random.rand(3, 3, 3, 5, 4).astype(np.float32))],
@@ -1297,6 +1352,19 @@ test_case_math_ops = [
                         Tensor(np.array([-6, -1, -2, -3]), mstype.float32),
                         Tensor(np.array([6, 1, 2, 3]), mstype.float32)],
         'desc_bprop': [Tensor(np.random.rand(3, 16, 5, 4), mstype.float32)]}),
+    ('Mish', {
+        'block': Mish(),
+        'desc_inputs': [Tensor(np.random.rand(3, 6, 16, 16), mstype.float32)],
+        'desc_bprop': [Tensor(np.random.rand(3, 6, 16, 16), mstype.float32)]}),
+    ('SeLU', {
+        'block': SeLU(),
+        'desc_inputs': [Tensor(np.random.rand(3, 6, 16, 16), mstype.float32)],
+        'desc_bprop': [Tensor(np.random.rand(3, 6, 16, 16), mstype.float32)]}),
+    ('MulNoNan', {
+        'block': MulNoNan(),
+        'desc_inputs': [Tensor(np.random.rand(3, 6, 16, 16), mstype.float32),
+                        Tensor(np.random.rand(3, 6, 16, 16), mstype.float32)],
+        'desc_bprop': [Tensor(np.random.rand(3, 6, 16, 16), mstype.float32)]}),
     ('Rank', {
         'block': P.Rank(),
         'desc_inputs': [[2, 3]],
@@ -1334,6 +1402,10 @@ test_case_math_ops = [
         'block': P.RealDiv(),
         'desc_inputs': [[4, 5], [2, 3, 4, 5]],
         'desc_bprop': [[2, 3, 4, 5]]}),
+    ('IsFinite', {
+        'block': P.IsFinite(),
+        'desc_inputs': [Tensor(np.random.random((3, 4, 5)).astype(np.float32))],
+        'desc_bprop': [Tensor(np.random.random((3, 4, 5)).astype(np.bool))]}),
     ('Div', {
         'block': P.Div(),
         'desc_inputs': [[4, 5], [2, 3, 4, 5]],
@@ -1561,12 +1633,12 @@ test_case_nn_ops = [
         'block': G.BiasAddGrad(),
         'desc_inputs': [[1, 3, 3, 3]],
         'skip': ['backward']}),
-    ('Gelu', {
-        'block': P.Gelu(),
+    ('GeLU', {
+        'block': P.GeLU(),
         'desc_inputs': [[1, 3, 4, 4]],
         'desc_bprop': [[1, 3, 4, 4]]}),
-    ('GeluGrad', {
-        'block': G.GeluGrad(),
+    ('GeLUGrad', {
+        'block': G.GeLUGrad(),
         'desc_inputs': [[2, 2], [2, 2], [2, 2]],
         'desc_bprop': [[2, 2]],
         'skip': ['backward']}),
@@ -1617,20 +1689,28 @@ test_case_nn_ops = [
         'desc_inputs': [[1, 3, 4, 4]],
         'desc_bprop': [[1, 3, 4, 4]]}),
     ('MaxPool', {
-        'block': P.MaxPool(ksize=(2, 2), strides=(2, 2), padding="VALID"),
+        'block': P.MaxPool(kernel_size=(2, 2), strides=(2, 2), pad_mode="VALID"),
         'desc_inputs': [[100, 3, 28, 28]],
         'desc_bprop': [[100, 3, 14, 14]]}),
     ('MaxPoolGrad', {
-        'block': G.MaxPoolGrad(ksize=(2, 2), strides=(2, 2), padding="VALID"),
+        'block': G.MaxPoolGrad(kernel_size=(2, 2), strides=(2, 2), pad_mode="VALID"),
         'desc_inputs': [[3, 4, 6, 6], [3, 4, 3, 3], [3, 4, 3, 3]],
         'desc_bprop': [[3, 4, 6, 6]],
         'skip': ['backward']}),
+    ('MaxPool3D', {
+        'block': P.MaxPool3D(kernel_size=2, strides=2, pad_mode="VALID"),
+        'desc_inputs': [[100, 3, 28, 28, 28]],
+        'desc_bprop': [[100, 3, 14, 14, 14]]}),
+    ('MaxPool3DGrad', {
+        'block': G.MaxPool3DGrad(kernel_size=2, strides=2, pad_mode="VALID"),
+        'desc_inputs': [[3, 4, 6, 6, 6], [3, 4, 3, 3, 3], [3, 4, 3, 3, 3]],
+        'desc_bprop': [[3, 4, 6, 6, 6]]}),
     ('AvgPool', {
-        'block': P.AvgPool(ksize=(2, 2), strides=(2, 2), padding="VALID"),
+        'block': P.AvgPool(kernel_size=(2, 2), strides=(2, 2), pad_mode="VALID"),
         'desc_inputs': [[100, 3, 28, 28]],
         'desc_bprop': [[100, 3, 14, 14]]}),
     ('MaxPoolWithArgmax', {
-        'block': P.MaxPoolWithArgmax(ksize=2, strides=2),
+        'block': P.MaxPoolWithArgmax(kernel_size=2, strides=2),
         'desc_inputs': [[128, 32, 32, 64]],
         'desc_bprop': [[128, 32, 16, 32], ([128, 32, 16, 32], {'dtype': np.int32})]}),
     ('SoftmaxCrossEntropyWithLogits', {
@@ -1669,11 +1749,6 @@ test_case_nn_ops = [
         'desc_inputs': [[2, 16], [2, 16], [2, 16], [2, 16], [16]],
         'desc_bprop': [[2, 16], [16], [16]],
         'skip': ['backward']}),
-    ('FusedBatchNormGrad', {
-        'block': G.FusedBatchNormGrad(),
-        'desc_inputs': [[128, 64, 32, 64], [128, 64, 32, 64], [64], [64], [64]],
-        'desc_bprop': [[128, 64, 32, 64], [64], [64], [64], [64]],
-        'skip': ['backward']}),
     ('BatchNorm', {
         'block': P.BatchNorm(),
         'desc_inputs': [[128, 64, 32, 32], [64], [64], [64], [64]],
@@ -1681,6 +1756,16 @@ test_case_nn_ops = [
         'skip': []}),
     ('BatchNormGrad', {
         'block': G.BatchNormGrad(),
+        'desc_inputs': [[128, 64, 32, 32], [128, 64, 32, 32], [64], [64], [64], [64]],
+        'desc_bprop': [[128, 64, 32, 32], [64], [64]],
+        'skip': ['backward']}),
+    ('SyncBatchNorm', {
+        'block': inner.SyncBatchNorm(),
+        'desc_inputs': [[128, 64, 32, 32], [64], [64], [64], [64]],
+        'desc_bprop': [[128, 64, 32, 32], [64], [64], [64], [64]],
+        'skip': []}),
+    ('SyncBatchNormGrad', {
+        'block': G.SyncBatchNormGrad(),
         'desc_inputs': [[128, 64, 32, 32], [128, 64, 32, 32], [64], [64], [64]],
         'desc_bprop': [[128, 64, 32, 32], [64], [64], [64], [64]],
         'skip': ['backward']}),
@@ -1690,38 +1775,42 @@ test_case_nn_ops = [
         'desc_inputs': [[20, 20, 10]],
         'desc_bprop': [[20, 20, 5]],
         'skip': ['backward']}),
+    ('Sort', {
+        'block': P.Sort(),
+        'desc_inputs': [[2, 3, 4]],
+        'desc_bprop': [[2, 3, 4], ([2, 3, 4], {'dtype': np.int32})]}),
     ('GatherV2_0', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [0],
         'desc_inputs': [[3, 1, 2], Tensor(np.array([0, 1]).astype(np.int32))],
         'desc_bprop': [[2, 1, 2]]}),
     ('GatherV2_1', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [2],
         'desc_inputs': [[3, 1, 3], Tensor(np.array([0, 1]).astype(np.int32))],
         'desc_bprop': [[3, 1, 2]]}),
     ('GatherV2_2', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [0],
         'desc_inputs': [[3, 1, 3], Tensor(np.array([[0, 1], [0, 1], [0, 1]]).astype(np.int32))],
         'desc_bprop': [[3, 2, 1, 3]]}),
     ('GatherV2_3', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [2],
         'desc_inputs': [[3, 1, 3], Tensor(np.array([[0, 1], [0, 1], [0, 1]]).astype(np.int32))],
         'desc_bprop': [[3, 1, 3, 2]]}),
     ('GatherV2_4', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [1],
         'desc_inputs': [[32, 5, 1024], Tensor(np.array([3]).astype(np.int32))],
         'desc_bprop': [[32, 1, 1024]]}),
     ('GatherV2_5', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [-1],
         'desc_inputs': [[3, 1, 3], Tensor(np.array([0, 1]).astype(np.int32))],
         'desc_bprop': [[3, 1, 2]]}),
     ('GatherV2_6', {
-        'block': P.GatherV2(),
+        'block': P.Gather(),
         'desc_const': [0],
         'desc_inputs': [[1152], Tensor(np.array(10).astype(np.int32))],
         'desc_bprop': [Tensor(np.array(10).astype(np.float32))]}),
@@ -1983,6 +2072,10 @@ test_case_nn_ops = [
         'block': P.L2Loss(),
         'desc_inputs': [Tensor(np.array([[1, 1], [2, 2], [3, 3], [4, 4]]), mstype.float16)],
         'desc_bprop': []}),
+    ('BCEWithLogitsLoss', {
+        'block': P.BCEWithLogitsLoss(),
+        'desc_inputs': [[3, 3], [3, 3], [3, 3], [3, 3]],
+        'desc_bprop': []}),
     ('ResizeBilinear', {
         'block': P.ResizeBilinear((5, 5)),
         'desc_inputs': [Tensor([[[[1, 2, 3, 4, 5], [1, 2, 3, 4, 5]]]], mstype.float16)],
@@ -2196,33 +2289,33 @@ test_case_array_ops = [
         'desc_inputs': [Tensor(np.array([1], np.float32)),
                         Tensor(np.array([1], np.float32)),
                         Tensor(np.array([1], np.float32))],
-        'desc_bprop': [[3, ]]}),
-    ('Pack_0', {
-        'block': NetForPackInput(P.Pack()),
+        'desc_bprop': [[3,]]}),
+    ('Stack_0', {
+        'block': NetForStackInput(P.Stack()),
         'desc_inputs': [[2, 2], [2, 2], [2, 2]],
         'desc_bprop': [[3, 2, 2]],
     }),
-    ('Pack_1', {
-        'block': NetForPackInput(P.Pack(axis=-2)),
+    ('Stack_1', {
+        'block': NetForStackInput(P.Stack(axis=-2)),
         'desc_inputs': [[3, 2, 3], [3, 2, 3], [3, 2, 3]],
         'desc_bprop': [[3, 2, 3, 3]],
     }),
-    ('Pack_2', {
-        'block': NetForPackInput(P.Pack()),
+    ('Stack_2', {
+        'block': NetForStackInput(P.Stack()),
         'desc_inputs': [[128, 128], [128, 128]],
         'desc_bprop': [[2, 128, 128]],
     }),
-    ('Pack_3', {
-        'block': NetForPackInput(P.Pack()),
+    ('Stack_3', {
+        'block': NetForStackInput(P.Stack()),
         'desc_inputs': [[2, 2]],
         'desc_bprop': [[1, 2, 2]]}),
     ('Unpack_0', {
-        'block': NetForUnpackInput(P.Unpack(axis=0)),
+        'block': NetForUnpackInput(P.Unstack(axis=0)),
         'desc_inputs': [[2, 4]],
         'desc_bprop': [[4], [4]],
     }),
     ('Unpack_1', {
-        'block': NetForUnpackInput(P.Unpack(axis=-1)),
+        'block': NetForUnpackInput(P.Unstack(axis=-1)),
         'desc_inputs': [Tensor(np.array([[1, 1, 1]], np.float32))],
         'desc_bprop': [[1], [1], [1]],
     }),
@@ -2618,7 +2711,7 @@ test_case_other_ops = [
                         Tensor(np.random.rand(1, 64).astype(np.float16)),
                         Tensor(np.random.rand(1, 64).astype(np.float16)),
                         Tensor(np.random.rand(96, 256).astype(np.float16)),
-                        Tensor(np.random.rand(256, ).astype(np.float16))],
+                        Tensor(np.random.rand(256,).astype(np.float16))],
         'desc_bprop': [Tensor(np.random.rand(1, 64).astype(np.float16)),
                        Tensor(np.random.rand(1, 64).astype(np.float16)),
                        Tensor(np.random.rand(1, 64).astype(np.float16)),
@@ -2674,7 +2767,87 @@ test_case_quant_ops = [
         'skip': ['backward']}),
 ]
 
-test_case_lists = [test_case_nn_ops, test_case_math_ops, test_case_array_ops, test_case_other_ops, test_case_quant_ops]
+test_case_quantum_ops = [
+    ('PQC', {
+        'block': P.PQC(n_qubits=3,
+                       encoder_params_names=['e0', 'e1', 'e2'],
+                       ansatz_params_names=['a', 'b', 'c'],
+                       gate_names=['RX', 'RX', 'RX', 'npg', 'npg',
+                                   'npg', 'RX', 'npg', 'npg', 'RZ',
+                                   'npg', 'npg', 'RY'],
+                       gate_matrix=[[[['0.0', '0.0'], ['0.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '0.0'], ['0.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '0.0'], ['0.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.7071067811865475', '0.7071067811865475'],
+                                      ['0.7071067811865475', '-0.7071067811865475']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.7071067811865475', '0.7071067811865475'],
+                                      ['0.7071067811865475', '-0.7071067811865475']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.7071067811865475', '0.7071067811865475'],
+                                      ['0.7071067811865475', '-0.7071067811865475']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '0.0'], ['0.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '1.0'], ['1.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '-0.0'], ['0.0', '0.0']],
+                                     [['0.0', '-1.0'], ['1.0', '0.0']]],
+                                    [[['0.0', '0.0'], ['0.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '1.0'], ['1.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['1.0', '0.0'], ['0.0', '-1.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]],
+                                    [[['0.0', '0.0'], ['0.0', '0.0']],
+                                     [['0.0', '0.0'], ['0.0', '0.0']]]],
+                       gate_obj_qubits=[[0], [1], [2], [0], [1], [2],
+                                        [0], [1], [2], [1], [1], [0], [2]],
+                       gate_ctrl_qubits=[[], [], [], [], [], [], [], [], [], [], [2], [], []],
+                       gate_params_names=[['e0'], ['e1'], ['e2'], [], [], [], ['a'], [], [],
+                                          ['b'], [], [], ['c']],
+                       gate_coeff=[[1.0], [1.0], [1.0], [], [], [], [1.0], [], [], [1.0], [],
+                                   [], [1.0]],
+                       gate_requires_grad=[[True], [True], [True], [], [], [], [True], [], [],
+                                           [True], [], [], [True]],
+                       hams_pauli_coeff=[[1.0]],
+                       hams_pauli_word=[[['X', 'Y', 'Z']]],
+                       hams_pauli_qubit=[[[0, 1, 2]]],
+                       n_threads=1),
+        'desc_inputs': [Tensor(np.array([[1.0, 2.0, 3.0]]).astype(np.float32)),
+                        Tensor(np.array([2.0, 3.0, 4.0]).astype(np.float32))],
+        'skip': ['backward']}),
+    ('Evolution', {
+        'block': P.Evolution(n_qubits=3,
+                             param_names=['a'],
+                             gate_names=['npg', 'npg', 'npg', 'RY'],
+                             gate_matrix=[[[['0.7071067811865475', '0.7071067811865475'],
+                                            ['0.7071067811865475', '-0.7071067811865475']],
+                                           [['0.0', '0.0'], ['0.0', '0.0']]],
+                                          [[['0.7071067811865475', '0.7071067811865475'],
+                                            ['0.7071067811865475', '-0.7071067811865475']],
+                                           [['0.0', '0.0'], ['0.0', '0.0']]],
+                                          [[['0.0', '1.0'], ['1.0', '0.0']],
+                                           [['0.0', '0.0'], ['0.0', '0.0']]],
+                                          [[['0.0', '0.0'], ['0.0', '0.0']],
+                                           [['0.0', '0.0'], ['0.0', '0.0']]]],
+                             gate_obj_qubits=[[0], [1], [0], [0]],
+                             gate_ctrl_qubits=[[], [], [1], []],
+                             gate_params_names=[[], [], [], ['a']],
+                             gate_coeff=[[], [], [], [1.0]],
+                             gate_requires_grad=[[], [], [], [True]],
+                             hams_pauli_coeff=[[1.0]],
+                             hams_pauli_word=[[['Z']]],
+                             hams_pauli_qubit=[[[0]]]),
+        'desc_inputs': [Tensor(np.array([0.5]).astype(np.float32))],
+        'skip': ['backward']}),
+]
+
+test_case_lists = [test_case_nn_ops, test_case_math_ops, test_case_array_ops,
+                   test_case_other_ops, test_case_quant_ops, test_case_quantum_ops]
 test_case = functools.reduce(lambda x, y: x + y, test_case_lists)
 # use -k to select certain testcast
 # pytest tests/python/ops/test_ops.py::test_backward -k LayerNorm

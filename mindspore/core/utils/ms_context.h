@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,15 @@
 #include <string>
 #include <utility>
 #include "utils/log_adapter.h"
+#include "utils/ms_utils.h"
+#ifdef ENABLE_TDTQUE
+#include "pybind11/pybind11.h"
+#include "mindspore/ccsrc/minddata/dataset/engine/tdt/tdt_handle.h"
+using mindspore::dataset::TdtHandle;
+#endif
+#ifndef NO_DLIB
+#include "acl/acl_tdt.h"
+#endif
 
 namespace mindspore {
 enum MsBackendPolicy {
@@ -41,6 +50,7 @@ const char kCPUDevice[] = "CPU";
 const char kGPUDevice[] = "GPU";
 const char kAscendDevice[] = "Ascend";
 const char kDavinciInferenceDevice[] = "AscendInference";
+const char kGpuInferenceDevice[] = "GpuInference";
 const char kDavinciDevice[] = "Davinci";
 const char KNpuLog[] = "_npu_log";
 const unsigned int MAX_CALL_DEPTH_DEFAULT = 1000;
@@ -51,7 +61,7 @@ const float kDefaultMaxDeviceMemory = 1024;
 
 // enum definition for MindSpore Context Parameter
 enum MsCtxParam : unsigned {
-  // paramater of type bool
+  // parameter of type bool
   MS_CTX_TYPE_BOOL_BEGIN,
   MS_CTX_ENABLE_AUTO_MIXED_PRECISION = MS_CTX_TYPE_BOOL_BEGIN,
   MS_CTX_CHECK_BPROP_FLAG,
@@ -74,14 +84,16 @@ enum MsCtxParam : unsigned {
   MS_CTX_ENABLE_PROFILING,
   MS_CTX_SAVE_GRAPHS_FLAG,
   MS_CTX_ENABLE_PARALLEL_SPLIT,
+  MS_CTX_ENABLE_INFER_OPT,
+  MS_CTX_GRAD_FOR_SCALAR,
   MS_CTX_TYPE_BOOL_END,
 
-  // paramater of type int
+  // parameter of type int
   MS_CTX_TYPE_INT_BEGIN = MS_CTX_TYPE_BOOL_END,
   MS_CTX_EXECUTION_MODE = MS_CTX_TYPE_INT_BEGIN,
   MS_CTX_TYPE_INT_END,
 
-  // paramater of type uint32
+  // parameter of type uint32
   MS_CTX_TYPE_UINT32_BEGIN = MS_CTX_TYPE_INT_END,
   MS_CTX_DEVICE_ID = MS_CTX_TYPE_UINT32_BEGIN,
   MS_CTX_GE_REF,
@@ -89,12 +101,12 @@ enum MsCtxParam : unsigned {
   MS_CTX_TSD_REF,
   MS_CTX_TYPE_UINT32_END,
 
-  // paramater of type float
+  // parameter of type float
   MS_CTX_TYPE_FLOAT_BEGIN = MS_CTX_TYPE_UINT32_END,
   MS_CTX_MAX_DEVICE_MEMORY = MS_CTX_TYPE_FLOAT_BEGIN,
   MS_CTX_TYPE_FLOAT_END,
 
-  // paramater of type string
+  // parameter of type string
   MS_CTX_TYPE_STRING_BEGIN = MS_CTX_TYPE_FLOAT_END,
   MS_CTX_DEVICE_TARGET = MS_CTX_TYPE_STRING_BEGIN,
   MS_CTX_GRAPH_MEMORY_MAX_SIZE,
@@ -104,6 +116,8 @@ enum MsCtxParam : unsigned {
   MS_CTX_SAVE_GRAPHS_PATH,
   MS_CTX_VARIABLE_MEMORY_MAX_SIZE,
   MS_CTX_PYTHON_EXE_PATH,
+  MS_CTX_ENV_CONFIG_PATH,
+  MS_CTX_TUNE_MODE,
   MS_CTX_TYPE_STRING_END,
 
   // parameter numbers of each type
@@ -124,13 +138,17 @@ class MsContext {
   using DeviceTypeSeter = std::function<void(std::shared_ptr<MsContext> &)>;
   static std::shared_ptr<MsContext> GetInstance();
 
+  bool enable_dump_ir() const;
   std::string backend_policy() const;
   bool set_backend_policy(const std::string &policy);
-
+#ifdef ENABLE_TDTQUE
+  acltdtChannelHandle *CreateAclTdtChannelHandle();
+  void DestroyAclTdtChannelHandle();
+#endif
   static void device_seter(DeviceSeter device) { seter_ = device; }
   static void device_type_seter(DeviceTypeSeter device_type) { device_type_seter_ = device_type; }
 
-  std::thread tdt_print_;
+  std::thread acl_tdt_print;
 
   template <typename T>
   void set_param(MsCtxParam param, const T &value) {
@@ -163,8 +181,10 @@ class MsContext {
   uint32_t uint32_params_[MsCtxParam::NUM_UINT32_PARAMS];
   float float_params_[MsCtxParam::NUM_FLOAT_PARAMS];
   std::string string_params_[MsCtxParam::NUM_STRING_PARAMS];
-
   MsBackendPolicy backend_policy_;
+#ifdef ENABLE_TDTQUE
+  acltdtChannelHandle *acl_handle_ = nullptr;
+#endif
 };
 
 // set method implementation for type bool/int/uint32_t/float/std::string

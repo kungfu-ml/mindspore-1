@@ -14,75 +14,9 @@
 # ============================================================================
 
 """control_ops"""
-
-from ...common import dtype as mstype
+from ..primitive import PrimitiveWithInfer, prim_attr_register
 from ..._checkparam import Validator as validator
-from ..._checkparam import Rel
-from ..primitive import Primitive, PrimitiveWithInfer, prim_attr_register
-
-
-class ControlDepend(Primitive):
-    """
-    Adds control dependency relation between source and destination operations.
-
-    In many cases, we need to control the execution order of operations. ControlDepend is designed for this.
-    ControlDepend will instruct the execution engine to run the operations in a specific order. ControlDepend
-    tells the engine that the destination operations must depend on the source operation which means the source
-    operations must be executed before the destination.
-
-    Note:
-        This operation does not work in `PYNATIVE_MODE`.
-    Args:
-        depend_mode (int): Use 0 for a normal dependency relation and 1 for a user-defined dependency relation.
-            Default: 0.
-
-    Inputs:
-        - **src** (Any) - The source input. It can be a tuple of operations output or a single operation output. We do
-          not concern about the input data, but concern about the operation that generates the input data.
-          If `depend_mode` is 1 and the source input is Parameter, we will try to find the operations that
-          used the parameter as input.
-        - **dst** (Any) - The destination input. It can be a tuple of operations output or a single operation output.
-          We do not concern about the input data, but concern about the operation that generates the input data.
-          If `depend_mode` is 1 and the source input is Parameter, we will try to find the operations that
-          used the parameter as input.
-
-    Outputs:
-        This operation has no actual data output, it will be used to setup the order of relative operations.
-
-    Supported Platforms:
-        ``Ascend`` ``GPU`` ``CPU``
-
-    Examples:
-        >>> class Net(nn.Cell):
-        ...     def __init__(self):
-        ...         super(Net, self).__init__()
-        ...         self.control_depend = P.ControlDepend()
-        ...         self.softmax = ops.Softmax()
-        ...
-        ...     def construct(self, x, y):
-        ...         mul = x * y
-        ...         softmax = self.softmax(x)
-        ...         ret = self.control_depend(mul, softmax)
-        ...         return ret
-        ...
-        >>> x = Tensor(np.ones([4, 5]), dtype=mindspore.float32)
-        >>> y = Tensor(np.ones([4, 5]), dtype=mindspore.float32)
-        >>> net = Net()
-        >>> output = net(x, y)
-        >>> print(output)
-        [[1. 1. 1. 1. 1.]
-         [1. 1. 1. 1. 1.]
-         [1. 1. 1. 1. 1.]
-         [1. 1. 1. 1. 1.]]
-    """
-
-    @prim_attr_register
-    def __init__(self, depend_mode=0):
-        """init"""
-        validator.check_int_range(depend_mode, 0, 1, Rel.INC_BOTH, "depend_mode", self.name)
-
-    def __call__(self, src, dst):
-        return src
+from ...common import dtype as mstype
 
 
 class GeSwitch(PrimitiveWithInfer):
@@ -100,12 +34,16 @@ class GeSwitch(PrimitiveWithInfer):
         tuple. Output is tuple(false_output, true_output). The Elements in the tuple has the same shape of input data.
         The false_output connects with the false_branch and the true_output connects with the true_branch.
 
+    Raises:
+        TypeError: If `data` is neither a Tensor nor a Number.
+        TypeError: If `pred` is not a Tensor.
+
     Examples:
         >>> class Net(nn.Cell):
         ...     def __init__(self):
         ...         super(Net, self).__init__()
         ...         self.square = ops.Square()
-        ...         self.add = ops.TensorAdd()
+        ...         self.add = ops.Add()
         ...         self.value = Tensor(np.full((1), 3), mindspore.float32)
         ...         self.switch = ops.GeSwitch()
         ...         self.merge = ops.Merge()
@@ -157,6 +95,9 @@ class Merge(PrimitiveWithInfer):
 
     Outputs:
         tuple. Output is tuple(`data`, `output_index`). The `data` has the same shape of `inputs` element.
+
+    Raises:
+        TypeError: If `inputs` is neither Tuple nor list.
 
     Examples:
         >>> merge = ops.Merge()

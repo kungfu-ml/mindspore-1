@@ -21,7 +21,6 @@
 #include <vector>
 #include "include/errorcode.h"
 #include "nnacl/crop_parameter.h"
-#include "nnacl/fp16/cast_fp16.h"
 #include "nnacl/fp16/crop_fp16.h"
 #include "src/lite_kernel.h"
 #include "src/runtime/kernel/arm/base/crop_base.h"
@@ -31,20 +30,17 @@ namespace mindspore::kernel {
 class CropFp16CPUKernel : public CropBaseCPUKernel {
  public:
   CropFp16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                    const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                    const mindspore::lite::PrimitiveC *primitive)
-      : CropBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                    const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : CropBaseCPUKernel(parameter, inputs, outputs, ctx) {}
   ~CropFp16CPUKernel() override = default;
 
   int Init() override;
-  int ReSize() override;
   int Run() override;
   int DoExecute(int task_id);
 
  private:
   float16_t *input_ptr_ = nullptr;
   float16_t *output_ptr_ = nullptr;
-  void FreeInputAndOutput();
 };
 }  // namespace mindspore::kernel
 

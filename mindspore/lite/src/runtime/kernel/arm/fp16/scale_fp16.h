@@ -27,9 +27,8 @@ namespace mindspore::kernel {
 class ScaleFp16CPUKernel : public ScaleCPUKernel {
  public:
   ScaleFp16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                     const mindspore::lite::PrimitiveC *primitive)
-      : ScaleCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                     const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : ScaleCPUKernel(parameter, inputs, outputs, ctx) {}
   ~ScaleFp16CPUKernel() = default;
 
   int Init() override;
@@ -43,10 +42,8 @@ class ScaleFp16CPUKernel : public ScaleCPUKernel {
   void FreeTmpBuffer();
 
  private:
-  bool malloc_input_ = false;
   bool malloc_scale_ = false;
   bool malloc_offset_ = false;
-  bool malloc_output_ = false;
 
   float16_t *input_ = nullptr;
   float16_t *scale_ = nullptr;

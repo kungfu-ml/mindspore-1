@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -91,7 +91,7 @@ STATUS ReadProtoFromBinaryFile(const char *file, google::protobuf::Message *mess
   fs.close();
 
   if (!success) {
-    MS_LOG(ERROR) << "Parse " << file << " failed.";
+    MS_LOG(DEBUG) << "Parse " << file << " failed.";
     return RET_ERROR;
   }
 

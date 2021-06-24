@@ -17,6 +17,7 @@
 #ifndef MINDSPORE_CCSRC_MINDDATA_DATASET_ENGINE_IR_DATASETOPS_SOURCE_CLUE_NODE_H_
 #define MINDSPORE_CCSRC_MINDDATA_DATASET_ENGINE_IR_DATASETOPS_SOURCE_CLUE_NODE_H_
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -71,10 +72,64 @@ class CLUENode : public NonMappableSourceNode {
   Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
                         int64_t *dataset_size) override;
 
+  /// \brief Getter functions
+  const std::vector<std::string> &DatasetFiles() const { return dataset_files_; }
+  const std::string &Task() const { return task_; }
+  const std::string &Usage() const { return usage_; }
+  int64_t NumSamples() const { return num_samples_; }
+  ShuffleMode Shuffle() const { return shuffle_; }
+  int32_t NumShards() const { return num_shards_; }
+  int32_t ShardId() const { return shard_id_; }
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
+
+  /// \brief CLUE by itself is a non-mappable dataset that does not support sampling.
+  ///     However, if a cache operator is injected at some other place higher in the tree, that cache can
+  ///     inherit this sampler from the leaf, providing sampling support from the caching layer.
+  ///     That is why we setup the sampler for a leaf node that does not use sampling.
+  ///     Note: This function is common among NonMappableSourceNode and should be promoted to its parent class.
+  /// \param[in] sampler The sampler to setup
+  /// \return Status of the function
+  Status SetupSamplerForCache(std::shared_ptr<SamplerObj> *sampler) override;
+
+  /// \brief If a cache has been added into the ascendant tree over this clue node, then the cache will be executing
+  ///     a sampler for fetching the data.  As such, any options in the clue node need to be reset to its defaults so
+  ///     that this clue node will produce the full set of data into the cache.
+  ///     Note: This function is common among NonMappableSourceNode and should be promoted to its parent class.
+  /// \return Status of the function
+  Status MakeSimpleProducer() override;
+
  private:
   /// \brief Split string based on a character delimiter
   /// \return A string vector
   std::vector<std::string> split(const std::string &s, char delim);
+
+  /// \brief Generate a key map for AFQMC or CMNLI task according to usage
+  /// \return The generated key map
+  std::map<std::string, std::string> CreateKeyMapForAFQMCOrCMNLITask();
+
+  /// \brief Generate a key map for CSL task according to usage
+  /// \return The generated key map
+  std::map<std::string, std::string> CreateKeyMapForCSLTask();
+
+  /// \brief Generate a key map for IFLYTEK task according to usage
+  /// \return The generated key map
+  std::map<std::string, std::string> CreateKeyMapForIFLYTEKTask();
+
+  /// \brief Generate a key map for TNEWS task according to usage
+  /// \return The generated key map
+  std::map<std::string, std::string> CreateKeyMapForTNEWSTask();
+
+  /// \brief Generate a key map for WSC task according to usage
+  /// \return The generated key map
+  std::map<std::string, std::string> CreateKeyMapForWSCTask();
+
+  /// \brief Generate a key map to be used in Build() according to usage and task
+  /// \return The generated key map
+  std::map<std::string, std::string> CreateKeyMap();
 
   std::vector<std::string> dataset_files_;
   std::string task_;

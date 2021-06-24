@@ -22,6 +22,7 @@
 #include <utility>
 #include <map>
 #include <unordered_map>
+#include <nlohmann/json.hpp>
 
 #include "backend/session/kernel_graph.h"
 #include "ir/anf.h"
@@ -32,6 +33,8 @@ namespace kernel {
 namespace tbe {
 using std::string;
 using std::vector;
+const std::map<std::string, std::string> opTypeAdapter = {
+  {"ReLUV2", "ReluV2"}, {"ReLU6", "Relu6"}, {"ReLU6Grad", "Relu6Grad"}, {"ReLUGrad", "ReluGrad"}, {"ReLU", "Relu"}};
 
 class TbeUtils {
  public:
@@ -42,6 +45,8 @@ class TbeUtils {
   static void SaveJsonInfo(const std::string &json_name, const std::string &info);
 
   static void LoadCache();
+
+  static void GenSocInfo(nlohmann::json *soc_info_json);
 
   static KernelPackPtr SearchCache(const std::string &kernel_name, const std::string &processor);
 
@@ -56,13 +61,16 @@ using KernelMetaPtr = std::shared_ptr<KernelMetaInfo>;
 
 class KernelManager {
  public:
-  static uintptr_t GenFuncStub(const KernelPack &kernel_pack, bool force_reload, uint32_t *block_dim);
+  static uintptr_t GenFuncStub(const KernelPack &kernel_pack, bool force_reload, uint32_t *block_dim,
+                               const bool dynamic_flag = false, void **handle = nullptr,
+                               std::string *origin_key = nullptr);
   static std::string GetStubFuncName(const KernelPackPtr &kernel_pack);
 
  private:
   KernelManager() = default;
   ~KernelManager() = default;
-  static int BinaryRegister(const FlexArray &kernel_buffer, void **module, const string &magic);
+  static int BinaryRegister(const FlexArray &kernel_buffer, void **module, const string &magic,
+                            const bool dynamic_flag);
   static std::unordered_map<string, KernelMetaPtr> info_table_;
   static uintptr_t kernel_stub_gen_;
 };

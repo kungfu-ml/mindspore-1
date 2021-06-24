@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,33 +13,24 @@
 # limitations under the License.
 # ===========================================================================
 """generate json desc for Tile"""
-from mindspore._extends.graph_kernel.model import model_builder as builder
+from mindspore._extends.graph_kernel.model.op_infer import Tile as TileInfer
+from mindspore._extends.graph_kernel.model.model import DataFormat as DF
+from ._utils import Expander, ExpanderInfoValidator as VLD
 
 
-def expand_tile(expand_info):
+@VLD.add_format(DF.DEFAULT)
+@VLD.check_attrs('multiples')
+class Tile(Expander):
     """Tile expander"""
 
-    # get op info.
-    input_desc = expand_info['input_desc'][0]
-    attrs = expand_info['attr']
-    multiples = None
-    for item in attrs:
-        if 'multiples' in item:
-            multiples = item['multiples']
-    output_shape, _, _, shape_compatible = builder.get_tile_output_shape(input_desc['shape'], multiples)
-    graph_builder = builder.GraphBuilder()
+    def _expand(self, graph_builder):
+        input_x = self.inputs[0]
+        multiples = self.attrs['multiples']
 
-    # generate a graph.
-    with graph_builder.graph_scope('main') as graph_scope:
-        # create tensor input.
-        input_x = graph_builder.tensor(input_desc['shape'], input_desc['data_type'], input_desc['format'])
-        # create op.
-        if shape_compatible:
+        tile_infer = TileInfer(self.name, self.inputs, self.attrs)
+        output_shape, _, _ = tile_infer.infer()
+        if tile_infer.broadcast_compatible:
             result = graph_builder.emit('BroadcastTo', [input_x], attrs={'shape': output_shape})
         else:
             result = graph_builder.emit('Tile', [input_x], attrs={'multiples': multiples})
-        # set graph output.
-        graph_scope.set_output(result)
-
-    graph = graph_builder.get()[0]
-    return graph
+        return result

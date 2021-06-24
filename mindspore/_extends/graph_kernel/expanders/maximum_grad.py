@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,46 +13,26 @@
 # limitations under the License.
 # ===========================================================================
 """generate json desc for maximum_grad"""
-from mindspore._extends.graph_kernel.model import model_builder as builder
+from mindspore._extends.graph_kernel.model.model import GraphKernelUnsupportedException as GKException
+from ._utils import Expander, ExpanderInfoValidator as VLD
 
 
-def expand_maximumgrad(expand_info):
+@VLD.check_all_formats_same
+class MaximumGrad(Expander):
     """MaximumGrad expander"""
-    # get op info.
-    input_desc_0 = expand_info['input_desc'][0]
-    input_desc_1 = expand_info['input_desc'][1]
-    input_desc_2 = expand_info['input_desc'][2]
-    attrs = expand_info['attr']
-    grad_x = None
-    grad_y = None
-    for item in attrs:
-        if 'grad_x' in item:
-            grad_x = item['grad_x']
-        if 'grad_y' in item:
-            grad_y = item['grad_y']
-    graph_builder = builder.GraphBuilder()
 
-    # generate a graph.
-    with graph_builder.graph_scope('main') as graph_scope:
-        # create tensor input.
-        input_x = graph_builder.tensor(input_desc_0['shape'], input_desc_0['data_type'], input_desc_0['format'])
-        input_y = graph_builder.tensor(input_desc_1['shape'], input_desc_1['data_type'], input_desc_1['format'])
-        input_dout = graph_builder.tensor(input_desc_2['shape'], input_desc_2['data_type'], input_desc_2['format'])
-        graph_scope.set_input(input_x, input_y, input_dout)
-        x_dtype = input_x.dtype
-        # cal result
+    def _check(self):
+        if not self.attrs.get('grad_x', True) and not self.attrs.get('grad_y', True):
+            raise GKException("both grad_x and grad_y are False.")
+        return super()._check()
+
+    def _expand(self, graph_builder):
+        input_x, input_y, input_dout = self.inputs
+
         ge_result = graph_builder.emit('GreaterEqual', [input_x, input_y])
-        ge_result = graph_builder.emit('Cast', [ge_result], attrs={'dst_type': x_dtype})
+        ge_result = graph_builder.emit('Cast', [ge_result], attrs={'dst_type': input_x.dtype})
         dx = graph_builder.emit('Mul', [ge_result, input_dout])
         dy = graph_builder.emit('Sub', [input_dout, dx])
 
-        # set graph output according to grad_x and grad_y
-        if grad_x and grad_y:
-            graph_scope.set_output(dx, dy)
-        if grad_x and not grad_y:
-            graph_scope.set_output(dx)
-        if grad_y and not grad_x:
-            graph_scope.set_output(dy)
-
-    graph = graph_builder.get()[0]
-    return graph
+        # output two results, regardless of grad_x and grad_y
+        return dx, dy

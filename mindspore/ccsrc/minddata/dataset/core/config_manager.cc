@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,9 +35,13 @@ ConfigManager::ConfigManager()
       num_parallel_workers_(kCfgParallelWorkers),
       worker_connector_size_(kCfgWorkerConnectorSize),
       op_connector_size_(kCfgOpConnectorSize),
+      sending_batches_(kCfgSendingBatch),
       rank_id_(kCfgDefaultRankId),
       seed_(kCfgDefaultSeed),
+      numa_enable_(false),
       monitor_sampling_interval_(kCfgMonitorSamplingInterval),
+      stop_profiler_(false),
+      file_ready_(true),
       callback_timout_(kCfgCallbackTimeout),
       cache_host_(kCfgDefaultCacheHost),
       cache_port_(kCfgDefaultCachePort),
@@ -56,9 +60,8 @@ ConfigManager::ConfigManager()
     char *end = nullptr;
     cache_port_ = strtol(env_cache_port, &end, 10);
     if (*end != '\0') {
-      MS_LOG(WARNING) << "\nCache port from env variable MS_CACHE_PORT is invalid, back to use default "
-                      << kCfgDefaultCachePort << std::endl;
-      cache_port_ = kCfgDefaultCachePort;
+      MS_LOG(WARNING) << "Cache port from env variable MS_CACHE_PORT is invalid\n";
+      cache_port_ = 0;  // cause the port range validation to generate an error during the validation checks
     }
   }
 }
@@ -127,13 +130,23 @@ void ConfigManager::set_worker_connector_size(int32_t connector_size) { worker_c
 // Setter function
 void ConfigManager::set_op_connector_size(int32_t connector_size) { op_connector_size_ = connector_size; }
 
+void ConfigManager::set_sending_batches(int64_t sending_batches) { sending_batches_ = sending_batches; }
+
 uint32_t ConfigManager::seed() const { return seed_; }
 
-void ConfigManager::set_rank_id(int32_t rank_id) { rank_id_ = rank_id; }
+void ConfigManager::set_rank_id(int32_t rank_id) {
+  if (rank_id_ == kCfgDefaultRankId) rank_id_ = rank_id;
+}
+
+void ConfigManager::set_numa_enable(bool numa_enable) { numa_enable_ = numa_enable; }
 
 void ConfigManager::set_seed(uint32_t seed) { seed_ = seed; }
 
 void ConfigManager::set_monitor_sampling_interval(uint32_t interval) { monitor_sampling_interval_ = interval; }
+
+void ConfigManager::stop_dataset_profiler(bool stop_profiler) { stop_profiler_ = stop_profiler; }
+
+void ConfigManager::set_profiler_file_status(bool file_ready) { file_ready_ = file_ready; }
 
 void ConfigManager::set_callback_timeout(uint32_t timeout) { callback_timout_ = timeout; }
 

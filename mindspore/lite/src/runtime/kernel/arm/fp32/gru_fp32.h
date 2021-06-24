@@ -17,16 +17,15 @@
 #define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_GRU_FP32_H_
 #include <vector>
 #include "src/lite_kernel.h"
-#include "nnacl/fp32/gru_fp32.h"
+#include "nnacl/gru_parameter.h"
 
 namespace mindspore::kernel {
 class GruCPUKernel : public LiteKernel {
  public:
   GruCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-               const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-               const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
-    gru_parm_ = reinterpret_cast<GruParameter *>(op_parameter_);
+               const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
+    gru_param_ = reinterpret_cast<GruParameter *>(op_parameter_);
   }
 
   ~GruCPUKernel() override { FreeTmpBuffer(); }
@@ -37,15 +36,20 @@ class GruCPUKernel : public LiteKernel {
 
  private:
   void FreeTmpBuffer();
+  void FreeRunBuffer();
   int InitParam();
-  int InitBuffer();
+  int MallocRunBuffer();
   int InitWeightBias();
 
   float *gate_buffer_ = nullptr;
-  const float *weight_g_ptr_ = nullptr;
-  const float *weight_r_ptr_ = nullptr;
+  float *weight_g_ptr_ = nullptr;
+  float *weight_r_ptr_ = nullptr;
   float *bias_ptr_ = nullptr;
-  GruParameter *gru_parm_ = nullptr;
+  float *matmul_buffer_[2];
+  int row_tile_ = 0;
+  int col_tile_ = 0;
+  bool is_vec_ = false;
+  GruParameter *gru_param_ = nullptr;
 };
 }  // namespace mindspore::kernel
 

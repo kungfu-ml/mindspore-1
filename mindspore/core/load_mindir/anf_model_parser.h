@@ -39,6 +39,8 @@ class MSANFModelParser {
   std::string GetProducerName() { return producer_name_; }
   std::string GetProducerVersion() { return model_version_; }
   std::string GetIrVersion() { return ir_version_; }
+  void SetLite() { is_lite_ = true; }
+  bool IsLite() { return is_lite_; }
 
  private:
   bool BuildFuncGraph(const FuncGraphPtr &outputFuncGraph, const mind_ir::GraphProto &importProto);
@@ -62,12 +64,14 @@ class MSANFModelParser {
   bool GetAttrValueForValueNode(const std::string &value_node_name, const mind_ir::AttributeProto &attr_tensor);
   bool ObtainValueNodeInTypeForm(const string &value_node_name, const mind_ir::TensorProto &attr_tensor);
   bool ObtainValueNodeInNoneForm(const std::string &value_node_name, const mind_ir::AttributeProto &attr_proto);
+  bool ObtainValueNodeInMonadForm(const std::string &value_node_name, const mind_ir::AttributeProto &attr_proto);
   std::unordered_map<std::string, abstract::AbstractBasePtr> GetAbstractForCNode(
     const mind_ir::AttributeProto &attr_proto);
 
   std::string producer_name_;
   std::string model_version_;
   std::string ir_version_;
+  bool is_lite_ = false;
   std::unordered_map<std::string, AnfNodePtr> anfnode_build_map_;
 };
 }  // namespace mindspore

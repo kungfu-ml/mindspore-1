@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,18 +26,13 @@
 #include "minddata/dataset/util/task_manager.h"
 #include "minddata/dataset/engine/jagged_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/engine/datasetops/source/io_block.h"
 #include "minddata/dataset/util/random.h"
 
 namespace mindspore {
 namespace dataset {
 ClueOp::Builder::Builder()
-    : builder_device_id_(0),
-      builder_num_devices_(1),
-      builder_num_samples_(0),
-      builder_shuffle_files_(false),
-      builder_sampler_(nullptr) {
+    : builder_device_id_(0), builder_num_devices_(1), builder_num_samples_(0), builder_shuffle_files_(false) {
   std::shared_ptr<ConfigManager> config_manager = GlobalContext::config_manager();
   builder_num_workers_ = config_manager->num_parallel_workers();
   builder_op_connector_size_ = config_manager->op_connector_size();
@@ -54,7 +49,7 @@ Status ClueOp::Builder::ValidateInputs() const {
            ? "Invalid parameter, num_shard must be greater than shard_id and greater than 0, got num_shard: " +
                std::to_string(builder_num_devices_) + ", shard_id: " + std::to_string(builder_device_id_) + ".\n"
            : "";
-  return err.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err);
+  return err.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err);
 }
 
 Status ClueOp::Builder::Build(std::shared_ptr<ClueOp> *op) {
@@ -74,7 +69,7 @@ Status ClueOp::Builder::Build(std::shared_ptr<ClueOp> *op) {
   std::shared_ptr<ClueOp> clue_op = std::make_shared<ClueOp>(
     builder_num_workers_, builder_rows_per_buffer_, builder_num_samples_, builder_worker_connector_size_, ck_map,
     builder_clue_files_list_, builder_op_connector_size_, builder_shuffle_files_, builder_num_devices_,
-    builder_device_id_, std::move(builder_sampler_));
+    builder_device_id_);
   RETURN_IF_NOT_OK(clue_op->Init());
   *op = std::move(clue_op);
 
@@ -94,8 +89,8 @@ std::vector<std::string> ClueOp::Builder::split(const std::string &s, char delim
 
 ClueOp::ClueOp(int32_t num_workers, int64_t rows_per_buffer, int64_t num_samples, int32_t worker_connector_size,
                ColKeyMap cols_to_keyword, std::vector<std::string> clue_files_list, int32_t op_connector_size,
-               bool shuffle_files, int32_t num_device, int32_t device_id, std::shared_ptr<SamplerRT> sampler)
-    : ParallelOp(num_workers, op_connector_size, std::move(sampler)),
+               bool shuffle_files, int32_t num_device, int32_t device_id)
+    : ParallelOp(num_workers, op_connector_size),
       rows_per_buffer_(rows_per_buffer),
       num_rows_per_shard_(0),
       all_num_rows_(0),
@@ -202,6 +197,9 @@ Status ClueOp::LoadFile(const std::string &file, const int64_t start_offset, con
     }
     int cols_count = cols_to_keyword_.size();
     TensorRow tRow(cols_count, nullptr);
+    // Add file path info
+    std::vector<std::string> file_path(cols_count, file);
+    tRow.setPath(file_path);
     tensor_table->push_back(std::move(tRow));
     int cout = 0;
     for (auto &p : cols_to_keyword_) {
@@ -238,9 +236,10 @@ Status ClueOp::operator()() {
   RETURN_IF_NOT_OK(io_block_queue_wait_post_.Register(tree_->AllTasks()));
 
   // launch one thread, responsible for filling IoBlockQueue
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(1, std::bind(&ClueOp::WaitToFillIOBlockQueue, this)));
+  RETURN_IF_NOT_OK(tree_->LaunchWorkers(1, std::bind(&ClueOp::WaitToFillIOBlockQueue, this), "", id()));
 
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_, std::bind(&ClueOp::WorkerEntry, this, std::placeholders::_1)));
+  RETURN_IF_NOT_OK(
+    tree_->LaunchWorkers(num_workers_, std::bind(&ClueOp::WorkerEntry, this, std::placeholders::_1), "", id()));
 
   // must be called after launching workers.
   TaskManager::FindMe()->Post();
@@ -547,22 +546,6 @@ Status ClueOp::ComputeColMap() {
     MS_LOG(WARNING) << "Column name map is already set!";
   }
   return Status::OK();
-}
-
-// Brief If a cache has been added into the ascendant tree over this clue op, then the cache will be executing
-// a sampler for fetching the data.  As such, any options in the clue op need to be reset to its defaults so
-// that this clue op will produce the full set of data into the cache.
-void ClueOp::MakeSimpleProducer() {
-  device_id_ = 0;
-  num_devices_ = 1;
-  shuffle_files_ = false;
-  num_samples_ = 0;
-}
-
-// Visitor accept method for NodePass
-Status ClueOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<ClueOp>(), modified);
 }
 
 }  // namespace dataset

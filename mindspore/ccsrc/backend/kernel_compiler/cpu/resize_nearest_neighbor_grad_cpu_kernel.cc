@@ -20,7 +20,6 @@
 
 namespace mindspore {
 namespace kernel {
-
 void ResizeNearestNeighborGradCPUKernel::InitKernel(const CNodePtr &kernel_node) {
   CheckParam(kernel_node);
   std::vector<size_t> input_shape = AnfAlgo::GetPrevNodeOutputInferShape(kernel_node, 0);
@@ -44,8 +43,12 @@ bool ResizeNearestNeighborGradCPUKernel::Launch(const std::vector<kernel::Addres
     LaunchKernel<float16>(inputs, outputs);
   } else if (dtype_ == kNumberTypeFloat32) {
     LaunchKernel<float>(inputs, outputs);
+  } else if (dtype_ == kNumberTypeFloat64) {
+    LaunchKernel<double>(inputs, outputs);
   } else if (dtype_ == kNumberTypeInt32) {
     LaunchKernel<int32_t>(inputs, outputs);
+  } else if (dtype_ == kNumberTypeInt64) {
+    LaunchKernel<int64_t>(inputs, outputs);
   }
   return true;
 }
@@ -55,6 +58,12 @@ void ResizeNearestNeighborGradCPUKernel::LaunchKernel(const std::vector<AddressP
                                                       const std::vector<AddressPtr> &outputs) {
   auto dloss_addr = reinterpret_cast<T *>(inputs[0]->addr);
   auto output_addr = reinterpret_cast<T *>(outputs[0]->addr);
+
+  auto ret = memset_s(output_addr, outputs[0]->size, 0, outputs[0]->size);
+  if (ret != EOK) {
+    MS_LOG(EXCEPTION) << "Output buffer memset failed, ret:" << ret;
+  }
+
   size_t in_hw_size = in_width_ * in_height_;
   size_t out_hw_size = out_width_ * out_height_;
 

@@ -37,7 +37,7 @@ class OptimizeIRPassLib {
   SubstitutionPtr special_op_eliminate_;
   SubstitutionPtr zero_like_fill_zero_;
   SubstitutionPtr adjust_all_reduce_mul_add_;
-
+  SubstitutionPtr float_depend_g_call_;
   //  ops eliminate
   SubstitutionPtr item_tuple_or_list_eliminate_;
   SubstitutionPtr tile_eliminate_;
@@ -52,6 +52,8 @@ class OptimizeIRPassLib {
   SubstitutionPtr depend_value_elim_;
   SubstitutionPtr all_reduce_const_elim_;
   SubstitutionPtr mirror_mini_step_elim_;
+  SubstitutionPtr virtual_add_elim_;
+  SubstitutionPtr mini_step_allgather_replace_;
 
   // Env Item Eliminate
   SubstitutionPtr env_get_item_eliminate_;
@@ -73,6 +75,7 @@ class OptimizeIRPassLib {
   SubstitutionPtr float_tuple_getitem_switch_;
   SubstitutionPtr float_env_getitem_switch_;
   SubstitutionPtr convert_switch_replacement_;
+  SubstitutionPtr exchange_switch_depend_value_;
 
   // AddN
   SubstitutionPtr merge_addn_;
@@ -82,7 +85,6 @@ class OptimizeIRPassLib {
   SubstitutionPtr accumulaten_eliminater_;
 
   // Gradient irpasses
-  SubstitutionPtr expand_jprim_;
   SubstitutionPtr minmaximum_grad_;
 
   // inline
@@ -90,6 +92,12 @@ class OptimizeIRPassLib {
   SubstitutionPtr inline_without_move_;
   SubstitutionPtr replace_applicator_;
   SubstitutionPtr specialize_transform_;
+
+  // Auto-monad related eliminaters.
+  SubstitutionPtr updatestate_eliminater_;
+  SubstitutionPtr switch_call_monad_eliminater_;
+  SubstitutionPtr stopgrad_eliminater_;
+  SubstitutionPtr load_eliminater_;
 
   // Incorporation
   SubstitutionPtr incorporate_getitem_set_;
@@ -122,6 +130,9 @@ class OptimizeIRPassLib {
   // RowTensor Eliminate
   SubstitutionPtr row_tensor_eliminate_;
 
+  // RowTensorAddZerosLike Eliminate
+  SubstitutionPtr row_tensor_add_zeros_like_;
+
   // SparseTensor Eliminate
   SubstitutionPtr sparse_tensor_eliminate_;
 
@@ -141,9 +152,10 @@ class ResolveIRPassLib {
   ResolveIRPassLib();
   ~ResolveIRPassLib() = default;
 
-  SubstitutionPtr resolver_resolve_attr_;
+  SubstitutionPtr resolver_resolve_and_getattr_;
   SubstitutionPtr resolver_resolve_;
   SubstitutionPtr resolver_getattr_;
+  SubstitutionPtr resolver_getattr_resolve_;
 };
 
 class InferenceOptPrepareLib {
@@ -175,6 +187,13 @@ inline bool IsParam(const AnfNodePtr &node) {
     return node->isa<Parameter>();
   }
   return false;
+}
+
+inline bool IsLoad(const AnfNodePtr &node) {
+  if (node == nullptr || !node->isa<CNode>()) {
+    return false;
+  }
+  return IsPrimitiveCNode(node, prim::kPrimLoad);
 }
 
 // Check if CNode Input 0 is Func Graph

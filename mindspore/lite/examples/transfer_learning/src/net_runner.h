@@ -22,7 +22,7 @@
 #include <map>
 #include <vector>
 #include <string>
-#include "include/train_session.h"
+#include "include/train/train_session.h"
 #include "include/ms_tensor.h"
 #include "src/dataset.h"
 
@@ -45,7 +45,8 @@ class NetRunner {
   DataSet ds_;
   mindspore::session::TrainSession *session_ = nullptr;
 
-  std::string ms_file_ = "";
+  std::string ms_backbone_file_ = "";
+  std::string ms_head_file_ = "";
   std::string data_dir_ = "";
   size_t data_size_ = 0;
   size_t batch_size_ = 0;

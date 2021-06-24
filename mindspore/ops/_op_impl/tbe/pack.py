@@ -16,13 +16,14 @@
 """Pack op"""
 from mindspore.ops.op_info_register import op_info_register, TBERegOp, DataType
 
-pack_op_info = TBERegOp("Pack") \
+stack_op_info = TBERegOp("Stack") \
     .fusion_type("OPAQUE") \
     .async_flag(False) \
     .binfile_name("pack.so") \
     .compute_cost(10) \
     .kernel_name("pack") \
     .partial_flag(True) \
+    .need_check_supported(True) \
     .attr("axis", "optional", "int", "all") \
     .input(0, "x", False, "dynamic", "all") \
     .output(0, "y", False, "required", "all") \
@@ -51,7 +52,7 @@ pack_op_info = TBERegOp("Pack") \
     .get_op_info()
 
 
-@op_info_register(pack_op_info)
+@op_info_register(stack_op_info)
 def _pack_tbe():
     """Pack TBE register"""
     return

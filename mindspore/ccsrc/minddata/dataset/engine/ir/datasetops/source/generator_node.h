@@ -22,6 +22,8 @@
 #include <vector>
 
 #include "minddata/dataset/engine/ir/datasetops/dataset_node.h"
+#include "minddata/dataset/engine/ir/datasetops/epoch_ctrl_node.h"
+#include "minddata/dataset/engine/ir/datasetops/repeat_node.h"
 #include "minddata/dataset/util/status.h"
 
 namespace mindspore {
@@ -32,10 +34,11 @@ class GeneratorNode : public MappableSourceNode {
  public:
   /// \brief Constructor
   GeneratorNode(py::function generator_function, const std::vector<std::string> &column_names,
-                const std::vector<DataType> &column_types);
+                const std::vector<DataType> &column_types, int64_t source_len, std::shared_ptr<SamplerObj> sampler);
 
   /// \brief Constructor
-  GeneratorNode(py::function generator_function, const std::shared_ptr<SchemaObj> &schema);
+  GeneratorNode(py::function generator_function, const std::shared_ptr<SchemaObj> &schema, int64_t source_len,
+                std::shared_ptr<SamplerObj> sampler);
 
   /// \brief Destructor
   ~GeneratorNode() = default;
@@ -65,18 +68,58 @@ class GeneratorNode : public MappableSourceNode {
   /// \return Status Status::OK() if get shard id successfully
   Status GetShardId(int32_t *shard_id) override;
 
-  /// \brief Setter for DatasetSize in GeneratorNode
-  /// \param[in] sz dataset size to set
-  /// \return void
-  void SetGeneratorDatasetSize(int64_t sz) { dataset_size_ = sz; }
-
   bool IsSizeDefined() override { return false; }
+
+  /// \brief Record the vector of Repeat/EpochCtrl nodes that are ancestors of this node
+  /// \param[in] the ancestor node
+  /// \return Status of the function
+  Status AddResetAncestor(const std::shared_ptr<RepeatNode> &src) {
+    CHECK_FAIL_RETURN_UNEXPECTED(reset_ancestor_ == nullptr, "Internal error: Overwriting an existing value");
+    reset_ancestor_ = src;
+    return Status::OK();
+  }
+  /// Returns the dataset size of GeneratorOp. If is mappable (sampler isn not null), the sampler is used.
+  /// Otherwise, a dry run is needed.
+  /// \param[in] size_getter TreeConsumer to be used for a dryrun
+  /// \param[in] estimate
+  /// \param[out] dataset_size
+  /// \return Status of the function
+  Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
+                        int64_t *dataset_size) override;
+
+  /// \brief Getter functions
+  const py::function &GeneratorFunction() const { return generator_function_; }
+  const std::vector<std::string> &ColumnNames() const { return column_names_; }
+  const std::vector<DataType> &ColumnTypes() const { return column_types_; }
+  const std::shared_ptr<SchemaObj> &Schema() const { return schema_; }
+
+  /// \brief Sampler getter
+  /// \return SamplerObj of the current node
+  std::shared_ptr<SamplerObj> Sampler() override { return sampler_; }
+
+  /// \brief Sampler setter
+  void SetSampler(std::shared_ptr<SamplerObj> sampler) override { sampler_ = sampler; }
 
  private:
   py::function generator_function_;
   std::vector<std::string> column_names_;
   std::vector<DataType> column_types_;
   std::shared_ptr<SchemaObj> schema_;
+  std::shared_ptr<RepeatNode> reset_ancestor_;  // updated its immediate Repeat/EpochCtrl ancestor in GeneratorNodePass
+  std::shared_ptr<SamplerObj> sampler_;
+  int64_t source_len_;  // Length of the dataset source provided by the user, -1 means it's unknown
+
+  /// \brief Base-class override for accepting IRNodePass visitor
+  /// \param[in] p The node to visit
+  /// \param[out] modified Indicator if the node was modified
+  /// \return Status of the node visit
+  Status Accept(IRNodePass *p, bool *const modified) override;
+
+  /// \brief Base-class override for accepting IRNodePass visitor
+  /// \param[in] p The node to visit
+  /// \param[out] modified Indicator if the node was modified
+  /// \return Status of the node visit
+  Status AcceptAfter(IRNodePass *p, bool *const modified) override;
 };
 
 }  // namespace dataset

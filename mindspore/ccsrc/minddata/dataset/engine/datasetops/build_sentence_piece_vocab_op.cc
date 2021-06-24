@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,12 +18,11 @@
 
 #include <iomanip>
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
 BuildSentencePieceVocabOp::BuildSentencePieceVocabOp(std::shared_ptr<SentencePieceVocab> vocab,
-                                                     std::vector<std::string> col_names, uint32_t vocab_size,
+                                                     std::vector<std::string> col_names, int32_t vocab_size,
                                                      float character_coverage, SentencePieceModel model_type,
                                                      const std::unordered_map<std::string, std::string> &params,
                                                      int32_t op_conn_size)
@@ -42,11 +41,11 @@ BuildSentencePieceVocabOp::BuildSentencePieceVocabOp(std::shared_ptr<SentencePie
 
 Status BuildSentencePieceVocabOp::operator()() {
   if (tree_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
   }
   RETURN_IF_NOT_OK(sentence_queue_->Register(tree_->AllTasks()));
-  RETURN_IF_NOT_OK(
-    tree_->AllTasks()->CreateAsyncTask("sentenceTask", std::bind(&BuildSentencePieceVocabOp::SentenceThread, this)));
+  RETURN_IF_NOT_OK(tree_->AllTasks()->CreateAsyncTask(
+    "sentenceTask", std::bind(&BuildSentencePieceVocabOp::SentenceThread, this), nullptr, id()));
   TaskManager::FindMe()->Post();
   child_iterator_ = std::make_unique<ChildIterator>(this, 0, 0);
   TensorRow new_row;
@@ -84,10 +83,10 @@ Status BuildSentencePieceVocabOp::SentenceThread() {
   sentencepiece::util::Status s_status =
     sentencepiece::SentencePieceTrainer::Train(BuildParams(), sentence_iter.get(), &model_proto);
   if (!s_status.ok()) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, s_status.message());
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, s_status.message());
   } else {
     if (vocab_ == nullptr) {
-      return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+      return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                     "Invalid parameter, sentencepiece vocab not set.");
     }
     vocab_->set_model_proto(model_proto);
@@ -145,7 +144,7 @@ void BuildSentencePieceVocabOp::Next(std::string *sentence) {
 
   if (new_row[col_id_]->type().IsNumeric() || new_row[col_id_]->Rank() > 1) {
     ret_status_ =
-      Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+      Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
              "Invalid data, build_sentence_piece_vocab only works on string data with rank equal to 1, got type: " +
                new_row[col_id_]->type().ToString() + "and rank: " + std::to_string(new_row[col_id_]->Rank()));
     read_done_ = true;
@@ -158,12 +157,6 @@ void BuildSentencePieceVocabOp::Next(std::string *sentence) {
   std::string st{sentence_v};
   *sentence = st;
   ret_status_ = Status::OK();
-}
-
-// Pre-Visitor accept method for NodePass
-Status BuildSentencePieceVocabOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call the pre-visitation
-  return p->PreRunOnNode(shared_from_base<BuildSentencePieceVocabOp>(), modified);
 }
 
 Status BuildSentencePieceVocabOp::Builder::Build(std::shared_ptr<BuildSentencePieceVocabOp> *op) {

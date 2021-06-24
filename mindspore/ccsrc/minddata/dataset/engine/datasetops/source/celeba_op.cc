@@ -1,6 +1,6 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
-
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -23,7 +23,6 @@
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
 #include "minddata/dataset/engine/data_schema.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #ifndef ENABLE_ANDROID
 #include "minddata/dataset/kernels/image/image_utils.h"
 #else
@@ -59,7 +58,7 @@ Status CelebAOp::Builder::Build(std::shared_ptr<CelebAOp> *op) {
                                    builder_op_connector_size_, builder_decode_, builder_usage_, builder_extensions_,
                                    std::move(builder_schema_), std::move(builder_sampler_));
   if (*op == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "CelebAOp init failed.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "CelebAOp init failed.");
   }
 
   return Status::OK();
@@ -74,7 +73,7 @@ Status CelebAOp::Builder::SanityCheck() {
   err_msg += builder_num_workers_ <= 0 ? "Invalid parameter, num_parallel_workers must be greater than 0, but got " +
                                            std::to_string(builder_num_workers_) + ".\n"
                                        : "";
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 CelebAOp::CelebAOp(int32_t num_workers, int32_t rows_per_buffer, const std::string &dir, int32_t queue_size,
@@ -87,6 +86,7 @@ CelebAOp::CelebAOp(int32_t num_workers, int32_t rows_per_buffer, const std::stri
       extensions_(exts),
       data_schema_(std::move(schema)),
       num_rows_in_attr_file_(0),
+      attr_file_(""),
       usage_(usage) {
   attr_info_queue_ = std::make_unique<Queue<std::vector<std::string>>>(queue_size);
   io_block_queues_.Init(num_workers_, queue_size);
@@ -94,15 +94,17 @@ CelebAOp::CelebAOp(int32_t num_workers, int32_t rows_per_buffer, const std::stri
 
 Status CelebAOp::LaunchThreadsAndInitOp() {
   if (tree_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
   }
 
   RETURN_IF_NOT_OK(io_block_queues_.Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(attr_info_queue_->Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(wait_for_workers_post_.Register(tree_->AllTasks()));
 
-  RETURN_IF_NOT_OK(tree_->AllTasks()->CreateAsyncTask("Walking attr file", std::bind(&CelebAOp::ParseAttrFile, this)));
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_, std::bind(&CelebAOp::WorkerEntry, this, std::placeholders::_1)));
+  RETURN_IF_NOT_OK(
+    tree_->AllTasks()->CreateAsyncTask("Walking attr file", std::bind(&CelebAOp::ParseAttrFile, this), nullptr, id()));
+  RETURN_IF_NOT_OK(
+    tree_->LaunchWorkers(num_workers_, std::bind(&CelebAOp::WorkerEntry, this, std::placeholders::_1), Name(), id()));
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(ParseImageAttrInfo());
   RETURN_IF_NOT_OK(sampler_->HandshakeRandomAccessOp(this));
@@ -116,10 +118,11 @@ Status CelebAOp::ParseAttrFile() {
   std::ifstream attr_file((folder_path / "list_attr_celeba.txt").toString());
   if (!attr_file.is_open()) {
     std::string attr_file_name = (folder_path / "list_attr_celeba.txt").toString();
-    return Status(StatusCode::kFileNotExist, __LINE__, __FILE__,
+    return Status(StatusCode::kMDFileNotExist, __LINE__, __FILE__,
                   "Invalid file, failed to open Celeba attr file: " + attr_file_name);
   }
 
+  attr_file_ = (folder_path / "list_attr_celeba.txt").toString();
   const auto PushBackToQueue = [this](std::vector<std::string> &vec, std::ifstream &attr_file,
                                       std::ifstream &partition_file) {
     Status s = attr_info_queue_->EmplaceBack(vec);
@@ -364,7 +367,7 @@ Status CelebAOp::WorkerEntry(int32_t worker_id) {
     }
     RETURN_IF_NOT_OK(io_block_queues_[worker_id]->PopFront(&io_block));
   }
-  return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Unexpected nullptr received in worker.");
+  return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Unexpected nullptr received in worker.");
 }
 
 Status CelebAOp::LoadBuffer(const std::vector<int64_t> &keys, std::unique_ptr<DataBuffer> *db) {
@@ -392,7 +395,7 @@ Status CelebAOp::LoadTensorRow(row_id_type row_id, const std::pair<std::string, 
     if (rc.IsError()) {
       image = nullptr;
       std::string err_msg = "Invalid data, failed to decode image: " + image_path.toString();
-      return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+      return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
     }
   }
 
@@ -409,6 +412,8 @@ Status CelebAOp::LoadTensorRow(row_id_type row_id, const std::pair<std::string, 
   label->Squeeze();
 
   (*row) = TensorRow(row_id, {std::move(image), std::move(label)});
+  // Add file path info
+  row->setPath({image_path.toString(), attr_file_});
   return Status::OK();
 }
 
@@ -432,12 +437,6 @@ Status CelebAOp::Reset() {
   MS_LOG(DEBUG) << Name() << " performing a self-reset.";
   RETURN_IF_NOT_OK(sampler_->ResetSampler());
   return Status::OK();
-}
-
-// Visitor accept method for NodePass
-Status CelebAOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<CelebAOp>(), modified);
 }
 
 Status CelebAOp::ComputeColMap() {

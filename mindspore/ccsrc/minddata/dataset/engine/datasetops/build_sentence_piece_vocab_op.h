@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,7 +63,7 @@ class BuildSentencePieceVocabOp : public PipelineOp {
     }
 
     // Setter method
-    // @param float charactor corverage - to determine the minimum symbols
+    // @param float character corverage - to determine the minimum symbols
     // @return Builder & reference to builder class object
     Builder &SetCharacterCoverage(float character_coverage) {
       builder_character_coverage_ = character_coverage;
@@ -134,7 +134,7 @@ class BuildSentencePieceVocabOp : public PipelineOp {
   };
 
   BuildSentencePieceVocabOp(std::shared_ptr<SentencePieceVocab> vocab, std::vector<std::string> col_names,
-                            uint32_t vocab_size, float character_coverage, SentencePieceModel model_type,
+                            int32_t vocab_size, float character_coverage, SentencePieceModel model_type,
                             const std::unordered_map<std::string, std::string> &params, int32_t op_conn_size);
 
   ~BuildSentencePieceVocabOp() = default;
@@ -166,15 +166,10 @@ class BuildSentencePieceVocabOp : public PipelineOp {
   bool Done();
   void Next(std::string *sentence);
 
-  /// \param[in] p The node to visit
-  /// \param[out] modified Indicator if the node was modified
-  /// \return Status of the node visit
-  Status PreAccept(NodePass *p, bool *modified) override;
-
  private:
   bool read_done_;
   Status ret_status_;
-  uint32_t vocab_size_;
+  int32_t vocab_size_;
   float character_coverage_;
   SentencePieceModel model_type_;
   std::unordered_map<std::string, std::string> params_;

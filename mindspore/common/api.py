@@ -27,7 +27,7 @@ from .._c_expression import generate_key, Executor_, Tensor, MetaTensor, Pynativ
 from .._c_expression import verify_inputs_signature, init_exec_dataset, _set_dataset_mode_config, init_pipeline
 from ..parallel._ps_context import _is_role_pserver
 from ..parallel._utils import _get_device_num, _get_global_rank, _need_to_full, _check_full_batch, _to_full_tensor, \
-    _get_parameter_broadcast
+    _get_parameter_broadcast, _get_pipeline_stages
 
 # store ms_function class compiled pipeline cache
 ms_compile_cache = {}
@@ -208,7 +208,13 @@ class _MindSporeFunction:
 
         if context.get_context("precompile_only"):
             return None
-        return self._executor(args_list, phase)
+        new_inputs = []
+        for i in args_list:
+            if isinstance(i, Tensor):
+                new_inputs.append(i)
+            elif context.get_context("grad_for_scalar") and isinstance(i, (int, float)):
+                new_inputs.append(i)
+        return self._executor(tuple(new_inputs), phase)
 
 
 def ms_function(fn=None, obj=None, input_signature=None):
@@ -221,11 +227,10 @@ def ms_function(fn=None, obj=None, input_signature=None):
         fn (Function): The Python function that will be run as a graph. Default: None.
         obj (Object): The Python Object that provides the information for identifying the compiled function.Default:
             None.
-        input_signature (MetaTensor): The MetaTensor which describes the input arguments. The MetaTensor specifies
-            the shape and dtype of the Tensor and they will be supplied to this function. If input_signature
-            is specified, each input to `fn` must be a `Tensor`. And the input parameters of `fn` cannot accept
-            `**kwargs`. The shape and dtype of actual inputs should keep the same as input_signature. Otherwise,
-            TypeError will be raised. Default: None.
+        input_signature (Tensor): The Tensor which describes the input arguments. The shape and dtype of the Tensor
+            will be supplied to this function. If input_signature is specified, each input to `fn` must be a `Tensor`.
+            And the input parameters of `fn` cannot accept `**kwargs`. The shape and dtype of actual inputs should
+            keep the same as input_signature. Otherwise, TypeError will be raised. Default: None.
 
     Returns:
         Function, if `fn` is not None, returns a callable function that will execute the compiled function; If `fn` is
@@ -255,8 +260,8 @@ def ms_function(fn=None, obj=None, input_signature=None):
         >>> out = tensor_add_with_dec(x, y)
         ...
         >>> # create a callable MindSpore graph through decorator @ms_function with input_signature parameter
-        >>> @ms_function(input_signature=(MetaTensor(mindspore.float32, (1, 1, 3, 3)),
-        ...                               MetaTensor(mindspore.float32, (1, 1, 3, 3))))
+        >>> @ms_function(input_signature=(Tensor(np.ones([1, 1, 3, 3]).astype(np.float32)),
+        ...                               Tensor(np.ones([1, 1, 3, 3]).astype(np.float32))))
         ... def tensor_add_with_sig(x, y):
         ...     z = x + y
         ...     return z
@@ -294,6 +299,48 @@ def _generate_pip_args(obj, *args, method="construct"):
     return args_names, args_list
 
 
+def _get_auto_split_param_names(parameter_layout_dict):
+    auto_split_param_names = []
+    for key, value in parameter_layout_dict.items():
+        for dim in value[1]:
+            if dim != -1:
+                auto_split_param_names.append(key)
+                break
+    return auto_split_param_names
+
+
+def _build_broadcast_graph(broadcast_params_dict, broadcast_phase):
+    """Build broadcast graph."""
+    from mindspore.nn.wrap.cell_wrapper import _BroadCastCell
+
+    if not broadcast_params_dict:
+        broadcast_params_dict = {}
+    broadcast_params = []
+    for param in broadcast_params_dict.values():
+        broadcast_params.append(Tensor(param.asnumpy()))
+    _broadcast_net = _BroadCastCell(broadcast_params)
+    _broadcast_net.phase = broadcast_phase
+    broadcasted_params = _broadcast_net()
+    for param_name, param in zip(broadcast_params_dict.keys(), broadcasted_params):
+        broadcast_params_dict[param_name].set_data(param)
+
+
+def _parameter_broadcast(obj, auto_parallel_mode):
+    """Parameter broadcast."""
+    auto_split_param_names = []
+    if auto_parallel_mode:
+        auto_split_param_names = _get_auto_split_param_names(obj.parameter_layout_dict)
+
+    broadcast_params_dict = obj.parameters_broadcast_dict()
+    if auto_split_param_names and broadcast_params_dict:
+        broadcast_params_dict = OrderedDict()
+        for param_name, param in obj.parameters_broadcast_dict().items():
+            if param_name not in auto_split_param_names:
+                broadcast_params_dict[param_name] = param
+    broadcast_phase = "_broadcast_subgraph"
+    _build_broadcast_graph(broadcast_params_dict, broadcast_phase)
+
+
 class _PynativeExecutor:
     """
     An pynative executor used to compile/manage/run graph.
@@ -314,11 +361,17 @@ class _PynativeExecutor:
     def check_graph(self, obj, *args, **kwargs):
         return self._executor.check_graph(obj, *args, *(kwargs.values()))
 
+    def check_run(self, obj, *args, **kwargs):
+        return self._executor.check_run(obj, *args, *(kwargs.values()))
+
     def grad(self, grad, obj, weights, *args, **kwargs):
         self._executor.grad_net(grad, obj, weights, *args, *(kwargs.values()))
 
-    def clear(self, cell_id=""):
-        self._executor.clear(cell_id)
+    def del_cell(self, cell_id=""):
+        self._executor.clear_cell(cell_id)
+
+    def clear_grad(self, obj, *args, **kwargs):
+        self._executor.clear_grad(obj, *args, *(kwargs.values()))
 
     def sync(self):
         self._executor.sync()
@@ -331,6 +384,10 @@ class _PynativeExecutor:
 
     def leave_construct(self, cell):
         self._executor.leave_construct(cell)
+
+    def parameter_broadcast(self, obj, phase, auto_parallel_mode):
+        if BROADCAST_PHASE not in phase and _get_parameter_broadcast():
+            _parameter_broadcast(obj, auto_parallel_mode)
 
     def __call__(self, obj, *args, **kwargs):
         args = args + tuple(kwargs.values())
@@ -384,31 +441,6 @@ class _Executor:
     def _build_data_graph(self, obj, phase):
         self._executor.build_data_graph(obj.parameters_dict(), phase, obj.parameters_broadcast_dict())
 
-    def _get_auto_split_param_names(self, parameter_layout_dict):
-        auto_split_params = {}
-        for key, value in parameter_layout_dict.items():
-            for dim in value[1]:
-                if dim != -1:
-                    auto_split_params[key] = value
-                    break
-        auto_split_param_names = (param_name for param_name in auto_split_params)
-        return auto_split_param_names
-
-    def _build_broadcast_graph(self, broadcast_params_dict, broadcast_phase):
-        """Build broadcast graph."""
-        from mindspore.nn.wrap.cell_wrapper import _BroadCastCell
-
-        if not broadcast_params_dict:
-            broadcast_params_dict = {}
-        broadcast_params = []
-        for param in broadcast_params_dict.values():
-            broadcast_params.append(Tensor(param.asnumpy()))
-        _broadcast_net = _BroadCastCell(broadcast_params)
-        _broadcast_net.phase = broadcast_phase
-        broadcasted_params = _broadcast_net()
-        for param_name, param in zip(broadcast_params_dict.keys(), broadcasted_params):
-            broadcast_params_dict[param_name].set_data(param)
-
     def _set_dataset_mode(self, args_list):
         """set dataset mode."""
         # decide whether to sink based on whether the inputs is virtual or args_list is ()
@@ -433,59 +465,19 @@ class _Executor:
             Str, the full phase of the cell.
             Bool, if the graph has been compiled before, return False, else return True.
         """
-        from mindspore import nn
-        from mindspore.ops.composite import GradOperation
-
-        class InputsToAttrCell(nn.Cell):
-            """The cell that converts non-tensor inputs to attr."""
-
-            def __init__(self, net, args_names, non_tensor_inputs):
-                super(InputsToAttrCell, self).__init__()
-                self.net = net
-                self.args_names = args_names
-                self.non_tensor_inputs = non_tensor_inputs
-                self.inputs_to_attr = True
-
-            def construct(self, *tensor_inputs):
-                real_inputs = ()
-                index = 0
-                for i in args_names:
-                    if i in self.non_tensor_inputs.keys():
-                        real_inputs += (self.non_tensor_inputs[i],)
-                    else:
-                        real_inputs += (tensor_inputs[index],)
-                        index += 1
-                return self.net(*real_inputs)
 
         args_names, args_list = _generate_pip_args(obj, *args)
-        if not hasattr(obj, "inputs_to_attr"):
-            dic = dict(zip(args_names, args_list))
-            key = generate_key(phase, dic)
-            obj.phase_prefix = str(key[1])
-            if 'export' in phase:
-                phase = phase + '.' + obj.phase_prefix + '.' + str(obj.create_time)
-            else:
-                phase = obj.phase_prefix + phase + '.' + str(obj.create_time)
+        dic = dict(zip(args_names, args_list))
+        key = generate_key(phase, dic)
+        obj.phase_prefix = str(key[1])
+        if 'export' in phase:
+            phase = phase + '.' + obj.phase_prefix + '.' + str(obj.create_time)
+        else:
+            phase = obj.phase_prefix + phase + '.' + str(obj.create_time)
 
-            if phase in self.compile_cache.keys():
-                logger.debug("%r graph has existed.", phase)
-                return phase, False
-
-        if getattr(obj, "support_non_tensor_inputs", None):
-            for i in obj.__dict__.values():
-                if isinstance(i, GradOperation):
-                    raise ValueError("Not support set 'support_non_tensor_inputs' to the 'True' for grad net, "
-                                     "only support forward net.")
-            attrs = {}
-            inputs = []
-            for key, value in dic.items():
-                if not isinstance(value, (Tensor, MetaTensor)):
-                    attrs[key] = value
-                else:
-                    inputs.append(value)
-            if attrs:
-                inputs_to_attr_cell = InputsToAttrCell(obj, args_names, attrs)
-                return self.compile(inputs_to_attr_cell, *inputs, phase=phase)
+        if phase in self.compile_cache.keys():
+            logger.debug("%r graph has existed.", phase)
+            return phase, False
 
         obj.check_names()
         _check_full_batch()
@@ -507,21 +499,11 @@ class _Executor:
 
         if graph is None:
             logger.error("%r graph compile failed.", phase)
+
+        self._auto_parallel_process(obj, phase, is_sink_mode, auto_parallel_mode, *args)
+
         if not do_convert:
             return phase, True
-
-        if auto_parallel_mode:
-            obj.parameter_layout_dict = self._executor.get_parameter_layout(phase)
-        replace = obj.init_parameters_data(auto_parallel_mode=auto_parallel_mode)
-        if not enable_debug_runtime or enable_ge:
-            if auto_parallel_mode:
-                obj.load_parameter_slice(None)
-
-        self._updata_param_node_default_input(phase, replace)
-
-        # set parallel inputs in sink mode
-        if auto_parallel_mode and is_sink_mode:
-            obj.set_parallel_input_with_inputs(*args)
 
         # the following GE init process is not needed when use vm or ms backend
         if enable_ge:
@@ -533,20 +515,30 @@ class _Executor:
         elif not enable_ge and "export" in phase:
             self._build_data_graph(obj, phase)
         elif BROADCAST_PHASE not in phase and _get_parameter_broadcast():
-            auto_split_param_names = []
-            if auto_parallel_mode:
-                auto_split_param_names = self._get_auto_split_param_names(obj.parameter_layout_dict)
-
-            broadcast_params_dict = obj.parameters_broadcast_dict()
-            if auto_split_param_names and broadcast_params_dict:
-                broadcast_params_dict = OrderedDict()
-                for param_name, param in obj.parameters_broadcast_dict().items():
-                    if param_name not in auto_split_param_names:
-                        broadcast_params_dict[param_name] = param
-            broadcast_phase = "_broadcast_subgraph"
-            self._build_broadcast_graph(broadcast_params_dict, broadcast_phase)
+            _parameter_broadcast(obj, auto_parallel_mode)
 
         return phase, True
+
+    def _auto_parallel_process(self, obj, phase, is_sink_mode, auto_parallel_mode, *args):
+        """compile graph in auto parallel mode."""
+        if not auto_parallel_mode:
+            replace = obj.init_parameters_data(auto_parallel_mode=auto_parallel_mode)
+            self._updata_param_node_default_input(phase, replace)
+            return
+
+        obj.parameter_layout_dict = self._executor.get_parameter_layout(phase)
+        if _get_pipeline_stages() > 1:
+            obj.parallel_parameter_name_list = self._executor.get_parallel_parameter_name_list(phase)
+            obj.remove_redundant_parameters()
+        replace = obj.init_parameters_data(auto_parallel_mode=True)
+        if not context.get_context("enable_debug_runtime") or context.get_context("enable_ge"):
+            obj.load_parameter_slice(None)
+
+        self._updata_param_node_default_input(phase, replace)
+
+        # set parallel inputs in sink mode
+        if is_sink_mode:
+            obj.set_parallel_input_with_inputs(*args)
 
     def _updata_param_node_default_input(self, phase, replace):
         new_param = {x.name: replace[x] for x in replace if id(x) != id(replace[x])}

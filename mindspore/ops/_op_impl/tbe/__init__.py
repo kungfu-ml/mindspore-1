@@ -65,6 +65,9 @@ from .max_pool import _max_pool_tbe
 from .max_pool_grad import _max_pool_grad_tbe
 from .max_pool_grad_with_argmax import _max_pool_grad_with_argmax_tbe
 from .max_pool_with_argmax import _max_pool_with_argmax_tbe
+from .max_pool3d import _max_pool_3d_tbe
+from .max_pool3d_grad import _max_pool_3d_grad_tbe
+from .max_pool3d_grad_grad import _max_pool_3d_grad_grad_tbe
 from .mul import _mul_tbe
 from .mul_ds import _mul_ds_tbe
 from .real_div import _real_div_tbe
@@ -170,6 +173,7 @@ from .minimum_ds import _minimum_ds_tbe
 from .minimum_grad import _minimum_grad_tbe
 from .maximum_grad import _maximum_grad_tbe
 from .concat import _concat_tbe
+from .concat_ds import _concat_ds_tbe
 from .slice import _slice_tbe
 from .sign import _sign_tbe
 from .greater import _greater_tbe
@@ -253,6 +257,7 @@ from .prelu import _prelu_tbe
 from .prelu_grad import _prelu_grad_tbe
 from .binary_cross_entropy import _binary_cross_entropy_tbe
 from .binary_cross_entropy_grad import _binary_cross_entropy_grad_tbe
+from .bce_with_logits_loss import _bce_with_logits_loss_op_tbe
 from .sin import _sin_tbe
 from .cos import _cos_tbe
 from .tan import _tan_tbe
@@ -353,3 +358,9 @@ from .conv3d_backprop_filter import _conv3d_backprop_filter_tbe
 from .conv3d_transpose import _conv3d_transpose_tbe
 from .lamb_apply_optimizer_assign import _lamb_apply_optimizer_assign_tbe
 from .lamb_apply_weight_assign import _lamb_apply_weight_assign_tbe
+from .nll_loss import _nll_loss_tbe
+from .nll_loss_grad import _nll_loss_grad_tbe
+from .mish import _mish_tbe
+from .mul_no_nan import _mul_no_nan_tbe
+from .selu import _selu_tbe
+from .centralization import _centralization_tbe

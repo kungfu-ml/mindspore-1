@@ -19,11 +19,12 @@ import mindspore.nn as nn
 from mindspore.ops import operations as P
 from mindspore.common.tensor import Tensor
 from mindspore.ops import functional as F
+import mindspore.common.dtype as mstype
 
 
 def weight_init_ones(shape):
     """Weight init."""
-    return Tensor(np.array(np.ones(shape).astype(np.float32) * 0.01).astype(np.float16))
+    return Tensor(np.array(np.ones(shape).astype(np.float32) * 0.01).astype(np.float32))
 
 
 def _conv(in_channels, out_channels, kernel_size=3, stride=1, padding=0, pad_mode='pad'):
@@ -32,15 +33,15 @@ def _conv(in_channels, out_channels, kernel_size=3, stride=1, padding=0, pad_mod
     weights = weight_init_ones(shape)
     return nn.Conv2d(in_channels, out_channels,
                      kernel_size=kernel_size, stride=stride, padding=padding,
-                     pad_mode=pad_mode, weight_init=weights, has_bias=False)
+                     pad_mode=pad_mode, weight_init=weights, has_bias=False).to_float(mstype.float16)
 
 
 def _BatchNorm2dInit(out_chls, momentum=0.1, affine=True, use_batch_statistics=True):
     """Batchnorm2D wrapper."""
-    gamma_init = Tensor(np.array(np.ones(out_chls)).astype(np.float16))
-    beta_init = Tensor(np.array(np.ones(out_chls) * 0).astype(np.float16))
-    moving_mean_init = Tensor(np.array(np.ones(out_chls) * 0).astype(np.float16))
-    moving_var_init = Tensor(np.array(np.ones(out_chls)).astype(np.float16))
+    gamma_init = Tensor(np.array(np.ones(out_chls)).astype(np.float32))
+    beta_init = Tensor(np.array(np.ones(out_chls) * 0).astype(np.float32))
+    moving_mean_init = Tensor(np.array(np.ones(out_chls) * 0).astype(np.float32))
+    moving_var_init = Tensor(np.array(np.ones(out_chls)).astype(np.float32))
 
     return nn.BatchNorm2d(out_chls, momentum=momentum, affine=affine, gamma_init=gamma_init,
                           beta_init=beta_init, moving_mean_init=moving_mean_init,
@@ -83,7 +84,7 @@ class ResNetFea(nn.Cell):
         self.conv1 = _conv(3, 64, kernel_size=7, stride=2, padding=3, pad_mode='pad')
         self.bn1 = _BatchNorm2dInit(64, affine=bn_training, use_batch_statistics=bn_training)
         self.relu = P.ReLU()
-        self.maxpool = P.MaxPool(ksize=3, strides=2, padding="SAME")
+        self.maxpool = P.MaxPool(kernel_size=3, strides=2, pad_mode="SAME")
         self.weights_update = weights_update
 
         if not self.weights_update:
@@ -218,7 +219,7 @@ class ResidualBlockUsing(nn.Cell):
                 self.bn_down_sample = self.bn_down_sample.set_train()
             if not weights_update:
                 self.conv_down_sample.weight.requires_grad = False
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, x):
         identity = x

@@ -31,7 +31,6 @@ namespace mindspore {
 using mindspore::lite::QuantArg;
 using mindspore::lite::Tensor;
 using mindspore::schema::Format_NHWC;
-using mindspore::schema::NodeType_Parameter;
 class TestDeconvInt8 : public mindspore::CommonTest {
  public:
   TestDeconvInt8() {}
@@ -323,8 +322,8 @@ TEST_F(TestDeconvInt8, DeConvInt8Test1) {
   ASSERT_EQ(lite::RET_OK, ctx->Init());
   int8_t *correct;
   int total_size = DeConvInt8TestInit1(&inputs_, &outputs_, deconv_param, &correct);
-  auto *deconv = new mindspore::kernel::DeConvInt8CPUKernel(reinterpret_cast<OpParameter *>(deconv_param), inputs_,
-                                                            outputs_, ctx, nullptr);
+  auto *deconv =
+    new mindspore::kernel::DeConvInt8CPUKernel(reinterpret_cast<OpParameter *>(deconv_param), inputs_, outputs_, ctx);
 
   deconv->Init();
   deconv->Run();

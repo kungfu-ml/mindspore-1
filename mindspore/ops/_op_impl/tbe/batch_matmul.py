@@ -25,11 +25,12 @@ batch_matmul_op_info = TBERegOp("BatchMatMul") \
     .attr("transpose_x1", "required", "bool", "all") \
     .attr("transpose_x2", "required", "bool", "all") \
     .partial_flag(True) \
+    .need_check_supported(True) \
     .input(0, "x1", False, "required", "all") \
     .input(1, "x2", False, "required", "all") \
     .input(2, "bias", False, "optional", "all") \
     .output(0, "y", False, "required", "all") \
-    .op_pattern("dynamicFormat") \
+    .is_dynamic_format(True) \
     .dtype_format(DataType.I32_None, DataType.I32_None, DataType.I32_None, DataType.I32_None) \
     .dtype_format(DataType.F16_None, DataType.F16_None, DataType.F16_None, DataType.F16_None) \
     .dtype_format(DataType.F32_None, DataType.F32_None, DataType.F32_None, DataType.F32_None) \

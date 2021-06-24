@@ -20,15 +20,14 @@
 #include <vector>
 #include "src/lite_kernel.h"
 #include "nnacl/int8/hswish_int8.h"
-#include "nnacl/quantization/quantize.h"
+#include "mindspore/lite/nnacl/int8/quantize.h"
 
 namespace mindspore::kernel {
 class HswishInt8CPUKernel : public LiteKernel {
  public:
   HswishInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                      const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive), thread_count_(ctx->thread_num_) {}
+                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx), thread_count_(ctx->thread_num_) {}
   ~HswishInt8CPUKernel() override = default;
 
   int Init() override;

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@
 #include "pipeline/jit/pass.h"
 #include "pipeline/jit/parse/parse_base.h"
 #include "pipeline/jit/parse/data_converter.h"
+#include "pipeline/jit/static_analysis/auto_monad.h"
 #include "abstract/abstract_value.h"
 #include "pipeline/jit/static_analysis/static_analysis.h"
 #include "pipeline/jit/static_analysis/program_specialize.h"
@@ -65,6 +66,10 @@ abstract::AnalysisResult AbstractAnalyze(const ResourcePtr &res, const FuncGraph
     for (auto &node : manager->all_nodes()) {
       MS_EXCEPTION_IF_NULL(node);
       const AbstractBasePtr &prev_inferred = node->abstract();
+      // Keep previous inferred value for CNode if is loaded from MindIR.
+      if (node->isa<CNode>() && node->cast<CNodePtr>()->get_load_flag()) {
+        continue;
+      }
       // Keep previous inferred value for ValueNode if the inferred value is not AbstractFunction.
       if (!node->isa<ValueNode>() || (prev_inferred != nullptr && prev_inferred->isa<abstract::AbstractFunction>())) {
         node->set_abstract(nullptr);
@@ -106,8 +111,73 @@ FuncGraphPtr Renormalize(const ResourcePtr &res, const FuncGraphPtr &func_graph,
   MsProfile::StatTime("renormalize.infer", t2 - t1);
   MsProfile::StatTime("renormalize.specialize", t3 - t2);
 #endif
+
   MS_LOG(DEBUG) << "Renormalize end";
+
   return ret;
+}
+
+const FuncGraphPtr GetLoadedGraph(const ResourcePtr &res) {
+  MS_EXCEPTION_IF_NULL(res);
+  auto manager = res->manager();
+  MS_EXCEPTION_IF_NULL(manager);
+  FuncGraphPtr loaded_graph = nullptr;
+  size_t loaded_graph_num = 0;
+  auto all_graphs = manager->func_graphs();
+  for (auto &graph : all_graphs) {
+    MS_EXCEPTION_IF_NULL(graph);
+    if (graph->has_attr("is_load")) {
+      loaded_graph = graph;
+      loaded_graph_num += 1;
+    }
+  }
+  if (loaded_graph_num == 0) {
+    return nullptr;
+  }
+  if (loaded_graph_num == 1) {
+    return loaded_graph;
+  }
+  MS_LOG(EXCEPTION) << "The loaded sub graph currently should less than 2, but got " << loaded_graph_num;
+}
+
+void CheckRootInputShapeAndType(const ResourcePtr &res, const FuncGraphPtr &loaded_graph) {
+  MS_EXCEPTION_IF_NULL(res);
+  auto manager = res->manager();
+  MS_EXCEPTION_IF_NULL(manager);
+  FuncGraphPtr root_graph = *(manager->roots().begin());
+  auto root_inputs = root_graph->get_inputs();
+  auto loaded_inputs = loaded_graph->get_inputs();
+
+  size_t root_inputs_num = root_inputs.size();
+  size_t loaded_inputs_num = loaded_inputs.size();
+  if (root_inputs_num != loaded_inputs_num) {
+    MS_LOG(EXCEPTION) << "The inputs number " << root_inputs_num << " not equal to the inputs number of loaded graph "
+                      << loaded_inputs_num;
+  }
+  for (size_t index = 0; index < root_inputs_num; index++) {
+    auto root_input = root_inputs[index];
+    auto loaded_input = loaded_inputs[index];
+
+    auto root_shape = root_input->Shape() == nullptr ? nullptr : dyn_cast<abstract::Shape>(root_input->Shape());
+    auto loaded_shape = loaded_input->Shape() == nullptr ? nullptr : dyn_cast<abstract::Shape>(loaded_input->Shape());
+    auto root_type = root_input->Type() == nullptr ? nullptr : dyn_cast<Type>(root_input->Type());
+    auto loaded_type = loaded_input->Type() == nullptr ? nullptr : dyn_cast<Type>(loaded_input->Type());
+    MS_EXCEPTION_IF_NULL(root_shape);
+    MS_EXCEPTION_IF_NULL(loaded_shape);
+    MS_EXCEPTION_IF_NULL(root_type);
+    MS_EXCEPTION_IF_NULL(loaded_type);
+
+    if (root_shape->shape() != loaded_shape->shape()) {
+      MS_EXCEPTION(ValueError) << "The " << index
+                               << " th input shape differ from loaded graph. Input shape: " << root_shape->ToString()
+                               << ", input shape of loaded graph: " << loaded_shape->ToString();
+    }
+    if (root_type->type_id() != loaded_type->type_id()) {
+      MS_EXCEPTION(TypeError) << "The " << std::to_string(index)
+                              << " th input type differ from loaded graph. Input type: " << root_type->ToString()
+                              << ", input type of loaded graph: " << loaded_type->ToString();
+    }
+  }
 }
 
 bool ParseAction(const ResourcePtr &res) {
@@ -160,18 +230,18 @@ bool CombineLikeGraphs(const ResourcePtr &res) {
     auto &graphs = it.second;
     MS_LOG(DEBUG) << "Start combine like graph:" << it.first << ", size:" << graphs.size();
     auto fg = graphs[0];
-    FuncGraphPtrList func_graphs = {fg};
+    FuncGraphVector func_graphs = {fg};
     ClonerPtr cloner = std::make_shared<Cloner>(func_graphs, false, false, true, std::make_shared<TraceCopy>(),
                                                 std::make_shared<TraceCombileLikeGraphs>());
     cloner->Run();
     auto base_graph = cloner->cloned_func_graph()[fg];
     MS_LOG(DEBUG) << "Basegraph:" << base_graph->ToString();
 
-    if (fg->paramter_obj_nodes().size() == 0 || graphs.size() <= 1) {
+    if (fg->used_global_parameters().empty() || graphs.size() <= 1) {
       continue;
     }
     auto &cloned_nodes = *cloner->cloned_node();
-    for (auto &fv : fg->paramter_obj_nodes()) {
+    for (auto &fv : fg->used_global_parameters()) {
       TraceGuard guard(std::make_shared<TraceCombileLikeGraphs>(fv->debug_info()));
       auto param = base_graph->add_parameter();
       auto &node_users = res->manager()->node_users()[fv];
@@ -185,10 +255,10 @@ bool CombineLikeGraphs(const ResourcePtr &res) {
         repl_n->set_input(n.second, param);
       }
     }
-    MS_LOG(DEBUG) << "Fg0 paramter_obj_nodes size :" << fg->paramter_obj_nodes().size();
+    MS_LOG(DEBUG) << "Fg0 used_global_parameters size :" << fg->used_global_parameters().size();
 
     for (auto &g : graphs) {
-      auto fvs = g->paramter_obj_nodes();
+      auto &fvs = g->used_global_parameters();
       std::vector<AnfNodePtr> new_node_inputs;
       new_node_inputs.push_back(NewValueNode(base_graph));
       for (auto &p : g->parameters()) {
@@ -196,7 +266,7 @@ bool CombineLikeGraphs(const ResourcePtr &res) {
         new_node_inputs.push_back(para_after_cast);
       }
       (void)new_node_inputs.insert(new_node_inputs.end(), fvs.begin(), fvs.end());
-      AnfNodePtr out = g->NewCNode(new_node_inputs);
+      AnfNodePtr out = g->NewCNodeBefore(g->get_return(), new_node_inputs);
       g->set_output(out);
       MS_LOG(DEBUG) << "Combine graph newout:" << out->DebugString(4);
     }
@@ -209,21 +279,33 @@ bool SymbolResolveAction(const ResourcePtr &res) {
   if (res->manager() == nullptr) {
     MS_LOG(EXCEPTION) << "SymbolResolve error, manager is null";
   }
-  if (res->func_graph() == nullptr) {
+  auto func_graph = res->func_graph();
+  if (func_graph == nullptr) {
     MS_LOG(EXCEPTION) << "SymbolResolve error, graph is null";
   }
-  FuncGraphPtr func_graph = res->func_graph();
-  auto succ = parse::ResolveFuncGraph(func_graph, res);
-
+  bool ret = parse::ResolveFuncGraph(func_graph, res);
   // Remove unused nodes in cnode order list.
-  func_graph->EraseUnusedNodeInOrder();
-  func_graph->ReleaseFullOrderToEffectOrder();
-  for (auto fg : func_graph->func_graphs_used_total()) {
-    MS_EXCEPTION_IF_NULL(fg);
-    fg->EraseUnusedNodeInOrder();
-    fg->ReleaseFullOrderToEffectOrder();
+  if (func_graph) {
+    func_graph->EraseUnusedNodeInOrder();
+    for (auto fg : func_graph->func_graphs_used_total()) {
+      if (fg) {
+        fg->EraseUnusedNodeInOrder();
+      }
+    }
   }
-  return succ;
+  return ret;
+}
+
+bool AutoMonadAction(const ResourcePtr &res) {
+  if (res->manager() == nullptr) {
+    MS_LOG(EXCEPTION) << "Auto-Monad failed, manager is null";
+  }
+  auto func_graph = res->func_graph();
+  if (func_graph == nullptr) {
+    MS_LOG(EXCEPTION) << "Auto-Monad failed, graph is null";
+  }
+  (void)pipeline::AutoMonad(func_graph);
+  return true;
 }
 
 bool InferenceOptPrepareAction(const ResourcePtr &res) {
@@ -240,12 +322,14 @@ bool AbstractSpecializeAction(const ResourcePtr &res) {
   if (res->func_graph() == nullptr) {
     MS_LOG(EXCEPTION) << "AbstractSpecialize error";
   }
-
   FuncGraphPtr func_graph = res->func_graph();
   abstract::AbstractBasePtrList args_spec = res->args_spec();
+  auto context = parallel::ParallelContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(parallel::ParallelContext::GetInstance());
+  context->ParallelParameterContextInitShape(func_graph);
 
-  parallel::ParallelParameterContextInit(func_graph);
-
+  // get original loaded graph to check inputs later
+  auto loaded_graph_ptr = GetLoadedGraph(res);
   // suppose that there is not KeywordArgument for the top graph
   // get the hyper parameter
   for (const auto &param : func_graph->parameters()) {
@@ -256,9 +340,9 @@ bool AbstractSpecializeAction(const ResourcePtr &res) {
       auto ref_key = std::make_shared<RefKey>(param_node->name());
       auto abs_ref_key = ref_key->ToAbstract();
       auto abs_ref = std::make_shared<abstract::AbstractRef>(abs_ref_key, abs_value);
-      parallel::ParallelParameterContextRestoreInNoTraining(func_graph, param_node, abs_ref);
+      context->ParallelParameterContextRestoreShape(func_graph, param_node, abs_ref);
       args_spec.push_back(abs_ref);
-      parallel::ParallelParameterContextCkptInTraining(func_graph, param_node, abs_ref);
+      context->ParallelParameterContextCkptShape(func_graph, param_node, abs_ref);
     }
   }
   // Analyze
@@ -270,6 +354,19 @@ bool AbstractSpecializeAction(const ResourcePtr &res) {
   FuncGraphPtr new_fg = ProgramSpecialize(res, result.context->func_graph(), result.context);
   res->set_func_graph(new_fg);
 
+  // Remove unused nodes in cnode order list, this is prepared for auto-monad.
+  if (new_fg) {
+    new_fg->EraseUnusedNodeInOrder();
+    for (auto fg : new_fg->func_graphs_used_total()) {
+      if (fg) {
+        fg->EraseUnusedNodeInOrder();
+      }
+    }
+  }
+  // check input after abstract when there is a loaded graph
+  if (loaded_graph_ptr != nullptr) {
+    CheckRootInputShapeAndType(res, loaded_graph_ptr);
+  }
   MS_LOG(DEBUG) << "End graph: " << new_fg->ToString() << ", return: " << new_fg->get_return()->DebugString(true);
   return true;
 }
@@ -355,7 +452,21 @@ static bool IsCtrlSink() {
   return true;
 }
 
+bool CheckGraphOutputConstOrParameter(const FuncGraphPtr &func_graph) {
+  if (func_graph != nullptr) {
+    AnfNodePtr output = func_graph->output();
+    if (output != nullptr && (output->isa<ValueNode>() || output->isa<Parameter>())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool TaskEmitAction(const ResourcePtr &res) {
+  if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) == kGraphMode &&
+      CheckGraphOutputConstOrParameter(res->func_graph())) {
+    return true;
+  }
   if (res->func_graph() == nullptr) {
     MS_LOG(EXCEPTION) << "TaskEmit args error";
   }
@@ -390,6 +501,10 @@ bool TaskEmitAction(const ResourcePtr &res) {
 }
 
 bool ExecuteAction(const ResourcePtr &res) {
+  if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) == kGraphMode &&
+      CheckGraphOutputConstOrParameter(res->func_graph())) {
+    return true;
+  }
   if (res->results().count(kOutput) == 0) {
     MS_LOG(EXCEPTION) << "Execute args error";
   }
@@ -429,13 +544,13 @@ bool ExecuteAction(const ResourcePtr &res) {
 
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
 bool StartPSWorkerAction(const ResourcePtr &res) {
-  ps::worker.Run();
+  ps::Worker::GetInstance().Run();
   return true;
 }
 
 bool StartPSServerAction(const ResourcePtr &res) {
   FuncGraphPtr func_graph = res->func_graph();
-  auto &ps = ps::ParameterServer<float>::GetInstance();
+  auto &ps = ps::ParameterServer::GetInstance();
   ps.Run(func_graph);
   return true;
 }
@@ -447,7 +562,7 @@ bool StartPSSchedulerAction(const ResourcePtr &res) {
 #endif
 
 // The parallel primitive related valuenode might be partitioned so that its value changes by device,
-// that will result in a syncronization error due to different executing order.
+// that will result in a synchronization error due to different executing order.
 // Here we temporarily avoid the problem by skipping valuenode merging used by parallel related primitive,
 // the final solution will be proposed later as a parallel feature.
 bool KeepValueNodeDuplication(const AnfNodePtr &value_node, const ResourcePtr &res) {
@@ -558,6 +673,7 @@ static std::vector<ActionItem> CommonPipeline() {
 
   // Resolve the python func
   actions.emplace_back(std::make_pair("symbol_resolve", SymbolResolveAction));
+
   auto multi_graphs = parallel::CostModelContext::GetInstance()->is_multi_subgraphs();
   if (!multi_graphs) {
     actions.emplace_back(std::make_pair("combine_like_graphs", CombineLikeGraphs));
@@ -566,6 +682,8 @@ static std::vector<ActionItem> CommonPipeline() {
   actions.emplace_back(std::make_pair("inference_opt_prepare", InferenceOptPrepareAction));
   // Evaluate type and shape, and specialize
   actions.emplace_back(std::make_pair("abstract_specialize", AbstractSpecializeAction));
+  // Auto-monad for side-effects handling.
+  actions.emplace_back(std::make_pair("auto_monad", AutoMonadAction));
   // Do data structure simplifications and inline
   actions.emplace_back(std::make_pair("inline", OptInlineAction));
   // Add pre-ad, post-inline python pass stub
@@ -598,7 +716,7 @@ std::vector<ActionItem> VmPipeline() {
 
   actions.emplace_back(std::make_pair("validate", ValidateAction));
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  if (ps::Util::IsRoleOfWorker()) {
+  if (ps::PSContext::instance()->is_worker()) {
     actions.emplace_back(std::make_pair("worker", StartPSWorkerAction));
   }
 #endif

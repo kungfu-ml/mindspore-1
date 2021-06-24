@@ -42,7 +42,7 @@ ShuffleNetV1的核心部分被分成三个阶段，每个阶段重复堆积了�
 # 环境要求
 
 - 硬件（Ascend）
-    - 使用Ascend来搭建硬件环境。如需试用Ascend处理器，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx)至ascend@huawei.com，审核通过即可获得资源。
+    - 使用Ascend来搭建硬件环境。
 - 框架
     - [MindSpore](https://www.mindspore.cn/install)
 - 如需查看详情，请参见如下资源：
@@ -167,7 +167,7 @@ result:{'Loss': 2.0479587888106323, 'Top_1_Acc': 0.7385817307692307, 'Top_5_Acc'
 | 训练总时间 (8p)             | 7.0h                                    |
 | 评估总时间                  | 99s                                    |
 | 参数量 (M)                 | 44M                                   |
-| 脚本                       | [链接](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/ShuffleNetV1) |
+| 脚本                       | [链接](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/shufflenetv1) |
 
 # 随机情况的描述
 

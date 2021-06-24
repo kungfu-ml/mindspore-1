@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import mindspore.nn as nn
 from mindspore import Tensor
 from mindspore.common.api import ms_function
 from mindspore.ops import operations as P
+from mindspore.ops.operations import _inner_ops as inner
 
 x0 = np.random.rand(2, 3, 4, 4).astype(np.float32)
 axis0 = 3
@@ -267,3 +268,73 @@ def test_ReduceSum():
     error14 = np.ones(shape=expect14.shape) * 1.0e-5
     assert np.all(diff14 < error14)
     assert output[14].shape == expect14.shape
+
+
+x_1 = x8
+axis_1 = 0
+x_2 = x1
+axis_2 = 0
+
+
+class ReduceSumDynamic(nn.Cell):
+    def __init__(self, x, axis):
+        super(ReduceSumDynamic, self).__init__()
+        self.reducesum = P.ReduceSum(True)
+        self.test_dynamic = inner.GpuConvertToDynamicShape()
+        self.x = x
+        self.axis = axis
+
+    def construct(self):
+        dynamic_x = self.test_dynamic(self.x)
+        return self.reducesum(dynamic_x, self.axis)
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_reduce_sum_dynamic():
+    context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+    net1 = ReduceSumDynamic(Tensor(x_1), axis_1)
+    net2 = ReduceSumDynamic(Tensor(x_2), axis_2)
+
+    expect_1 = np.sum(x_1, axis=axis_1, keepdims=True)
+    expect_2 = np.sum(x_2, axis=axis_2, keepdims=True)
+
+    output1 = net1()
+    output2 = net2()
+
+    np.testing.assert_almost_equal(output1.asnumpy(), expect_1)
+    np.testing.assert_almost_equal(output2.asnumpy(), expect_2)
+
+
+class ReduceSumTypeNet(nn.Cell):
+    def __init__(self, nptype):
+        super(ReduceSumTypeNet, self).__init__()
+        self.x0 = Tensor(x0.astype(nptype))
+        self.axis0 = axis0
+        self.keep_dims0 = keep_dims0
+
+    def construct(self):
+        return P.ReduceSum(self.keep_dims0)(self.x0, self.axis0)
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_reduce_sum_float64():
+    context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+    net = ReduceSumTypeNet(np.float64)
+    output = net()
+    expect = np.sum(x0, axis=axis0, keepdims=keep_dims0).astype(np.float64)
+    diff = abs(output.asnumpy() - expect)
+    error = np.ones(shape=expect.shape) * 1.0e-5
+    assert np.all(diff < error)
+    assert output.shape == expect.shape
+
+    context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
+    net = ReduceSumTypeNet(np.float64)
+    output = net()
+    expect = np.sum(x0, axis=axis0, keepdims=keep_dims0).astype(np.float64)
+    diff = abs(output.asnumpy() - expect)
+    error = np.ones(shape=expect.shape) * 1.0e-5
+    assert np.all(diff < error)
+    assert output.shape == expect.shape

@@ -28,9 +28,10 @@ using mindspore::kernel::KERNEL_ARCH::kGPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
+using mindspore::lite::opencl::ImageSize;
 using mindspore::schema::ActivationType_RELU;
 using mindspore::schema::ActivationType_RELU6;
-using mindspore::schema::PrimitiveType_DeConv2D;
+using mindspore::schema::PrimitiveType_Conv2dTransposeFusion;
 
 namespace mindspore::kernel {
 
@@ -39,29 +40,24 @@ int Conv2dTransposeOpenCLKernel::CheckSpecs() {
     MS_LOG(ERROR) << "in size: " << in_tensors_.size() << ", out size: " << out_tensors_.size();
     return RET_ERROR;
   }
-  ConvParameter *param = reinterpret_cast<ConvParameter *>(op_parameter_);
-  if (param->pad_l_ != param->pad_r_ || param->kernel_h_ - param->stride_h_ != 2 * param->pad_l_ ||
-      param->pad_u_ != param->pad_d_ || param->kernel_w_ - param->stride_w_ != 2 * param->pad_u_) {
-    MS_LOG(ERROR) << "only support kernel - stride == 2 * pad";
-    return RET_ERROR;
-  }
+  auto *param = reinterpret_cast<ConvParameter *>(op_parameter_);
   if (param->act_type_ != ActType_No && param->act_type_ != ActType_Relu && param->act_type_ != ActType_Relu6) {
     MS_LOG(ERROR) << "Unsupported activation type " << param->act_type_;
     return RET_ERROR;
   }
   if (!in_tensors_.at(1)->IsConst()) {
-    MS_LOG(ERROR) << "Conv2dTranspose don't support non-constant filter yet.";
+    MS_LOG(ERROR) << "Conv2dTranspose doesn't support non-constant filter yet.";
     return RET_ERROR;
   }
   if (in_tensors_.size() == 3 && !in_tensors_.at(2)->IsConst()) {
-    MS_LOG(ERROR) << "Conv2dTranspose don't support non-constant bias yet.";
+    MS_LOG(ERROR) << "Conv2dTranspose doesn't support non-constant bias yet.";
     return RET_ERROR;
   }
   return RET_OK;
 }
 
 int Conv2dTransposeOpenCLKernel::Prepare() {
-  std::string kernel_name = "conv2d_transpose_NHWC4";
+  std::string kernel_name = "conv2d_transpose";
   enable_fp16_ = ocl_runtime_->GetFp16Enable();
 #ifdef PROGRAM_WITH_IL
   kernel_ = ocl_runtime_->GetKernelFromBinary(kernel_name);
@@ -82,38 +78,41 @@ int Conv2dTransposeOpenCLKernel::Prepare() {
 }
 
 void Conv2dTransposeOpenCLKernel::SetGlobalLocal() {
-  ConvParameter *param = reinterpret_cast<ConvParameter *>(op_parameter_);
+  auto *param = reinterpret_cast<ConvParameter *>(op_parameter_);
   int co = out_tensors_[0]->shape()[3];
   int co4 = UP_DIV(co, C4NUM);
   int stride_h = param->stride_h_;
   int stride_w = param->stride_w_;
+  int n = out_tensors_[0]->shape()[0];
   int oh = out_tensors_[0]->shape()[1];
   int ow = out_tensors_[0]->shape()[2];
   local_size_ = {16, 1, 16};
-  global_size_ = {(size_t)UP_ROUND(oh / 2, stride_h), (size_t)UP_ROUND(ow / 2, stride_w), (size_t)co4};
+  global_size_ = {(size_t)UP_ROUND(UP_DIV(oh, 2), stride_h), (size_t)UP_ROUND(UP_DIV(ow, 2), stride_w),
+                  (size_t)co4 * (size_t)n};
   AlignGlobalLocal(global_size_, local_size_);
 }
 
 void Conv2dTransposeOpenCLKernel::SetConstArgs() {
   int arg_cnt = 2;
-  ConvParameter *param = reinterpret_cast<ConvParameter *>(op_parameter_);
+  auto *param = reinterpret_cast<ConvParameter *>(op_parameter_);
   int ci = in_tensors_[0]->shape()[3];
   int co = out_tensors_[0]->shape()[3];
   int kh = param->kernel_h_;
   int kw = param->kernel_w_;
-  int pad_h = param->pad_l_;
-  int pad_w = param->pad_u_;
+  int pad_h = param->pad_u_;
+  int pad_w = param->pad_l_;
   int stride_h = param->stride_h_;
   int stride_w = param->stride_w_;
   int oh = out_tensors_[0]->shape()[1];
   int ow = out_tensors_[0]->shape()[2];
+  int n = in_tensors_[0]->shape()[0];
   int h = in_tensors_[0]->shape()[1];
   int w = in_tensors_[0]->shape()[2];
   cl_int2 kernel_size = {kh, kw};
   cl_int2 stride = {stride_h, stride_w};
   cl_int2 padding = {pad_h, pad_w};
-  cl_int4 src_size = {h, w, UP_DIV(ci, C4NUM), 1};
-  cl_int4 dst_size = {oh, ow, UP_DIV(co, C4NUM), 1};
+  cl_int4 src_size = {h, w, UP_DIV(ci, C4NUM), n};
+  cl_int4 dst_size = {oh, ow, UP_DIV(co, C4NUM), n};
   ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, padWeight_, lite::opencl::MemType::BUF);
   ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, bias_);
   ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, kernel_size);
@@ -121,15 +120,23 @@ void Conv2dTransposeOpenCLKernel::SetConstArgs() {
   ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, padding);
   ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, src_size);
   ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, dst_size);
-  ocl_runtime_->SetKernelArg(kernel_, arg_cnt++, static_cast<cl_int>(param->act_type_));
+  ocl_runtime_->SetKernelArg(kernel_, arg_cnt, static_cast<cl_int>(param->act_type_));
 }
 
 int Conv2dTransposeOpenCLKernel::InitWeights() {
+  auto ret = InitFilter();
+  if (ret != RET_OK) {
+    return ret;
+  }
+  return InitBias();
+}
+
+int Conv2dTransposeOpenCLKernel::InitFilter() {
   auto ret = DequantWeight();
   if (ret != RET_OK) {
     return ret;
   }
-  ConvParameter *param = reinterpret_cast<ConvParameter *>(op_parameter_);
+  auto *param = reinterpret_cast<ConvParameter *>(op_parameter_);
   int ci = in_tensors_[0]->shape()[3];
   int co = out_tensors_[0]->shape()[3];
   int kh = param->kernel_h_;
@@ -185,8 +192,15 @@ int Conv2dTransposeOpenCLKernel::InitWeights() {
   }
   allocator->UnmapBuffer(padWeight_);
   FreeDequantedWeight();
+  return RET_OK;
+}
 
+int Conv2dTransposeOpenCLKernel::InitBias() {
   // init bias_(image2d mem)
+  auto allocator = ocl_runtime_->GetAllocator();
+  auto data_size = enable_fp16_ ? sizeof(int16_t) : sizeof(float);
+  int co = out_tensors_[0]->shape()[3];
+  int div_co = UP_DIV(co, C4NUM);
   size_t im_dst_x, im_dst_y;
   im_dst_x = div_co;
   im_dst_y = 1;
@@ -194,8 +208,8 @@ int Conv2dTransposeOpenCLKernel::InitWeights() {
   if (enable_fp16_) {
     img_dtype = CL_HALF_FLOAT;
   }
-  std::vector<size_t> img_size{im_dst_x, im_dst_y, img_dtype};
-  bias_ = allocator->Malloc(im_dst_x * im_dst_y * C4NUM * data_size, img_size);
+  ImageSize img_size{im_dst_x, im_dst_y, img_dtype};
+  bias_ = allocator->Malloc(img_size);
   bias_ = allocator->MapBuffer(bias_, CL_MAP_WRITE, nullptr, true);
   memset(bias_, 0x00, div_co * C4NUM * data_size);
   if (in_tensors_.size() == 3) {
@@ -225,6 +239,45 @@ int Conv2dTransposeOpenCLKernel::Run() {
   return mindspore::lite::RET_OK;
 }
 
-REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_DeConv2D, OpenCLKernelCreator<Conv2dTransposeOpenCLKernel>)
-REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_DeConv2D, OpenCLKernelCreator<Conv2dTransposeOpenCLKernel>)
+int Conv2dTransposeOpenCLKernel::InferShape() {
+  auto ret = OpenCLKernel::InferShape();
+  if (ret != RET_OK) {
+    return ret;
+  }
+  return RET_OK;
+}
+
+kernel::LiteKernel *OpenCLConv2dTransposeCreator(const std::vector<lite::Tensor *> &inputs,
+                                                 const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
+                                                 const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
+  MS_ASSERT(!inputs.empty());
+  MS_ASSERT(!outputs.empty());
+  MS_ASSERT(opParameter);
+  MS_ASSERT(inputs.front()->shape().size() == 4);
+  MS_ASSERT(outputs.front()->shape().size() == 4);
+  auto *conv_param = reinterpret_cast<ConvParameter *>(opParameter);
+  int input_channel = inputs.front()->shape().at(3);
+  int output_channel = outputs.front()->shape().at(3);
+  int group = conv_param->group_;
+
+  // case 1: depthwise Conv2dTranspose
+  if (group == input_channel && group == output_channel) {
+    MS_LOG(ERROR) << "OpenCL doesn't support depthwise Conv2dTranspose.";
+    free(conv_param);
+    return nullptr;
+  }
+
+  // case 2: group Conv2dTranspose
+  if (group != 1) {
+    MS_LOG(ERROR) << "OpenCL doesn't support group Conv2dTranspose.";
+    free(conv_param);
+    return nullptr;
+  }
+
+  // case 3: common Conv2dTranspose
+  return OpenCLKernelCreator<Conv2dTransposeOpenCLKernel>(inputs, outputs, opParameter, ctx, desc);
+}
+
+REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_Conv2dTransposeFusion, OpenCLConv2dTransposeCreator)
+REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_Conv2dTransposeFusion, OpenCLConv2dTransposeCreator)
 }  // namespace mindspore::kernel

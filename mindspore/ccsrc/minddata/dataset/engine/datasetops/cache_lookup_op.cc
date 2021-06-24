@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 #include "minddata/dataset/engine/datasetops/cache_lookup_op.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/core/global_context.h"
 #include "minddata/dataset/engine/execution_tree.h"
 #ifndef ENABLE_ANDROID
@@ -39,12 +38,12 @@ CacheLookupOp::Builder::Builder() : build_cache_client_(nullptr), build_sampler_
 // Check if the required parameters are set by the builder.
 Status CacheLookupOp::Builder::SanityCheck() const {
   if (build_cache_client_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid parameter, CacheLookupOp requires a CacheClient, but got nullptr.");
   }
   // Make sure the cache client has a valid session
   if (!build_cache_client_->session_id()) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid parameter, cache client for CacheLookupOp requires a session id which is not equal to 0.");
   }
   return Status::OK();
@@ -59,13 +58,13 @@ Status CacheLookupOp::Builder::Build(std::shared_ptr<CacheLookupOp> *ptr) {
 }
 Status CacheLookupOp::operator()() {
   if (!sampler_) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid parameter, CacheLookupOp requires a sampler before it can be executed, but got nullptr.");
   }
   RETURN_IF_NOT_OK(RegisterResources());
   // Kick off the workers
   RETURN_IF_NOT_OK(
-    tree_->LaunchWorkers(num_workers_, std::bind(&CacheLookupOp::WorkerEntry, this, std::placeholders::_1)));
+    tree_->LaunchWorkers(num_workers_, std::bind(&CacheLookupOp::WorkerEntry, this, std::placeholders::_1), "", id()));
   // required task group sync after launching workers
   TaskManager::FindMe()->Post();
   // We have to wait until the leaf op has handshake with us.
@@ -132,12 +131,6 @@ Status CacheLookupOp::ComputeColMap() {
   // to fetch the schema but the cache server may not have it at this point either.
   // So we will just return OK and let MergeOp (our parent) to handle it.
   return Status::OK();
-}
-
-// Visitor accept method for NodePass
-Status CacheLookupOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<CacheLookupOp>(), modified);
 }
 }  // namespace dataset
 }  // namespace mindspore

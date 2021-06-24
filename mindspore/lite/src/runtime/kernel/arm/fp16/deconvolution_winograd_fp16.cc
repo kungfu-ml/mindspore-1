@@ -20,11 +20,8 @@
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_NULL_PTR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_DeConv2D;
-using mindspore::schema::Format::Format_NHWC;
 
 namespace mindspore::kernel {
-
 DeConvWinogradFp16CPUKernel::~DeConvWinogradFp16CPUKernel() {
   FreeResizeBuf();
   FreeDeconvParam();
@@ -319,11 +316,13 @@ int DeConvWinogradFp16CPUKernel::InitComputeParam() {
 
 int DeConvWinogradFp16CPUKernel::InitDataParam() {
   /* unit data : weight & winograd data*/
-  auto ret = ConvolutionBaseFP16CPUKernel::GetExecuteFilter();
+  auto weight_tensor = in_tensors_.at(kWeightIndex);
+  auto ret = ConvolutionBaseFP16CPUKernel::GetExecuteFilter(weight_tensor, weight_tensor->data_c());
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "Get Execute filter failed.";
     return ret;
   }
+
   for (int i = 0; i < deconv_param_->compute_size_; i++) {
     DeConvComputeUnit *unit = &deconv_param_->compute_units_[i];
     ret = PackDeConvWgDataFp16(execute_weight_, unit, conv_param_, deconv_param_);
@@ -404,9 +403,6 @@ int DeConvWinogradFp16CPUKernel::Run() {
     /*post bias activate and nhwc */
     ParallelLaunch(this->context_->thread_pool_, DeConvWgPostFp16Run, this, thread_num_hw_);
   }
-
-  ConvolutionBaseFP16CPUKernel::IfCastOutput();
-  ConvolutionBaseFP16CPUKernel::FreeTmpBuffer();
 
   return RET_OK;
 }

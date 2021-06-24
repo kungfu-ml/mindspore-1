@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,11 +30,11 @@
 namespace mindspore {
 namespace abstract {
 namespace {
-inline AbstractBasePtr GetEvaluatedValueWrap(const AnfNodeConfigPtr &conf) {
+inline AbstractBasePtr GetEvaluatedValue(const AnfNodeConfigPtr &conf) {
   if (conf->node()->intermediate_abstract()) {
     return conf->node()->intermediate_abstract();
   }
-  return conf->GetEvaluatedValue()->abstract();
+  return conf->ObtainEvalResult()->abstract();
 }
 
 AnfNodePtr BuildValueNode(const ValuePtr &v, const AbstractBasePtr &abs_base) {
@@ -80,7 +80,7 @@ std::shared_ptr<FuncGraphSpecializer> ProgramSpecializer::GetFuncGraphSpecialize
   if (iter != specializations_.end()) {
     return iter->second;
   }
-  if (context->func_graph()) {
+  if (context->func_graph() != nullptr) {
     MS_LOG(EXCEPTION) << "Specialize inner error";
   }
   return nullptr;
@@ -129,15 +129,7 @@ AnfNodePtr FuncGraphSpecializer::ReplicateDisconnectedNode(const AnfNodePtr &nod
     if (!new_node->isa<CNode>()) {
       MS_LOG(EXCEPTION) << "new_node must be a CNode, but is " << new_node->DebugString() << ".";
     }
-    auto c_node = node->cast<CNodePtr>();
-    MS_EXCEPTION_IF_NULL(c_node);
-    auto inputs = c_node->inputs();
-    std::vector<AnfNodePtr> new_inputs;
-    (void)std::transform(inputs.begin(), inputs.end(), std::back_inserter(new_inputs),
-                         [this](const AnfNodePtr &inp) -> AnfNodePtr { return ReplicateDisconnectedNode(inp); });
-    auto c_new_node = new_node->cast<CNodePtr>();
-    MS_EXCEPTION_IF_NULL(c_new_node);
-    c_new_node->set_inputs(new_inputs);
+    UpdateNewCNodeInputs(node, new_node);
   }
 
   iter = specializer->repl_node_->find(node);
@@ -149,6 +141,31 @@ AnfNodePtr FuncGraphSpecializer::ReplicateDisconnectedNode(const AnfNodePtr &nod
     MS_LOG(EXCEPTION) << "Replicate node failed, node: " << node->ToString();
   }
   return new_node;
+}
+
+void FuncGraphSpecializer::UpdateNewCNodeInputs(const AnfNodePtr &node, const AnfNodePtr &new_node) {
+  auto c_node = node->cast<CNodePtr>();
+  MS_EXCEPTION_IF_NULL(c_node);
+  auto inputs = c_node->inputs();
+  std::vector<AnfNodePtr> new_inputs;
+  (void)std::transform(
+    inputs.begin(), inputs.end(), std::back_inserter(new_inputs), [this](const AnfNodePtr &inp) -> AnfNodePtr {
+      auto new_inp = ReplicateDisconnectedNode(inp);
+      // Refer the comments in BuildReplacedNode.
+      if (inp->isa<CNode>()) {
+        auto c_inp = inp->cast<CNodePtr>();
+        MS_EXCEPTION_IF_NULL(c_inp);
+        auto c_new_inp = new_inp->cast<CNodePtr>();
+        MS_EXCEPTION_IF_NULL(c_new_inp);
+        MS_LOG(DEBUG) << "Replace in order, inp node: " << inp->DebugString() << " -> " << new_inp->DebugString();
+        c_new_inp->func_graph()->ReplaceInOrder(c_inp, c_new_inp);
+      }
+      return new_inp;
+    });
+
+  auto c_new_node = new_node->cast<CNodePtr>();
+  MS_EXCEPTION_IF_NULL(c_new_node);
+  c_new_node->set_inputs(new_inputs);
 }
 
 AnfNodePtr FuncGraphSpecializer::GetReplicatedNode(const AnfNodePtr &node) {
@@ -209,7 +226,7 @@ void FuncGraphSpecializer::FirstPass() {
 
 // Specialize CNode in func graphs
 void FuncGraphSpecializer::SecondPass() {
-  for (auto &node : BroadFirstSearchGraphCNodes(specialized_func_graph_->get_return())) {
+  for (auto &node : BroadFirstSearchGraphCNodes({specialized_func_graph_->get_return()})) {
     if (node->isa<CNode>()) {
       ProcessCNode(node->cast<CNodePtr>());
     }
@@ -229,7 +246,7 @@ void FuncGraphSpecializer::ProcessNode(const AnfNodePtr &node) {
                       << ", specialized_func_graph_: " << specialized_func_graph_->ToString();
     return;
   }
-  new_node->set_abstract(GetEvaluatedValueWrap(conf));
+  new_node->set_abstract(GetEvaluatedValue(conf));
   if (new_node->isa<CNode>() && new_node->abstract()->isa<PartialAbstractClosure>()) {
     auto partial_abstract = dyn_cast<PartialAbstractClosure>(new_node->abstract());
     if (partial_abstract->node() == node) {
@@ -240,7 +257,7 @@ void FuncGraphSpecializer::ProcessNode(const AnfNodePtr &node) {
   MS_LOG(DEBUG) << "Set new_node: " << new_node->ToString() << ", abstract as: " << new_node->abstract()->ToString();
 
   if (node->isa<CNode>()) {
-    auto attrs = conf->GetEvaluatedValue()->attribute();
+    auto attrs = conf->ObtainEvalResult()->attribute();
     auto c_old = node->cast<CNodePtr>();
     auto c_new = new_node->cast<CNodePtr>();
     auto new_inputs = c_new->inputs();
@@ -248,7 +265,7 @@ void FuncGraphSpecializer::ProcessNode(const AnfNodePtr &node) {
     for (size_t i = 0; i < old_inputs.size(); ++i) {
       auto node_input = old_inputs[i];
       AnfNodeConfigPtr iconf = MakeConfig(node_input);
-      AbstractBasePtr ival = GetEvaluatedValueWrap(iconf);
+      AbstractBasePtr ival = GetEvaluatedValue(iconf);
       // First try to check if node_input can be replaced by a ValueNode. If cannot, then try to check if
       // can be replaced by another CNode from anfnode_config_map, otherwise use the replicated node.
       AnfNodePtr replace_node = BuildPossibleValueNode(iconf->node(), ival, attrs);
@@ -276,13 +293,40 @@ AnfNodePtr FuncGraphSpecializer::BuildReplacedNode(const AnfNodeConfigPtr &conf)
   auto conf_iter = engine_->anfnode_config_map().find(conf);
   AnfNodeConfigPtr new_conf = conf;
   while (conf_iter != engine_->anfnode_config_map().end()) {
-    MS_LOG(DEBUG) << "Origin conf: graph(" << new_conf->node()->func_graph()->ToString() << ", node("
-                  << new_conf->node()->DebugString() << ")";
+    MS_LOG(DEBUG) << "Origin conf: node(" << new_conf->node()->DebugString() << ")";
     new_conf = conf_iter->second;
     MS_EXCEPTION_IF_NULL(new_conf);
-    MS_LOG(DEBUG) << "Replaced conf: graph(" << conf->node()->func_graph()->ToString() << ", node("
-                  << conf->node()->DebugString() << ")";
-    (void)ReplicateDisconnectedNode(new_conf->node());
+    const auto &forward_node = new_conf->node();
+    MS_LOG(DEBUG) << "Replaced conf: node(" << forward_node->DebugString() << ")";
+    const auto &replicated_forward_node = ReplicateDisconnectedNode(forward_node);
+    if (replicated_forward_node && replicated_forward_node->isa<CNode>()) {
+      // The AnfNode in order_list can be:
+      // case 1: also in FuncGraphManager, so it can be got from nodes API of func_graph. it will
+      //         be replaced in CloneOrderList in Cloner.
+      // case 2: AnfNode is not in FuncGraphManager which generated in Analyze phase, so it will not
+      //         be cloned by normal clone API.
+      //    2.1: A forward node , the original node is in FuncGraphManager. The original node will
+      //         be cloned in CloneOrderList in Cloner, and the replicated forward node will replace
+      //         the replicated original node here.
+      //    2.2: an input of a forward node, such as Cast CNode generated in DoCast. It is also another
+      //         original node to fowrad.
+      //    2.3: an input of an input of a forward node, but it's not an original node. Like the Cast CNode
+      //         in MixedPrecisionCastHelper.
+      // For 2.2 and 2.3, we will put a placeholder in order list of replicated func_graph, refer to
+      // CloneOrderlist, and it will be replaced inside ReplicateDisconnectedNode.
+      // For 2.1 the following code will do the job, replace replicated origin cnode with the replicated
+      // forward one in the replicated func_graph.
+      const auto &origin_node = conf_iter->first->node();
+      const auto &replicated_origin_node = GetReplicatedNode(origin_node);
+      if (replicated_origin_node != origin_node) {
+        MS_LOG(DEBUG) << "Replace replicated origin node in order list: " << replicated_origin_node->DebugString()
+                      << ", with replicated forwarded node: " << replicated_forward_node->DebugString();
+        replicated_forward_node->func_graph()->ReplaceInOrder(replicated_origin_node, replicated_forward_node);
+      } else {
+        MS_LOG(EXCEPTION) << "Origin node is not replicated in specialized func_graph, origin node: "
+                          << origin_node->DebugString();
+      }
+    }
     conf_iter = engine_->anfnode_config_map().find(new_conf);
   }
   todo_.push_back(new_conf->node());
@@ -334,6 +378,13 @@ AnfNodePtr FuncGraphSpecializer::BuildSpecializedNode(const AnfNodePtr &node, co
     }
   }
 
+  // Set the flag, so this MetaFuncGraph will be Re-AutoMonaded.
+  if (func->isa<MetaFuncGraphAbstractClosure>()) {
+    auto specialized_fg = GetValueNode<FuncGraphPtr>(repl);
+    if (specialized_fg != nullptr && (argvals.size() > 1) && argvals[argvals.size() - 1]->isa<AbstractUMonad>()) {
+      specialized_fg->set_flag(mindspore::kFuncGraphFlagReAutoMonad, true);
+    }
+  }
   return repl;
 }
 
@@ -447,8 +498,8 @@ AnfNodePtr FuncGraphSpecializer::BuildSpecializedParameterNode(const CNodePtr &n
 const EvaluatorCacheMapPtr &FuncGraphSpecializer::GetEvalCache(const EvaluatorPtr &eval) {
   auto cache_iter = evalcaches_.find(eval);
   if (cache_iter == evalcaches_.end()) {
-    evalcaches_[eval] = eval->cache();
-    return eval->cache();
+    evalcaches_[eval] = eval->evaluator_cache_map();
+    return eval->evaluator_cache_map();
   }
   return cache_iter->second;
 }
@@ -544,7 +595,7 @@ void FuncGraphSpecializer::ProcessCNode(const CNodePtr &new_node) {
   }
 
   if (CanSpecializeNode(func)) {
-    // for primitive node , we build the primitive node with infered attributes in the first pass
+    // for primitive node, we build the primitive node with inferred attributes in the first pass
     // so we do not build replaced node again here in second pass
     if (IsValueNode<Primitive>(func)) {
       new_inputs[0] = func;
@@ -599,7 +650,7 @@ SpecializeStatusCode FuncGraphSpecializer::FindUniqueArgvals(const AbstractFunct
   MS_EXCEPTION_IF_NULL(eval);
   MS_EXCEPTION_IF_NULL(result);
 
-  EvaluatorCacheMap evaluator_cache_map = *eval->cache();
+  EvaluatorCacheMap evaluator_cache_map = *eval->evaluator_cache_map();
   if (evaluator_cache_map.find(argvals) != evaluator_cache_map.end()) {
     *result = std::make_pair(argvals, evaluator_cache_map[argvals]->abstract());
     return kSpecializeSuccess;
@@ -666,14 +717,14 @@ AnfNodePtr FuncGraphSpecializer::BuildPossibleValueNode(const AnfNodePtr &origin
 
   AbstractFunctionPtr abs = dyn_cast<AbstractFunction>(ival);
   if (abs != nullptr) {
-    // Cannot build a determinstic ValueNode if there are multiple possible AbstractFunction.
+    // Cannot build a deterministic ValueNode if there are multiple possible AbstractFunction.
     if (abs->isa<AbstractFuncUnion>()) {
       return nullptr;
     }
     ValuePtr value = nullptr;
     if (abs->isa<PrimitiveAbstractClosure>()) {
       auto real_fn = dyn_cast<PrimitiveAbstractClosure>(abs);
-      // for primitive, check if the attribute is the same with cnode infererd attribute ,if not, clone a new one
+      // for primitive, check if the attribute is the same with cnode inferred attribute, if not, clone a new one
       if (attrs != nullptr) {
         value = BuildPrimtiveValueWithAttributes(real_fn->prim(), attrs);
       } else {

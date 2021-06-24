@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,17 +23,12 @@
 #include "minddata/dataset/core/config_manager.h"
 #include "minddata/dataset/engine/jagged_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/random.h"
 
 namespace mindspore {
 namespace dataset {
 CsvOp::Builder::Builder()
-    : builder_device_id_(0),
-      builder_num_devices_(1),
-      builder_num_samples_(0),
-      builder_shuffle_files_(false),
-      builder_sampler_(nullptr) {
+    : builder_device_id_(0), builder_num_devices_(1), builder_num_samples_(0), builder_shuffle_files_(false) {
   std::shared_ptr<ConfigManager> config_manager = GlobalContext::config_manager();
   builder_num_workers_ = config_manager->num_parallel_workers();
   builder_op_connector_size_ = config_manager->op_connector_size();
@@ -50,7 +45,7 @@ Status CsvOp::Builder::ValidateInputs() const {
            ? "Invalid parameter, num_shard must be greater than shard_id and greater than 0, got num_shard: " +
                std::to_string(builder_num_devices_) + ", shard_id: " + std::to_string(builder_device_id_) + ".\n"
            : "";
-  return err.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err);
+  return err.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err);
 }
 
 Status CsvOp::Builder::Build(std::shared_ptr<CsvOp> *op) {
@@ -65,8 +60,7 @@ Status CsvOp::Builder::Build(std::shared_ptr<CsvOp> *op) {
   std::shared_ptr<CsvOp> csv_op = std::make_shared<CsvOp>(
     builder_csv_files_list_, builder_field_delim_, builder_column_default_list_, builder_column_name_list_,
     builder_num_workers_, builder_rows_per_buffer_, builder_num_samples_, builder_worker_connector_size_,
-    builder_op_connector_size_, builder_shuffle_files_, builder_num_devices_, builder_device_id_,
-    std::move(builder_sampler_));
+    builder_op_connector_size_, builder_shuffle_files_, builder_num_devices_, builder_device_id_);
   RETURN_IF_NOT_OK(csv_op->Init());
   *op = std::move(csv_op);
 
@@ -77,8 +71,8 @@ CsvOp::CsvOp(const std::vector<std::string> &csv_files_list, char field_delim,
              const std::vector<std::shared_ptr<BaseRecord>> &column_default,
              const std::vector<std::string> &column_name, int32_t num_workers, int64_t rows_per_buffer,
              int64_t num_samples, int32_t worker_connector_size, int32_t op_connector_size, bool shuffle_files,
-             int32_t num_device, int32_t device_id, std::shared_ptr<SamplerRT> sampler)
-    : ParallelOp(num_workers, op_connector_size, std::move(sampler)),
+             int32_t num_device, int32_t device_id)
+    : ParallelOp(num_workers, op_connector_size),
       csv_files_list_(std::move(csv_files_list)),
       field_delim_(field_delim),
       column_default_list_(column_default),
@@ -110,12 +104,14 @@ Status CsvOp::Init() {
 }
 
 CsvOp::CsvParser::CsvParser(int32_t worker_id, std::shared_ptr<JaggedConnector> connector, int64_t rows_per_buffer,
-                            char field_delim, std::vector<std::shared_ptr<CsvOp::BaseRecord>> column_default)
+                            char field_delim, std::vector<std::shared_ptr<CsvOp::BaseRecord>> column_default,
+                            std::string file_path)
     : worker_id_(worker_id),
       buffer_connector_(connector),
       csv_rows_per_buffer_(rows_per_buffer),
       csv_field_delim_(field_delim),
       column_default_(column_default),
+      file_path_(file_path),
       cur_state_(START_OF_FILE),
       pos_(0),
       cur_row_(0),
@@ -358,8 +354,11 @@ Status CsvOp::CsvParser::InitCsvParser() {
         {{State::START_OF_FILE, Message::MS_NORMAL},
          {State::UNQUOTE,
           [this](CsvParser &, char c) -> int {
+            TensorRow row(column_default_.size(), nullptr);
+            std::vector<std::string> file_path(column_default_.size(), file_path_);
+            row.setPath(file_path);
             this->tensor_table_ = std::make_unique<TensorQTable>();
-            this->tensor_table_->push_back(TensorRow(column_default_.size(), nullptr));
+            this->tensor_table_->push_back(row);
             this->str_buf_[0] = c;
             this->pos_ = 1;
             return 0;
@@ -367,15 +366,21 @@ Status CsvOp::CsvParser::InitCsvParser() {
         {{State::START_OF_FILE, Message::MS_DELIM},
          {State::DELIM,
           [this](CsvParser &, char c) -> int {
+            TensorRow row(column_default_.size(), nullptr);
+            std::vector<std::string> file_path(column_default_.size(), file_path_);
+            row.setPath(file_path);
             this->tensor_table_ = std::make_unique<TensorQTable>();
-            this->tensor_table_->push_back(TensorRow(column_default_.size(), nullptr));
+            this->tensor_table_->push_back(row);
             return this->PutRecord(c);
           }}},
         {{State::START_OF_FILE, Message::MS_QUOTE},
          {State::QUOTE,
           [this](CsvParser &, char c) -> int {
+            TensorRow row(column_default_.size(), nullptr);
+            std::vector<std::string> file_path(column_default_.size(), file_path_);
+            row.setPath(file_path);
             this->tensor_table_ = std::make_unique<TensorQTable>();
-            this->tensor_table_->push_back(TensorRow(column_default_.size(), nullptr));
+            this->tensor_table_->push_back(row);
             this->pos_ = 0;
             return 0;
           }}},
@@ -458,7 +463,10 @@ Status CsvOp::CsvParser::InitCsvParser() {
          {State::UNQUOTE,
           [this](CsvParser &, char c) -> int {
             if (this->total_rows_ > this->start_offset_ && this->total_rows_ <= this->end_offset_) {
-              this->tensor_table_->push_back(TensorRow(column_default_.size(), nullptr));
+              TensorRow row(column_default_.size(), nullptr);
+              std::vector<std::string> file_path(column_default_.size(), file_path_);
+              row.setPath(file_path);
+              this->tensor_table_->push_back(row);
             }
             this->str_buf_[0] = c;
             this->pos_ = 1;
@@ -468,7 +476,10 @@ Status CsvOp::CsvParser::InitCsvParser() {
          {State::DELIM,
           [this](CsvParser &, char c) -> int {
             if (this->total_rows_ > this->start_offset_ && this->total_rows_ <= this->end_offset_) {
-              this->tensor_table_->push_back(TensorRow(column_default_.size(), nullptr));
+              TensorRow row(column_default_.size(), nullptr);
+              std::vector<std::string> file_path(column_default_.size(), file_path_);
+              row.setPath(file_path);
+              this->tensor_table_->push_back(row);
             }
             return this->PutRecord(c);
           }}},
@@ -476,7 +487,10 @@ Status CsvOp::CsvParser::InitCsvParser() {
          {State::QUOTE,
           [this](CsvParser &, char c) -> int {
             if (this->total_rows_ > this->start_offset_ && this->total_rows_ <= this->end_offset_) {
-              this->tensor_table_->push_back(TensorRow(column_default_.size(), nullptr));
+              TensorRow row(column_default_.size(), nullptr);
+              std::vector<std::string> file_path(column_default_.size(), file_path_);
+              row.setPath(file_path);
+              this->tensor_table_->push_back(row);
             }
             return 0;
           }}},
@@ -497,7 +511,7 @@ Status CsvOp::Reset() {
 
 Status CsvOp::LoadFile(const std::string &file, const int64_t start_offset, const int64_t end_offset,
                        const int32_t worker_id) {
-  CsvParser csv_parser(worker_id, jagged_buffer_connector_, rows_per_buffer_, field_delim_, column_default_list_);
+  CsvParser csv_parser(worker_id, jagged_buffer_connector_, rows_per_buffer_, field_delim_, column_default_list_, file);
   csv_parser.SetStartOffset(start_offset);
   csv_parser.SetEndOffset(end_offset);
   std::ifstream ifs;
@@ -512,7 +526,7 @@ Status CsvOp::LoadFile(const std::string &file, const int64_t start_offset, cons
   csv_parser.Reset();
   try {
     while (ifs.good()) {
-      // when ifstream reachs the end of file, the function get() return std::char_traits<char>::eof()
+      // when ifstream reaches the end of file, the function get() return std::char_traits<char>::eof()
       // which is a 32-bit -1, it's not equal to the 8-bit -1 on Euler OS. So instead of char, we use
       // int to receive its return value.
       int chr = ifs.get();
@@ -540,9 +554,10 @@ Status CsvOp::operator()() {
   RETURN_IF_NOT_OK(io_block_queue_wait_post_.Register(tree_->AllTasks()));
 
   // launch one thread, responsible for filling IoBlockQueue
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(1, std::bind(&CsvOp::WaitToFillIOBlockQueue, this)));
+  RETURN_IF_NOT_OK(tree_->LaunchWorkers(1, std::bind(&CsvOp::WaitToFillIOBlockQueue, this), "", id()));
 
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_, std::bind(&CsvOp::WorkerEntry, this, std::placeholders::_1)));
+  RETURN_IF_NOT_OK(
+    tree_->LaunchWorkers(num_workers_, std::bind(&CsvOp::WorkerEntry, this, std::placeholders::_1), "", id()));
 
   // must be called after launching workers.
   TaskManager::FindMe()->Post();
@@ -799,7 +814,7 @@ Status CsvOp::CalculateNumRowsPerShard() {
 }
 
 int64_t CsvOp::CountTotalRows(const std::string &file) {
-  CsvParser csv_parser(0, jagged_buffer_connector_, rows_per_buffer_, field_delim_, column_default_list_);
+  CsvParser csv_parser(0, jagged_buffer_connector_, rows_per_buffer_, field_delim_, column_default_list_, file);
   std::ifstream ifs;
   ifs.open(file, std::ifstream::in);
   if (!ifs.is_open()) {
@@ -859,61 +874,118 @@ std::vector<std::string> CsvOp::split(const std::string &s, char delim) {
 Status CsvOp::ComputeColMap() {
   // Set the column name mapping (base class field)
   if (column_name_id_map_.empty()) {
-    if (column_name_list_.empty()) {
-      std::string line;
-      std::ifstream handle(csv_files_list_[0]);
-      getline(handle, line);
-      std::vector<std::string> col_names = split(line, field_delim_);
-      for (int32_t i = 0; i < col_names.size(); i++) {
-        // consider the case of CRLF
-        col_names[i].erase(col_names[i].find_last_not_of('\r') + 1);
-        if (column_name_id_map_.find(col_names[i]) == column_name_id_map_.end()) {
-          column_name_id_map_[col_names[i]] = i;
-        } else {
-          RETURN_STATUS_UNEXPECTED("Invalid parameter, duplicate column names are not allowed: " + col_names[i]);
-        }
-      }
-    } else {
-      for (int32_t i = 0; i < column_name_list_.size(); i++) {
-        if (column_name_id_map_.find(column_name_list_[i]) == column_name_id_map_.end()) {
-          column_name_id_map_[column_name_list_[i]] = i;
-        } else {
-          RETURN_STATUS_UNEXPECTED("Invalid parameter, duplicate column names are not allowed: " +
-                                   column_name_list_[i]);
-        }
+    if (!ColumnNameValidate()) {
+      RETURN_STATUS_UNEXPECTED("Fail to validate column name for input CSV file list");
+    }
+
+    for (auto &csv_file : csv_files_list_) {
+      Status rc = ColMapAnalyse(csv_file);
+
+      /* Process exception if ERROR in column name solving*/
+      if (!rc.IsOk()) {
+        MS_LOG(ERROR) << "Fail to analyse column name map, invalid file: " + csv_file;
+        RETURN_STATUS_UNEXPECTED("Fail to analyse column name map, invalid file: " + csv_file);
       }
     }
   } else {
     MS_LOG(WARNING) << "Column name map is already set!";
   }
+
   if (column_default_list_.size() < column_name_id_map_.size()) {
     for (int32_t i = column_default_list_.size(); i < column_name_id_map_.size(); i++) {
       column_default_list_.push_back(std::make_shared<CsvOp::Record<std::string>>(CsvOp::STRING, ""));
     }
   }
+
   if (column_default_list_.size() != column_name_id_map_.size()) {
     RETURN_STATUS_UNEXPECTED(
       "Invalid parameter, the number of column names does not match the column defaults, column_default_list: " +
       std::to_string(column_default_list_.size()) +
       ", column_name_id_map: " + std::to_string(column_name_id_map_.size()));
   }
+
   return Status::OK();
 }
 
-// Brief If a cache has been added into the ascendant tree over this csv op, then the cache will be executing
-// a sampler for fetching the data.  As such, any options in the csv op need to be reset to its defaults so
-// that this csv op will produce the full set of data into the cache.
-void CsvOp::MakeSimpleProducer() {
-  device_id_ = 0;
-  num_devices_ = 1;
-  shuffle_files_ = false;
-  num_samples_ = 0;
+Status CsvOp::ColMapAnalyse(const std::string &csv_file_name) {
+  if (column_name_list_.empty()) {
+    // Actually we only deal with the first file, because the column name set in other files must remain the same
+    if (!check_flag_) {
+      std::string line;
+      std::ifstream handle(csv_file_name);
+
+      getline(handle, line);
+      std::vector<std::string> col_names = split(line, field_delim_);
+
+      for (int32_t i = 0; i < col_names.size(); i++) {
+        // consider the case of CRLF on windows
+        col_names[i].erase(col_names[i].find_last_not_of('\r') + 1);
+
+        if (column_name_id_map_.find(col_names[i]) == column_name_id_map_.end()) {
+          column_name_id_map_[col_names[i]] = i;
+        } else {
+          MS_LOG(ERROR) << "Invalid parameter, duplicate column names are not allowed: " + col_names[i] +
+                             ", The corresponding data files: " + csv_file_name;
+
+          RETURN_STATUS_UNEXPECTED("Invalid parameter, duplicate column names are not allowed: " + col_names[i] +
+                                   ", The corresponding data files: " + csv_file_name);
+        }
+      }
+      check_flag_ = true;
+    }
+  } else {
+    if (!check_flag_) {  // Case the first CSV file, validate the column names
+      for (int32_t i = 0; i < column_name_list_.size(); ++i) {
+        if (column_name_id_map_.find(column_name_list_[i]) == column_name_id_map_.end()) {
+          column_name_id_map_[column_name_list_[i]] = i;
+        } else {
+          MS_LOG(ERROR) << "Invalid parameter, duplicate column names are not allowed: " + column_name_list_[i] +
+                             ", The corresponding data files: " + csv_file_name;
+
+          RETURN_STATUS_UNEXPECTED("Invalid parameter, duplicate column names are not allowed: " +
+                                   column_name_list_[i] + ", The corresponding data files: " + csv_file_name);
+        }
+      }
+      check_flag_ = true;
+    }
+  }
+  return Status::OK();
 }
 
-// Visitor accept method for NodePass
-Status CsvOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<CsvOp>(), modified);
+bool CsvOp::ColumnNameValidate() {
+  /* Case 1: Users specify the column_names */
+  if (!column_name_list_.empty()) {
+    return true;
+  }
+
+  /* Case 2: Inferring the column_names from the first row of CSV files
+  \\ record: the column name set in first CSV file.
+  \\ match_file: First file same */
+  std::vector<std::string> record;
+  std::string match_file;
+
+  for (auto &csv_file : csv_files_list_) {
+    std::string line;
+    std::ifstream handle(csv_file);
+
+    // Parse the csv_file into column name set
+    getline(handle, line);
+    std::vector<std::string> col_names = split(line, field_delim_);
+
+    /* Analyse the column name and draw a conclusion*/
+    if (record.empty()) {  // Case the first file
+      record = col_names;
+      match_file = csv_file;
+    } else {  // Case the other files
+      if (col_names != record) {
+        MS_LOG(ERROR)
+          << "Every corresponding column name must be identical, either element or permutation. Invalid files are: " +
+               match_file + " and " + csv_file;
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 }  // namespace dataset

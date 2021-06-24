@@ -65,7 +65,8 @@ _gloglevel_to_name = {
 
 # The mapping of logger configurations to glog configurations
 _confmap_dict = {'level': 'GLOG_v', 'console': 'GLOG_logtostderr', 'filepath': 'GLOG_log_dir',
-                 'maxBytes': 'logger_maxBytes', 'backupCount': 'logger_backupCount'}
+                 'maxBytes': 'logger_maxBytes', 'backupCount': 'logger_backupCount',
+                 'stderr_level': 'GLOG_stderrthreshold'}
 
 
 class _MultiCompatibleRotatingFileHandler(RotatingFileHandler):
@@ -90,7 +91,7 @@ class _MultiCompatibleRotatingFileHandler(RotatingFileHandler):
             self.stream.close()
             self.stream = None
 
-        # Attain an exclusive lock with bloking mode by `fcntl` module.
+        # Attain an exclusive lock with blocking mode by `fcntl` module.
         with open(self.baseFilename, 'a') as file_pointer:
             if platform.system() != "Windows":
                 fcntl.lockf(file_pointer.fileno(), fcntl.LOCK_EX)
@@ -203,6 +204,7 @@ def _adapt_cfg(kwargs):
         Dict, the input parameter dictionary.
     """
     kwargs['level'] = _gloglevel_to_name.get(kwargs.get('level', _logger_def_level))
+    kwargs['stderr_level'] = _gloglevel_to_name.get(kwargs.get('stderr_level', _logger_def_level))
     kwargs['console'] = not kwargs.get('console') == _std_off
     kwargs['maxBytes'] = int(kwargs.get('maxBytes', _logger_def_max_bytes))
     kwargs['backupCount'] = int(kwargs.get('backupCount', _logger_def_backup_count))
@@ -306,6 +308,11 @@ def _verify_config(kwargs):
     if level is not None:
         _verify_level(level)
 
+    # Check the input value of stderr_level
+    level = kwargs.get('stderr_level', None)
+    if level is not None:
+        _verify_level(level)
+
     # Check the input value of console
     console = kwargs.get('console', None)
     file_path = kwargs.get('filepath', None)
@@ -352,8 +359,8 @@ def _verify_level(level):
 
     # Check the value of input level
     if level_name not in _name_to_level:
-        raise ValueError(f'Incorrect log level:{level}, Please check the log level configuration, '
-                         f'desired log level :{_gloglevel_to_name}')
+        raise ValueError(f'Incorrect log level:{level}, Please check the configuration of GLOG_v or '
+                         f'GLOG_stderrthreshold, desired log level :{_gloglevel_to_name}')
 
 
 def get_log_config():
@@ -367,7 +374,7 @@ def get_log_config():
         >>> import os
         >>> os.environ['GLOG_v'] = '1'
         >>> os.environ['GLOG_logtostderr'] = '0'
-        >>> os.environ['GLOG_log_dir'] = '/var/log/mindspore'
+        >>> os.environ['GLOG_log_dir'] = '/var/log'
         >>> os.environ['logger_maxBytes'] = '5242880'
         >>> os.environ['logger_backupCount'] = '10'
         >>> from mindspore import log as logger
@@ -386,6 +393,10 @@ def get_log_config():
         config_dict['GLOG_log_dir'] = file_path_and_name[0]
         config_dict['logger_maxBytes'] = handler.maxBytes
         config_dict['logger_backupCount'] = handler.backupCount
+        handler_stderr = logger.handlers[1]
+        # level and glog level mapping dictionary
+        level_to_glog_level = dict(zip(_name_to_level.values(), _gloglevel_to_name.keys()))
+        config_dict['GLOG_stderrthreshold'] = level_to_glog_level.get(handler_stderr.level)
     return config_dict
 
 
@@ -395,7 +406,7 @@ def _clear_handler(logger):
         logger.removeHandler(handler)
 
 
-def _find_caller(stack_info=False):
+def _find_caller(stack_info=False, stacklevel=1):
     """
     Find the stack frame of the caller.
 
@@ -430,13 +441,13 @@ def _find_caller(stack_info=False):
 
 def _get_stack_info(frame):
     """
-    Get the stack informations.
+    Get the stack information.
 
     Args:
-        frame(frame): the frame requiring informations.
+        frame(frame): the frame requiring information.
 
     Returns:
-        str, the string of the stack informations.
+        str, the string of the stack information.
     """
     sinfo = None
     stack_prefix = 'Stack (most recent call last):\n'
@@ -465,7 +476,8 @@ def _setup_logger(kwargs):
     # The name of Submodule
     sub_module = 'ME'
     # The name of Base log file
-    log_name = 'mindspore.log'
+    pid = str(os.getpid())
+    log_name = 'mindspore.log.' + pid
 
     global _global_logger
 
@@ -512,6 +524,13 @@ def _setup_logger(kwargs):
             logfile_handler.name = 'FileHandler'
             logfile_handler.formatter = _DataFormatter(sub_module, formatter)
             logger.addHandler(logfile_handler)
+
+            # Write the file and output warning and error logs to stderr
+            console_handler = logging.StreamHandler(sys.stderr)
+            console_handler.name = 'StreamHandler'
+            console_handler.formatter = _DataFormatter(sub_module, formatter)
+            console_handler.setLevel(kwargs.get('stderr_level', logging.WARNING))
+            logger.addHandler(console_handler)
 
         _global_logger = logger
 

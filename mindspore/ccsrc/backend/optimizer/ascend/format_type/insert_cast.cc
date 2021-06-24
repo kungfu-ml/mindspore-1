@@ -58,8 +58,8 @@ AnfNodePtr InsertCastForMultipleOutput(const FuncGraphPtr &func_graph, const CNo
       origin_type = origin_type == kTypeUnknown ? infer_type : origin_type;
       const auto device_type = AnfAlgo::GetOutputDeviceDataType(cnode, output_idx);
       if (origin_type != device_type) {
-        replace_node =
-          AddCastOpNodeToGraph(func_graph, getitem, dev_fmt, device_type, origin_type, origin_shape, infer_type);
+        replace_node = AddCastOpNodeToGraph(func_graph, getitem, dev_fmt, device_type, origin_type, origin_shape,
+                                            infer_type, AnfAlgo::GetOutputReshapeType(getitem, 0));
         MS_EXCEPTION_IF_NULL(replace_node);
         replace_node->set_scope(cnode->scope());
         AnfAlgo::SetNodeAttr(kAttrVisited, MakeValue(true), replace_node);
@@ -107,8 +107,8 @@ AnfNodePtr InsertCastForOutput(const FuncGraphPtr &func_graph, const CNodePtr &c
     const TypeId device_type = AnfAlgo::GetOutputDeviceDataType(cnode, 0);
     AnfNodePtr replace_node = cnode;
     if (origin_type != device_type) {
-      replace_node =
-        AddCastOpNodeToGraph(func_graph, cnode, dev_fmt, device_type, origin_type, origin_shape, infer_type);
+      replace_node = AddCastOpNodeToGraph(func_graph, cnode, dev_fmt, device_type, origin_type, origin_shape,
+                                          infer_type, AnfAlgo::GetOutputReshapeType(cnode, 0));
       MS_EXCEPTION_IF_NULL(replace_node);
       replace_node->set_scope(cnode->scope());
       AnfAlgo::SetNodeAttr(kAttrVisited, MakeValue(true), replace_node);
@@ -129,9 +129,21 @@ AnfNodePtr ProcessGraphKernelOp(const FuncGraphPtr &func_graph, const AnfNodePtr
   auto mng = sub_graph->manager();
   MS_EXCEPTION_IF_NULL(mng);
   std::vector<AnfNodePtr> todo;
-  std::vector<std::pair<AnfNodePtr, size_t>> graph_rets;
   kernel::GetValidKernelNodes(sub_graph, &todo);
-  kernel::GetGraphRealOutput(sub_graph, &graph_rets);
+  auto outputs = AnfAlgo::GetAllOutput(sub_graph->output(), {prim::kPrimTupleGetItem});
+  std::vector<std::pair<AnfNodePtr, size_t>> graph_rets;
+  for (auto &output : outputs) {
+    size_t index = 0;
+    if (IsPrimitiveCNode(output, prim::kPrimTupleGetItem)) {
+      ValuePtr tuple_index_value = GetValueNode(output->cast<CNodePtr>()->input(kInputNodeOutputIndexInTupleGetItem));
+      MS_EXCEPTION_IF_NULL(tuple_index_value);
+      if (!tuple_index_value->isa<Int64Imm>()) {
+        MS_LOG(EXCEPTION) << "The index of tuple getitem is not int64";
+      }
+      index = tuple_index_value->cast<Int64ImmPtr>()->value();
+    }
+    graph_rets.emplace_back(std::pair<AnfNodePtr, size_t>(output, index));
+  }
   for (auto &t : todo) {
     AnfAlgo::SetNodeAttr(kAttrVisited, MakeValue(true), t);
     // process input

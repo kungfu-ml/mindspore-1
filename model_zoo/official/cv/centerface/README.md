@@ -1,6 +1,9 @@
 # Contents
 
-- [CenterFace Description](#CenterFace-description)
+<!-- TOC -->
+
+- [Contents](#contents)
+- [CenterFace Description](#centerface-description)
 - [Model Architecture](#model-architecture)
 - [Dataset](#dataset)
 - [Environment Requirements](#environment-requirements)
@@ -11,7 +14,7 @@
     - [Training Process](#training-process)
         - [Training](#training)
     - [Testing Process](#testing-process)
-        - [Evaluation](#testing)
+        - [Testing](#testing)
     - [Evaluation Process](#evaluation-process)
         - [Evaluation](#evaluation)
     - [Convert Process](#convert-process)
@@ -20,7 +23,10 @@
     - [Performance](#performance)
         - [Evaluation Performance](#evaluation-performance)
         - [Inference Performance](#inference-performance)
+- [Description of Random Situation](#description-of-random-situation)
 - [ModelZoo Homepage](#modelzoo-homepage)
+
+<!-- /TOC -->
 
 # [CenterFace Description](#contents)
 
@@ -76,12 +82,12 @@ other datasets need to use the same format as WiderFace.
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-    - Prepare hardware environment with Ascend processor. If you want to try Ascend, please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend processor.
 - Framework
-    - [MindSpore](https://cmc-szv.clouddragon.huawei.com/cmcversion/index/search?searchKey=Do-MindSpore%20V100R001C00B622)
+    - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
-    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/zh-CN/master/index.html)
-    - [MindSpore API](https://www.mindspore.cn/api/zh-CN/master/index.html)
+    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
+    - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
 
 # [Quick Start](#contents)
 
@@ -96,7 +102,7 @@ step1: prepare pretrained model: train a mobilenet_v2 model by mindspore or use 
 #        The key/cell/module name must as follow, otherwise you need to modify "name_map" function:
 #            --mindspore: as the same as mobilenet_v2_key.ckpt
 #            --pytorch: same as official pytorch model(e.g., official mobilenet_v2-b0353104.pth)
-python torch_to_ms_mobilenetv2.py --ckpt_fn=./mobilenet_v2_key.ckpt --pt_fn=./mobilenet_v2-b0353104.pth --out_ckpt_fn=./mobilenet_v2.ckpt
+python convert_weight_mobilenetv2.py --ckpt_fn=./mobilenet_v2_key.ckpt --pt_fn=./mobilenet_v2-b0353104.pth --out_ckpt_fn=./mobilenet_v2.ckpt
 ```
 
 step2: prepare user rank_table
@@ -114,7 +120,7 @@ step3: train
 cd scripts;
 # prepare data_path, use symbolic link
 ln -sf [USE_DATA_DIR] dataset
-# check you dir to make sure your datas are in the right path
+# check you dir to make sure your data are in the right path
 ls ./dataset/centerface # data path
 ls ./dataset/centerface/annotations/train.json # annot_path
 ls ./dataset/centerface/images/train/images # img_dir
@@ -141,7 +147,7 @@ python setup.py install; # used for eval
 cd -; #cd ../../scripts;
 mkdir ./output
 mkdir ./output/centerface
-# check you dir to make sure your datas are in the right path
+# check you dir to make sure your data are in the right path
 ls ./dataset/images/val/images/ # data path
 ls ./dataset/centerface/ground_truth/val.mat # annot_path
 ```
@@ -189,7 +195,7 @@ sh eval_all.sh
         │   ├──lr_scheduler.py           // learning rate scheduler
         │   ├──mobile_v2.py              // modified mobilenet_v2 backbone
         │   ├──utils.py                  // auxiliary functions for train, to log and preload
-        │   ├──var_init.py               // weight initilization
+        │   ├──var_init.py               // weight initialization
         │   ├──convert_weight_mobilenetv2.py   // convert pretrained backbone to mindspore
         │   ├──convert_weight.py               // CenterFace model convert to mindspore
         └── dependency                   // third party codes: MIT License
@@ -226,7 +232,7 @@ sh eval_all.sh
 the command is: python train.py [train parameters]
 Major parameters train.py as follows:
 
-```python
+```text
 --lr: learning rate
 --per_batch_size: batch size on each device
 --is_distributed: multi-device or not
@@ -408,7 +414,7 @@ After testing, you can find many txt file save the box information and scores,
 open it you can see:
 
 ```python
-646.3 189.1 42.1 51.8 0.747 # left top hight weight score
+646.3 189.1 42.1 51.8 0.747 # left top height weight score
 157.4 408.6 43.1 54.1 0.667
 120.3 212.4 38.7 42.8 0.650
 ...
@@ -547,7 +553,7 @@ CenterFace on 3.2K images(The annotation and data format must be the same as wid
 # [Description of Random Situation](#contents)
 
 In dataset.py, we set the seed inside ```create_dataset``` function.
-In var_init.py, we set seed for weight initilization
+In var_init.py, we set seed for weight initialization
 
 # [ModelZoo Homepage](#contents)
 

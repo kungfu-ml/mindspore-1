@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 
 #include "abstract/abstract_function.h"
 #include "utils/flags.h"
+#include "utils/utils.h"
 
 namespace mindspore {
 /* namespace to support opt */
@@ -31,6 +32,20 @@ namespace opt {
 using mindspore::abstract::AbstractBase;
 using mindspore::abstract::AbstractFunction;
 using mindspore::abstract::AbstractFunctionPtr;
+
+bool WithRecomputedScope(const AnfNodePtr &node) {
+  MS_EXCEPTION_IF_NULL(node);
+  if (!node->isa<CNode>()) {
+    return false;
+  }
+  auto full_name_with_scope = node->fullname_with_scope();
+  return full_name_with_scope.find(kAttrRecompute) == 0;
+}
+
+bool IsSetRecomputed(const CNodePtr &a, const CNodePtr &b) {
+  return (WithRecomputedScope(a) && !a->HasAttr(kAttrNeedCseAfterRecompute)) ||
+         (WithRecomputedScope(b) && !b->HasAttr(kAttrNeedCseAfterRecompute));
+}
 
 BasePtr AbsOf(const AnfNodePtr &node, bool ignore_fg_abs_tracking_id) {
   MS_EXCEPTION_IF_NULL(node);
@@ -83,7 +98,7 @@ bool CSE::BuildOrderGroupAndDoReplace(const FuncGraphManagerPtr manager) const {
       } else if (node->isa<Parameter>()) {
         h = node->hash();
       } else {
-        MS_LOG(ERROR) << "Unknow node type";
+        MS_LOG(ERROR) << "Unknown node type";
       }
 
       hashes[node] = h;
@@ -101,6 +116,7 @@ bool CSE::BuildOrderGroupAndDoReplace(const FuncGraphManagerPtr manager) const {
 
   return changed;
 }
+
 // The op like print, summary, or the op do not has true output, and always as a depend node input.
 static bool HasSideEffect(const AnfNodePtr &node) {
   auto prim = GetCNodePrimitive(node);
@@ -142,6 +158,10 @@ bool CSE::CheckReplace(const AnfNodePtr &main, const AnfNodePtr &node, bool chec
   } else if (main->isa<CNode>() && node->isa<CNode>()) {
     auto c_main = main->cast<CNodePtr>();
     auto c_node = node->cast<CNodePtr>();
+    // Not do cse for the node set recompute before the recompute pass.
+    if (IsSetRecomputed(c_main, c_node)) {
+      return false;
+    }
     // When appsame is true, check if has side effect, do not merge.
     if (check_side_effect && HasSideEffect(main)) {
       return false;
@@ -236,7 +256,6 @@ bool CSE::DoReplace(const FuncGraphManagerPtr manager, const std::vector<std::si
 bool CSE::Cse(const FuncGraphPtr root, const FuncGraphManagerPtr manager) const {
   MS_EXCEPTION_IF_NULL(manager);
   manager->AddFuncGraph(root);
-
   return BuildOrderGroupAndDoReplace(manager);
 }
 }  // namespace opt

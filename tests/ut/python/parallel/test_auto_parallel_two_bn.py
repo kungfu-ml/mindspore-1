@@ -58,7 +58,7 @@ def test_two_bn():
             self.block1 = get_block()
             self.block2 = get_block()
             self.relu = P.ReLU()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.bias = Tensor(np.ones([64, 64]), dtype=ms.float32)
 
         def construct(self, x):
@@ -68,7 +68,7 @@ def test_two_bn():
             out = self.block2(out)
             return out
 
-    context.set_context(save_graphs=True)
+    context.set_context(save_graphs=False)
     context.set_auto_parallel_context(device_num=8, global_rank=0)
     context.set_auto_parallel_context(parallel_mode="auto_parallel")
     net = NetWithLoss(Net())

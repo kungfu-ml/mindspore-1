@@ -30,6 +30,8 @@
 #include "frontend/parallel/strategy.h"
 #include "frontend/parallel/tensor_layout/tensor_redistribution.h"
 #include "pipeline/jit/pipeline.h"
+#include "frontend/parallel/ops_info/ops_utils.h"
+#include "frontend/parallel/auto_parallel/operator_costmodel.h"
 
 using OperatorInfoPtr = std::shared_ptr<mindspore::parallel::OperatorInfo>;
 
@@ -109,7 +111,7 @@ void CoverSliceShape(const FuncGraphPtr &root);
 
 void SetVirtualDatasetStrategy(const CNodePtr &node);
 
-// Creat parallel operator for primitive node(has strategy)
+// Create parallel operator for primitive node(has strategy)
 void ExtractInformation(const std::vector<AnfNodePtr> &all_nodes, bool is_training = true);
 
 TensorLayout GetInputLayoutFromCNode(const std::pair<AnfNodePtr, int64_t> &node_pair);
@@ -132,7 +134,7 @@ bool IsLastStage();
 void ParallelCommunication(const FuncGraphPtr &root, const std::vector<AnfNodePtr> &all_nodes,
                            const FuncGraphManagerPtr &manager);
 
-std::vector<std::pair<std::string, int64_t>> NodeParameterName(const CNodePtr &node);
+std::vector<std::pair<std::string, int64_t>> NodeParameterName(const CNodePtr &node, int64_t index = -1);
 
 void CheckpointStrategy(const std::vector<AnfNodePtr> &all_nodes);
 
@@ -152,16 +154,18 @@ using ParameterUsersInfo = std::pair<std::string, std::pair<AnfNodePtr, AnfNodeI
 
 RefKeyPair CNodeWithRefKeys(const AnfNodePtr &cnode);
 
-std::shared_ptr<TensorLayout> FindParameterNextLayout(const AnfNodePtr &node);
+std::shared_ptr<TensorLayout> FindParameterNextLayout(const AnfNodePtr &node, size_t accum);
 
 ParameterUsersInfo FindParameterUsers(const AnfNodePtr &node, bool (*IsCareNode)(const CNodePtr &));
 
-bool IsUsedParameter(const FuncGraphPtr &graph, const AnfNodePtr &parameter);
+bool IsUsedParameter(const FuncGraphPtr &graph, const AnfNodePtr &parameter, size_t accum);
 
 void ApplyParallelOptOnParam(TensorLayout *tensor_layout, const OperatorInfoPtr &distribute_operator,
                              const CNodePtr &cnode, const AnfNodePtr &parameter, size_t index);
 
 void SetLastNodeStrategy(const StrategyPtr strategyPtr);
+
+bool CreateGroupsByCkptFile(const std::string &file);
 
 void FindLastNodesUniqueId(const std::vector<AnfNodePtr> &all_nodes, std::vector<std::string> *unique_ids);
 }  // namespace parallel

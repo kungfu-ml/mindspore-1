@@ -20,7 +20,6 @@
 
 namespace mindspore {
 namespace kernel {
-
 void ResizeBilinearGradCPUKernel::InitKernel(const CNodePtr &kernel_node) {
   CheckParam(kernel_node);
   shape_ = AnfAlgo::GetPrevNodeOutputInferShape(kernel_node, 0);
@@ -53,6 +52,11 @@ void ResizeBilinearGradCPUKernel::LaunchKernel(const std::vector<AddressPtr> &in
                                                const std::vector<AddressPtr> &outputs) {
   auto dloss_addr = reinterpret_cast<T *>(inputs[0]->addr);
   auto output_addr = reinterpret_cast<T *>(outputs[0]->addr);
+
+  auto ret = memset_s(output_addr, outputs[0]->size, 0, outputs[0]->size);
+  if (ret != EOK) {
+    MS_LOG(EXCEPTION) << "Output buffer memset failed, ret:" << ret;
+  }
 
   size_t batch_size = shape_[0];
   size_t channel = shape_[1];

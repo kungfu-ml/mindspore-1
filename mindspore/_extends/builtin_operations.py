@@ -21,32 +21,32 @@ import mindspore.common.dtype as mstype
 from mindspore.common.dtype import dtype_to_nptype, get_py_obj_dtype
 
 
-def scalar_add(x, y):
+def ScalarAdd(x, y):
     """Implement `scalar_add`."""
     return x + y
 
 
-def scalar_mul(x, y):
+def ScalarMul(x, y):
     """Implement `scalar_mul`."""
     return x * y
 
 
-def scalar_mod(x, y):
+def ScalarMod(x, y):
     """Implement `scalar_mul`."""
     return x % y
 
 
-def scalar_sub(x, y):
+def ScalarSub(x, y):
     """Implement `scalar_sub`."""
     return x - y
 
 
-def scalar_usub(x):
+def ScalarUsub(x):
     """Implement `scalar_usub`."""
     return -x
 
 
-def tuple_getitem(x, index):
+def TupleGetItem(x, index):
     """Implement `tuple_getitem`."""
     if isinstance(x, Tensor):
         x = x.asnumpy()
@@ -92,7 +92,7 @@ def zeros_like_tensor(x):
     return value
 
 
-def switch(c, x, y):
+def Switch(c, x, y):
     """Implement `switch`."""
     return x if c else y
 
@@ -129,6 +129,16 @@ def list_len(x):
 
 def Depend(value, expr):
     """Implement `Depend`."""
+    return value
+
+
+def UpdateState(monad, expr):
+    """Implement `UpdateState`."""
+    return monad
+
+
+def Load(value, u=None):
+    """Implement `Load`."""
     return value
 
 

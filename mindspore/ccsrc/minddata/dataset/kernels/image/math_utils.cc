@@ -16,8 +16,6 @@
 
 #include "minddata/dataset/kernels/image/math_utils.h"
 
-#include <opencv2/imgproc/types_c.h>
-
 #include <algorithm>
 #include <string>
 
@@ -55,7 +53,7 @@ Status ComputeUpperAndLowerPercentiles(std::vector<int32_t> *hist, int32_t hi_p,
     }
   } catch (const std::exception &e) {
     const char *err_msg = e.what();
-    std::string err_message = "Error in ComputeUpperAndLowerPercentiles: ";
+    std::string err_message = "AutoContrast: ComputeUpperAndLowerPercentiles failed: ";
     err_message += err_msg;
     RETURN_STATUS_UNEXPECTED(err_message);
   }
@@ -73,7 +71,7 @@ Status GenerateRealNumber(float_t a, float_t b, std::mt19937 *rnd, float_t *resu
     *result = distribution(*rnd);
   } catch (const std::exception &e) {
     const char *err_msg = e.what();
-    std::string err_message = "Error in GenerateRealNumber: ";
+    std::string err_message = "RandomAffine: GenerateRealNumber failed: ";
     err_message += err_msg;
     RETURN_STATUS_UNEXPECTED(err_message);
   }

@@ -16,7 +16,7 @@
 
 #include <memory>
 #include "common/common_test.h"
-#include "mindspore/lite/nnacl/strided_slice.h"
+#include "nnacl/fp32/strided_slice_fp32.h"
 #include "mindspore/lite/src/kernel_registry.h"
 
 namespace mindspore {
@@ -64,7 +64,7 @@ TEST_F(TestStridedSlice, StridedSlice) {
 
   auto ctx = std::make_shared<lite::InnerContext>();
   ASSERT_EQ(lite::RET_OK, ctx->Init());
-  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc, nullptr);
+  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc);
   ASSERT_NE(kernel, nullptr);
 
   auto ret = kernel->Run();
@@ -110,7 +110,7 @@ TEST_F(TestStridedSlice, StridedSliceInt8) {
 
   auto ctx = std::make_shared<lite::InnerContext>();
   ASSERT_EQ(lite::RET_OK, ctx->Init());
-  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc, nullptr);
+  auto kernel = creator(inputs, outputs, reinterpret_cast<OpParameter *>(&parameter), ctx.get(), desc);
   ASSERT_NE(kernel, nullptr);
 
   auto ret = kernel->Run();

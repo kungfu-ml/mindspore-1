@@ -34,7 +34,7 @@ TEST_F(MindDataTestEpochCtrl, TestAutoInjectEpoch) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, SequentialSampler(0, sampler_size));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, std::make_shared<SequentialSampler>(0, sampler_size));
   ds = ds->SetNumWorkers(2);
 
   // Create an iterator over the result of the above dataset
@@ -43,7 +43,7 @@ TEST_F(MindDataTestEpochCtrl, TestAutoInjectEpoch) {
   ASSERT_NE(iter, nullptr);
 
   uint64_t i = 0;
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   for (int epoch = 0; epoch < num_epochs; epoch++) {
     // Iterate the dataset and get each row
@@ -51,8 +51,10 @@ TEST_F(MindDataTestEpochCtrl, TestAutoInjectEpoch) {
 
     while (row.size() != 0) {
       auto label = row["label"];
-      int32_t label_value;
-      label->GetItemAt(&label_value, {0});
+      std::shared_ptr<Tensor> de_label;
+      int64_t label_value;
+      ASSERT_OK(Tensor::CreateFromMSTensor(label, &de_label));
+      de_label->GetItemAt(&label_value, {0});
       EXPECT_TRUE(img_class[(i % sampler_size) / class_size] == label_value);
 
       iter->GetNextRow(&row);
@@ -79,7 +81,7 @@ TEST_F(MindDataTestEpochCtrl, TestEpoch) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, RandomSampler(0, sampler_size));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, std::make_shared<RandomSampler>(0, sampler_size));
   ds = ds->SetNumWorkers(3);
 
   // Create an iterator over the result of the above dataset
@@ -89,14 +91,16 @@ TEST_F(MindDataTestEpochCtrl, TestEpoch) {
 
   // Iterate the dataset and get each row
   uint64_t i = 0;
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   for (int epoch = 0; epoch < num_epochs; epoch++) {
     iter->GetNextRow(&row);
     while (row.size() != 0) {
       auto label = row["label"];
-      int32_t label_value;
-      label->GetItemAt(&label_value, {0});
+      std::shared_ptr<Tensor> de_label;
+      int64_t label_value;
+      ASSERT_OK(Tensor::CreateFromMSTensor(label, &de_label));
+      de_label->GetItemAt(&label_value, {0});
       EXPECT_TRUE(label_value >= 0 && label_value <= 3);
 
       iter->GetNextRow(&row);
@@ -125,7 +129,7 @@ TEST_F(MindDataTestEpochCtrl, TestRepeatEpoch) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, RandomSampler(0, sampler_size));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, std::make_shared<RandomSampler>(0, sampler_size));
   ds = ds->SetNumWorkers(3);
   ds = ds->Repeat(num_repeats);
 
@@ -136,14 +140,16 @@ TEST_F(MindDataTestEpochCtrl, TestRepeatEpoch) {
 
   // Iterate the dataset and get each row
   uint64_t i = 0;
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   for (int epoch = 0; epoch < num_epochs; epoch++) {
     iter->GetNextRow(&row);
     while (row.size() != 0) {
       auto label = row["label"];
-      int32_t label_value;
-      label->GetItemAt(&label_value, {0});
+      std::shared_ptr<Tensor> de_label;
+      int64_t label_value;
+      ASSERT_OK(Tensor::CreateFromMSTensor(label, &de_label));
+      de_label->GetItemAt(&label_value, {0});
       EXPECT_TRUE(label_value >= 0 && label_value <= 3);
 
       iter->GetNextRow(&row);
@@ -172,7 +178,7 @@ TEST_F(MindDataTestEpochCtrl, TestRepeatRepeatEpoch) {
 
   // Create an ImageFolder Dataset
   std::string folder_path = datasets_root_path_ + "/testPK/data/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, SequentialSampler(5, sampler_size));
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, true, std::make_shared<SequentialSampler>(5, sampler_size));
   ds = ds->Repeat(num_repeats[0]);
   ds = ds->Repeat(num_repeats[1]);
 
@@ -183,14 +189,16 @@ TEST_F(MindDataTestEpochCtrl, TestRepeatRepeatEpoch) {
 
   // Iterate the dataset and get each row
   uint64_t i = 0;
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   for (int epoch = 0; epoch < num_epochs; epoch++) {
     iter->GetNextRow(&row);
     while (row.size() != 0) {
       auto label = row["label"];
-      int32_t label_value;
-      label->GetItemAt(&label_value, {0});
+      std::shared_ptr<Tensor> de_label;
+      int64_t label_value;
+      ASSERT_OK(Tensor::CreateFromMSTensor(label, &de_label));
+      de_label->GetItemAt(&label_value, {0});
       EXPECT_TRUE(label_value >= 0 && label_value <= 3);
 
       iter->GetNextRow(&row);

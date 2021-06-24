@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "minddata/dataset/util/task.h"
+
+#include <unistd.h>
 #include "utils/ms_utils.h"
 #include "minddata/dataset/util/log_adapter.h"
 #include "minddata/dataset/util/task_manager.h"
@@ -21,8 +23,9 @@
 #include "minddata/dataset/util/services.h"
 #endif
 #ifdef ENABLE_TDTQUE
-#include "tdt/tdt_host_interface.h"
+#include "acl/acl_tdt.h"
 #include "tdt/status.h"
+#include "minddata/dataset/engine/tdt/tdt_handle.h"
 #endif
 
 namespace mindspore {
@@ -44,8 +47,8 @@ void Task::operator()() {
 
 #if !defined(_WIN32) && !defined(_WIN64) && !defined(__ANDROID__) && !defined(ANDROID) && !defined(__APPLE__)
   native_handle_ = pthread_self();
+  thread_id_ = syscall(SYS_gettid);
 #endif
-
   try {
     // Previously there is a timing hole where the thread is spawn but hit error immediately before we can set
     // the TaskGroup pointer and register. We move the registration logic to here (after we spawn) so we can
@@ -57,14 +60,21 @@ void Task::operator()() {
       rc_ = fnc_obj_();
     }
     // Some error codes are ignored, e.g. interrupt. Others we just shutdown the group.
-    if (rc_.IsError() && !rc_.IsInterrupted()) {
+    if (rc_.IsError() && rc_ != StatusCode::kMDInterrupted) {
+      if (rc_.StatusCode() == StatusCode::kMDNetWorkError) {
+        MS_LOG(WARNING) << rc_;
+      } else {
+        MS_LOG(ERROR) << rc_;
+      }
       ShutdownGroup();
     }
   } catch (const std::bad_alloc &e) {
-    rc_ = Status(StatusCode::kOutOfMemory, __LINE__, __FILE__, e.what());
+    rc_ = Status(StatusCode::kMDOutOfMemory, __LINE__, __FILE__, e.what());
+    MS_LOG(ERROR) << rc_;
     ShutdownGroup();
   } catch (const std::exception &e) {
-    rc_ = Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, e.what());
+    rc_ = Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, e.what());
+    MS_LOG(ERROR) << rc_;
     ShutdownGroup();
   }
 }
@@ -98,8 +108,9 @@ Status Task::GetTaskErrorIfAny() const {
   }
 }
 
-Task::Task(const std::string &myName, const std::function<Status()> &f)
+Task::Task(const std::string &myName, const std::function<Status()> &f, int32_t operator_id)
     : my_name_(myName),
+      operator_id_(operator_id),
       rc_(),
       fnc_obj_(f),
       task_group_(nullptr),
@@ -120,7 +131,7 @@ Status Task::Run() {
       running_ = true;
       caught_severe_exception_ = false;
     } catch (const std::exception &e) {
-      rc = Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, e.what());
+      rc = Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, e.what());
     }
   }
   return rc;
@@ -152,19 +163,18 @@ Status Task::Join(WaitFlag blocking) {
           // Because hostPush hung in DeviceQueueOp, wait 5 seconds and destroy the tdt
           if (wait_times > 5 && my_name_.find("DeviceQueueOp") != std::string::npos) {
             MS_LOG(WARNING) << "Wait " << wait_times << " seconds, "
-                            << "the task: " << my_name_ << " will be destoryed by TdtHostDestory.";
-            int32_t destory_status = tdt::TdtHostDestroy();
-            if (destory_status != TDT_OK_CODE) {
-              MS_LOG(WARNING) << "Destory tsd failed, status = " << destory_status << ".";
+                            << "the task: " << my_name_ << " will be destroyed by TdtHostDestory.";
+            if (!TdtHandle::DestroyHandle()) {
+              MS_LOG(WARNING) << "Destroy tdt channel failed.";
             } else {
-              MS_LOG(INFO) << "Destory tsd success.";
+              MS_LOG(INFO) << "Destroy tdt channel success.";
             }
 
             // just wait 30 seconds
-            // case1: cpu usage 100%, DeviceQueueOp thread may destory without thrd_ future
+            // case1: cpu usage 100%, DeviceQueueOp thread may destroy without thrd_ future
             if (wait_times > 30) {
               MS_LOG(WARNING) << MyName() << " Thread ID " << ss.str()
-                              << " is not responding. Maybe it's destoryed, task stop.";
+                              << " is not responding. Maybe it's destroyed, task stop.";
               break;
             }
           }
@@ -192,7 +202,7 @@ void Task::set_task_group(TaskGroup *vg) { task_group_ = vg; }
 
 Task::~Task() { task_group_ = nullptr; }
 Status Task::OverrideInterruptRc(const Status &rc) {
-  if (rc.IsInterrupted() && this_thread::is_master_thread()) {
+  if (rc == StatusCode::kMDInterrupted && this_thread::is_master_thread()) {
     // If we are interrupted, override the return value if this is the master thread.
     // Master thread is being interrupted mostly because of some thread is reporting error.
     return TaskManager::GetMasterThreadRc();

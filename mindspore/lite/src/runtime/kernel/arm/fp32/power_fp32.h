@@ -20,17 +20,15 @@
 #include <vector>
 #include "src/lite_kernel.h"
 #include "include/context.h"
-#include "nnacl/power.h"
+#include "mindspore/lite/nnacl/fp32/power_fp32.h"
 
 namespace mindspore::kernel {
 class PowerCPUKernel : public LiteKernel {
  public:
   PowerCPUKernel(OpParameter *param, const std::vector<lite::Tensor *> &inputs,
-                 const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                 const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(param, inputs, outputs, ctx, primitive),
+                 const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(param, inputs, outputs, ctx),
         thread_count_(ctx->thread_num_),
-        power_(reinterpret_cast<PowerParameter *>(op_parameter_)->power_),
         scale_(reinterpret_cast<PowerParameter *>(op_parameter_)->scale_),
         shift_(reinterpret_cast<PowerParameter *>(op_parameter_)->shift_) {}
   ~PowerCPUKernel() override = default;
@@ -42,7 +40,6 @@ class PowerCPUKernel : public LiteKernel {
 
  private:
   int thread_count_;
-  float power_;
   float scale_;
   float shift_;
 };

@@ -19,7 +19,6 @@
 #include "schema/model_generated.h"
 #include "src/kernel_registry.h"
 #include "include/errorcode.h"
-#include "src/runtime/kernel/arm/fp32/resize_fp32.h"
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_INVALID_OP_ATTR;
@@ -28,9 +27,8 @@ using mindspore::lite::RET_OK;
 
 namespace mindspore::kernel {
 namespace {
-constexpr int kMaxInputNum = 2;
+constexpr int kMaxInputNum = 4;
 constexpr int kOutputNum = 1;
-constexpr int kRank = 4;
 }  // namespace
 
 int ResizeBaseCPUKernel::CheckParameters() {
@@ -40,12 +38,11 @@ int ResizeBaseCPUKernel::CheckParameters() {
     return RET_NULL_PTR;
   }
   method_ = parameter->method_;
-  if (method_ != static_cast<int>(schema::ResizeMethod_LINEAR) &&
-      method_ != static_cast<int>(schema::ResizeMethod_NEAREST)) {
-    MS_LOG(ERROR) << "Resize method should be bilinear or nearest_neighbor, but got " << method_;
+  if (method_ == schema::ResizeMethod::ResizeMethod_UNKNOWN) {
+    MS_LOG(ERROR) << "Resize method can not be unknown.";
     return RET_INVALID_OP_ATTR;
   }
-  if (this->in_tensors_.size() == lite::kSingleNum) {
+  if (this->in_tensors_.size() == 1) {
     new_height_ = parameter->new_height_;
     if (new_height_ < 1) {
       MS_LOG(ERROR) << "Resize new_height should >= 1, but got " << new_height_;
@@ -56,28 +53,22 @@ int ResizeBaseCPUKernel::CheckParameters() {
       MS_LOG(ERROR) << "Resize new_width should >= 1, but got " << new_width_;
       return RET_INVALID_OP_ATTR;
     }
-  } else if (this->in_tensors_.size() == lite::kDoubleNum) {
+  } else if (this->in_tensors_.size() == 2) {
     auto out_shape = this->in_tensors_.at(1)->data_c();
     if (out_shape == nullptr) {
       MS_LOG(INFO) << "Out shape is not assigned";
       const_shape_ = false;
     } else {
-      new_height_ = reinterpret_cast<int32_t *>(out_shape)[0];
-      if (new_height_ < 1) {
-        MS_LOG(ERROR) << "Resize new_height should >= 1, but got " << new_height_;
-        return RET_INVALID_OP_ATTR;
+      if (InferShapeDone()) {
+        new_height_ = out_tensors_.at(0)->shape().at(1);
+        new_width_ = out_tensors_.at(0)->shape().at(2);
+        const_shape_ = true;
       }
-      new_width_ = reinterpret_cast<int32_t *>(out_shape)[1];
-      if (new_width_ < 1) {
-        MS_LOG(ERROR) << "Resize new_width should >= 1, but got " << new_width_;
-        return RET_INVALID_OP_ATTR;
-      }
-      const_shape_ = true;
     }
   }
-  align_corners_ = parameter->align_corners_;
-  preserve_aspect_ratio = parameter->preserve_aspect_ratio_;
-  if (preserve_aspect_ratio) {
+  coordinate_transform_mode_ = parameter->coordinate_transform_mode_;
+  preserve_aspect_ratio_ = parameter->preserve_aspect_ratio_;
+  if (preserve_aspect_ratio_) {
     MS_LOG(ERROR) << "Resize currently not support preserve_aspect_ratio true";
     return RET_ERROR;
   }
@@ -85,25 +76,23 @@ int ResizeBaseCPUKernel::CheckParameters() {
 }
 
 int ResizeBaseCPUKernel::CheckInputsOuputs() {
-  if (in_tensors_.size() <= lite::kDoubleNum) {
-    for (size_t i = 0; i < in_tensors_.size(); i++) {
-      auto input = in_tensors_.at(i);
-      if (input == nullptr) {
-        return RET_NULL_PTR;
-      }
+  // inputs
+  if (in_tensors_.size() <= kMaxInputNum) {
+    for (auto input : in_tensors_) {
+      MSLITE_CHECK_PTR(input);
     }
   } else {
     MS_LOG(ERROR) << "Resize input num should be no more than" << kMaxInputNum << ", but got " << in_tensors_.size();
     return RET_ERROR;
   }
+
+  // outputs
   if (out_tensors_.size() != kOutputNum) {
     MS_LOG(ERROR) << "Resize output num should be " << kOutputNum << ", but got " << out_tensors_.size();
     return RET_ERROR;
   }
   auto output = out_tensors_.at(0);
-  if (output == nullptr) {
-    return RET_NULL_PTR;
-  }
+  MSLITE_CHECK_PTR(output);
   return RET_OK;
 }
 
@@ -119,11 +108,10 @@ int ResizeBaseCPUKernel::Init() {
 
   auto input = in_tensors_.at(0);
   auto input_shape = input->shape();
-  if (!input_shape.empty() && input_shape.size() != kRank) {
+  if (!input_shape.empty() && input_shape.size() != COMM_SHAPE_SIZE) {
     MS_LOG(ERROR) << "Resize op support input rank 4, got " << input_shape.size();
     return RET_ERROR;
   }
-
   return RET_OK;
 }
 }  // namespace mindspore::kernel

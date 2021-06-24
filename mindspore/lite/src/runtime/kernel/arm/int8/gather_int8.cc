@@ -17,7 +17,7 @@
 #include <vector>
 #include "nnacl/gather_parameter.h"
 #include "nnacl/int8/gather_int8.h"
-#include "nnacl/quantization/quantize.h"
+#include "mindspore/lite/nnacl/int8/quantize.h"
 #include "schema/model_generated.h"
 #include "src/kernel_registry.h"
 #include "src/runtime/runtime_api.h"
@@ -33,7 +33,6 @@ namespace mindspore::kernel {
 
 int GatherInt8CPUKernel::Init() {
   axis_ = (reinterpret_cast<GatherParameter *>(op_parameter_))->axis_;
-  batchDims_ = (reinterpret_cast<GatherParameter *>(op_parameter_))->batchDims_;
   auto in_quant_args = in_tensors_.at(0)->quant_params();
   auto out_quant_args = out_tensors_.at(0)->quant_params();
   param_.alpha_ = in_quant_args.front().scale / out_quant_args.front().scale;
@@ -83,8 +82,8 @@ int GatherInt8CPUKernel::DoGather(int task_id) {
   int count = MSMIN(stride, outer_size - stride * task_id);
   auto thread_stride = stride * task_id;
 
-  input_ptr += thread_stride * limit;
-  output_ptr += thread_stride * indices_element_size;
+  input_ptr += thread_stride * inner_size * limit;
+  output_ptr += thread_stride * inner_size * indices_element_size;
   return GatherInt8(input_ptr, output_ptr, count, inner_size, limit, indices_ptr, indices_element_size, param_);
 }
 

@@ -20,24 +20,12 @@
 #include "nnacl/op_base.h"
 
 #define BATCH_TO_SPACE_BLOCK_SHAPE_SIZE 2
-#define BATCH_TO_SPACE_CROPS_SIZE 4
 
 typedef struct BatchToSpaceParameter {
   OpParameter op_parameter_;
   int32_t block_shape_[BATCH_TO_SPACE_BLOCK_SHAPE_SIZE];
-  int32_t crops_[BATCH_TO_SPACE_CROPS_SIZE];
+  int32_t crops_[COMM_SHAPE_SIZE];
   bool no_crop_;
 } BatchToSpaceParameter;
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-void BatchToSpaceNoCropForNHWC(const void *input, void *output, const int *in_shape, int out_n, const int *block,
-                               int data_size);
-void BatchToSpaceForNHWC(const void *input, void *output, const int *in_shape, int out_n, const int *block,
-                         const int *crops, int data_size);
-#ifdef __cplusplus
-}
-#endif
 
 #endif  // MINDSPORE_LITE_NNACL_FP32_BATCH_TO_SPACE_H_

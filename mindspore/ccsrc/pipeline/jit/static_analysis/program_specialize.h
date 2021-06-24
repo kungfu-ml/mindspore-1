@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -112,7 +112,7 @@ class FuncGraphSpecializer : public std::enable_shared_from_this<FuncGraphSpecia
   // Build a value node if ival is constant and not any-value
   AnfNodePtr BuildPossibleValueNode(const AnfNodePtr &origin_node, const AbstractBasePtr &ival,
                                     const AttrValueMapPtr &attrs);
-  // Build a replacable node for iconf->node; it may be a replicated forwared CNode in static analysis or just a
+  // Build a replaceable node for iconf->node; it may be a replicated forwarded CNode in static analysis or just a
   // replicated node.
   AnfNodePtr BuildReplacedNode(const AnfNodeConfigPtr &conf);
   // Build a specialized node from given argvals;
@@ -130,6 +130,7 @@ class FuncGraphSpecializer : public std::enable_shared_from_this<FuncGraphSpecia
   const EvaluatorCacheMapPtr &GetEvalCache(const EvaluatorPtr &eval);
   // Try to build unique argvals from the broaded arg vals if it is unique.
   std::pair<AbstractBasePtrList, AbstractBasePtr> BuildFromBroadedArgsVal(const EvaluatorPtr &eval);
+  void UpdateNewCNodeInputs(const AnfNodePtr &node, const AnfNodePtr &new_node);
 };
 }  // namespace abstract
 }  // namespace mindspore

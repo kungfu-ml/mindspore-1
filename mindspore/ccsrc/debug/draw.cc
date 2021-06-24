@@ -30,6 +30,7 @@
 #include "pipeline/jit/parse/resolve.h"
 #include "ir/tensor.h"
 #include "pipeline/jit/base.h"
+#include "debug/common.h"
 
 namespace mindspore {
 
@@ -97,7 +98,7 @@ void DrawValueNodes(const std::vector<AnfNodePtr> &nodes,
   int dup_idx = 0;
 
   for (auto &nd : nodes) {
-    for (auto &t : SuccIncoming(nd)) {
+    for (auto &t : GetInputs(nd)) {
       MS_EXCEPTION_IF_NULL(t);
       MS_EXCEPTION_IF_NULL(nd);
       if (t->isa<ValueNode>() && (*sub_graphs).find(nd->func_graph()) != (*sub_graphs).end()) {
@@ -125,7 +126,7 @@ void DrawEdges(const std::vector<AnfNodePtr> &nodes, const std::shared_ptr<BaseD
 
   // Draw edge
   for (auto &nd : nodes) {
-    auto succs = SuccIncoming(nd);
+    auto &succs = GetInputs(nd);
     auto num = succs.size();
     for (size_t i = 0; i < num; i++) {
       auto &t = succs.at(i);
@@ -190,11 +191,11 @@ void Draw(const std::string &filename, const FuncGraphPtr &func_graph) {
   const std::string dot_suffix = ".dot";
   std::string filename_with_suffix =
     (filename.rfind(dot_suffix) != (filename.size() - dot_suffix.size())) ? (filename + dot_suffix) : filename;
-  DrawByOpt(pipeline::GetSaveGraphsPathName(filename_with_suffix), func_graph, false);
+  DrawByOpt(pipeline::GetSaveGraphsPathName(Common::AddId(filename_with_suffix, dot_suffix)), func_graph, false);
 }
 
 void DrawUserFuncGraph(const std::string &filename, const FuncGraphPtr &func_graph) {
-  DrawByOpt(pipeline::GetSaveGraphsPathName(filename), func_graph, true);
+  DrawByOpt(pipeline::GetSaveGraphsPathName(Common::AddId(filename, ".dot")), func_graph, true);
 }
 #else
 void Draw(const std::string &, const FuncGraphPtr &) {
@@ -385,10 +386,8 @@ static void DrawValueNode(Graphviz *const graph_obj, const ValueNodePtr &node) {
   MS_EXCEPTION_IF_NULL(graph_obj);
   graph_obj->buffer() << "label=<<table port='core' cellborder='0' cellspacing='2' bgcolor='" << graph_obj->Color(node)
                       << "'>";
-  graph_obj->buffer() << "<tr><td bgcolor='white'>";
-  graph_obj->buffer() << ValueType(node);
-  graph_obj->buffer() << "</td></tr>";
-  graph_obj->buffer() << "<tr><td>";
+  graph_obj->buffer() << "<tr><td bgcolor='white'>" << ValueType(node) << "</td></tr>"
+                      << "<tr><td>";
   if (IsValueNode<MetaFuncGraph>(node)) {
     graph_obj->buffer() << node->value()->cast<MetaFuncGraphPtr>()->name();
   } else if (IsValueNode<parse::NameSpace>(node)) {
@@ -403,18 +402,16 @@ static void DrawValueNode(Graphviz *const graph_obj, const ValueNodePtr &node) {
     ValuePtr value = node->value();
     if (value->isa<Primitive>()) {
       PrimitivePtr primitive = value->cast<PrimitivePtr>();
-      graph_obj->buffer() << "</td></tr>";
-      graph_obj->buffer() << "<tr><td align='left'>";
+      graph_obj->buffer() << "</td></tr>"
+                          << "<tr><td align='left'>";
       if (!primitive->instance_name().empty()) {
         graph_obj->buffer() << "instance name:"
-                            << " ";
-        graph_obj->buffer() << primitive->instance_name();
-        graph_obj->buffer() << "<br/>";
+                            << " " << primitive->instance_name() << "<br/>";
       }
       auto attrs = primitive->attrs();
       if (attrs.size() > 0) {
-        graph_obj->buffer() << "</td></tr>";
-        graph_obj->buffer() << "<tr><td align='left'>";
+        graph_obj->buffer() << "</td></tr>"
+                            << "<tr><td align='left'>";
         int i = 0;
         for (const auto &attr : attrs) {
           if (i != 0) {
@@ -431,8 +428,8 @@ static void DrawValueNode(Graphviz *const graph_obj, const ValueNodePtr &node) {
       }
     }
   }
-  graph_obj->buffer() << "</td></tr>";
-  graph_obj->buffer() << "</table>>,";
+  graph_obj->buffer() << "</td></tr>"
+                      << "</table>>,";
 }
 
 static void DrawParallelInfo(Graphviz *const graph_obj, const CNodePtr &node) {

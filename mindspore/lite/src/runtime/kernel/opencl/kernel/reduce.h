@@ -26,9 +26,7 @@
 namespace mindspore::kernel {
 class ReduceOpenCLKernel : public OpenCLKernel {
  public:
-  ReduceOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
   ~ReduceOpenCLKernel() override = default;
 
   int Run() override;
@@ -39,12 +37,17 @@ class ReduceOpenCLKernel : public OpenCLKernel {
   int Tune() override;
 
  private:
+  int SetAxes();
   cl_float4 GenC4Mask();
   static std::string GetReduceTypeStr(int type);
-  GpuTensorInfo outShape = GpuTensorInfo(nullptr);
+  GpuTensorInfo inShape;
   bool use_local_{false};
   bool wc_reduce_{false};
+  bool hw_reduce_{false};
+  bool c_reduce_{false};
+  bool reduce_axes_[4]{false};
   static const size_t LOCAL_CACHE_THREAD{16};
+  int axes_[MAX_SHAPE_SIZE];
 };
 }  // namespace mindspore::kernel
 

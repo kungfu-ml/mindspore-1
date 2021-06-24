@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,10 +20,12 @@ from mindspore.ops import operations as P
 from mindspore.ops import functional as F
 from mindspore.common.parameter import Parameter
 from mindspore.common.initializer import initializer
-from mindspore.communication.management import get_group_size
+from mindspore.communication.management import get_group_size, get_rank
 from mindspore.context import ParallelMode
 from mindspore.parallel._utils import _get_parallel_mode, _get_full_batch
-from mindspore.parallel._ps_context import _insert_hash_table_size, _set_cache_enable, _is_role_worker, _get_ps_context
+from mindspore.parallel._ps_context import _is_role_worker, _get_ps_context
+from mindspore.parallel._ps_context import _insert_hash_table_size, _set_cache_enable, _set_rank_id
+from mindspore import context
 from mindspore._checkparam import Rel
 from mindspore._checkparam import Validator as validator
 from mindspore.ops.primitive import constexpr
@@ -73,6 +75,11 @@ class Embedding(Cell):
     Outputs:
         Tensor of shape :math:`(\text{batch_size}, \text{input_length}, \text{embedding_size})`.
 
+    Raises:
+        TypeError: If `vocab_size` or `embedding_size` is not an int.
+        TypeError: If `use_one_hot` is not a bool.
+        ValueError: If `padding_idx` is an int which not in range [0, `vocab_size`].
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -110,7 +117,7 @@ class Embedding(Cell):
         self.expand = P.ExpandDims()
         self.reshape_flat = P.Reshape()
         self.shp_flat = (-1,)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.one_hot = P.OneHot()
         self.on_value = Tensor(1.0, self.dtype)
         self.off_value = Tensor(0.0, self.dtype)
@@ -152,7 +159,7 @@ class EmbeddingLookup(Cell):
         When 'target' is set to 'CPU', this module will use
         P.EmbeddingLookup().add_prim_attr('primitive_target', 'CPU') which
         specified 'offset = 0' to lookup table.
-        When 'target' is set to 'DEVICE', this module will use P.GatherV2() which
+        When 'target' is set to 'DEVICE', this module will use P.Gather() which
         specified 'axis = 0' to lookup table.
         In field slice mode, the manual_shapes must be given. It is a tuple ,where
         the element is vocab[i], vocab[i] is the row numbers for i-th part.
@@ -172,8 +179,8 @@ class EmbeddingLookup(Cell):
                                        or None. Default: None
         sparse (bool): Using sparse mode. When 'target' is set to 'CPU', 'sparse' has to be true. Default: True.
         vocab_cache_size (int): Cache size of the dictionary of embeddings. Default: 0. It is valid only in
-            parameter server trainning mode and 'DEVICE' target. And the moment parameter of corresponding
-            optimizer will also be set to the cache size. In addition, it should be noted that it will cost the 'DEVICE'
+            'DEVICE' target. And the moment parameter of corresponding optimizer will also be set to the cache size.
+            In addition, it should be noted that it will cost the 'DEVICE'
             memory, so suggests setting a reasonable value to avoid insufficient memory.
 
     Inputs:
@@ -185,6 +192,17 @@ class EmbeddingLookup(Cell):
 
     Outputs:
         Tensor, the shape of tensor is :math:`(z_1, z_2, ..., z_N)`.
+
+    Raises:
+        TypeError: If `vocab_size` or `embedding_size` or `vocab_cache_size` is not an int.
+        TypeError: If `sparse` is not a bool or `manual_shapes` is not a tuple.
+        ValueError: If `vocab_size` or `embedding_size` is less than 1.
+        ValueError: If `vocab_cache_size` is less than 0.
+        ValueError: If `target` is neither 'CPU' nor 'DEVICE'.
+        ValueError: If `slice_mode` is not one of 'batch_slice' or 'field_slice' or
+                    'table_row_slice' or 'table_column_slice'.
+        ValueError: If `sparse` is False and `target` is 'CPU'.
+        ValueError: If `slice_mode` is 'field_slice' and `manual_shapes` is None.
 
     Supported Platforms:
         ``Ascend`` ``CPU``
@@ -205,7 +223,12 @@ class EmbeddingLookup(Cell):
                  max_norm=None, sparse=True, vocab_cache_size=0):
         super(EmbeddingLookup, self).__init__()
         validator.check_value_type('sparse', sparse, [bool], self.cls_name)
+        self.vocab_size = validator.check_positive_int(vocab_size, 'vocab_size')
+        self.vocab_cache_size = validator.check_non_negative_int(vocab_cache_size, 'vocab_cache_size')
         self.target = target
+        self.sparse = sparse
+        self.cache_enable = self.vocab_cache_size > 0
+        self.forward_unique = False
         if target not in ('CPU', 'DEVICE'):
             raise ValueError('Attr \'target\' of \'EmbeddingLookup\' Op passed '
                              + str(target) + ', should be one of values in \'CPU\', \'DEVICE\'.')
@@ -214,23 +237,27 @@ class EmbeddingLookup(Cell):
         if sparse:
             self.gatherv2 = P.SparseGatherV2()
         else:
-            self.gatherv2 = P.GatherV2()
+            self.gatherv2 = P.Gather()
         self.embeddinglookup = P.EmbeddingLookup().add_prim_attr('primitive_target', 'CPU')
-        self.vocab_size = validator.check_positive_int(vocab_size, 'vocab_size')
-        self.vocab_cache_size = validator.check_non_negative_int(vocab_cache_size, 'vocab_cache_size')
-        self._process_vocab_cache(slice_mode)
+        enable_ps = _get_ps_context("enable_ps")
+        if enable_ps:
+            self._process_vocab_cache(slice_mode)
         self.embedding_size = validator.check_positive_int(embedding_size, 'embedding_size')
         self.embedding_table = Parameter(initializer(param_init, [self.vocab_size, self.embedding_size]),
                                          name='embedding_table')
-        if self.cache_enable:
-            self._set_voacb_cache_enable(vocab_cache_size, embedding_size, vocab_size)
         parallel_mode = _get_parallel_mode()
         is_auto_parallel = parallel_mode in (ParallelMode.SEMI_AUTO_PARALLEL, ParallelMode.AUTO_PARALLEL)
-        self.forward_unique = False
-        self.gather_revert = P.GatherV2()
-        self.unique = P.Unique().shard(((1,),))
+        self.gather_revert = P.Gather()
+        self.reshape_first = P.Reshape()
         self.reshape = P.Reshape()
+        self.unique = P.Unique()
         self.shape = P.Shape()
+        if is_auto_parallel:
+            self.unique = P.Unique().shard(((1,),))
+        if self.cache_enable and enable_ps:
+            self._set_voacb_cache_enable_for_ps(vocab_cache_size, embedding_size, vocab_size)
+            if is_auto_parallel:
+                self.unique.add_prim_attr('cache_enable', True)
         indices_shape_size = 2
         if slice_mode == "field_slice" and is_auto_parallel:
             if not manual_shapes:
@@ -245,7 +272,7 @@ class EmbeddingLookup(Cell):
             self.embeddinglookup.shard(((get_group_size(), 1), (1, get_group_size())))
         elif slice_mode == "table_row_slice" and is_auto_parallel:
             full_batch = _get_full_batch()
-            if target == 'DEVICE' and not full_batch:
+            if (target == 'DEVICE' and not full_batch) or (self.cache_enable and enable_ps and sparse):
                 indices_shape_size = 1
                 self.gather_revert.shard(((1, 1), (get_group_size(),)))
                 self.forward_unique = True
@@ -270,11 +297,32 @@ class EmbeddingLookup(Cell):
             if is_auto_parallel:
                 raise ValueError("slice_mode should support mode in nn.EmbeddingLookup, but get "
                                  + str(slice_mode))
+        if self.cache_enable and not enable_ps:
+            if parallel_mode != ParallelMode.STAND_ALONE:
+                raise ValueError("parallel mode haven't supported cache enable yet.")
+            self._set_cache_enable()
         self.embedding_table.unique = self.forward_unique
         self.max_norm = max_norm
         if self.max_norm is not None:
             self.max_norm = validator.check_positive_float(self.max_norm, 'max_norm', self.cls_name)
             self.max_norm = Tensor(self.max_norm, dtype=mstype.float32)
+
+    def _set_cache_enable(self):
+        """EmbeddingLookup cache check for not ps env, which is only support 'ascend'."""
+        if self.target != 'DEVICE':
+            raise ValueError("The configuration of 'vocab_cache_size' is valid only in 'DEVICE' target.")
+        if not self.sparse:
+            raise ValueError("The configuration of 'vocab_cache_size' is valid only 'sparse' is true.")
+        if context.get_context("device_target") != 'Ascend':
+            raise ValueError("The configuration of 'vocab_cache_size' is valid only in 'ascend'.")
+
+        logger.info("EmbeddingLookup cache enable takes effect.")
+        self.forward_unique = True
+        self.unique = P.Unique().add_prim_attr('primitive_target', 'CPU')
+        self.unique.add_prim_attr('cache_enable', True)
+        self.embedding_table.cache_enable = self.cache_enable
+        self.embedding_table.cache_shape = (self.vocab_cache_size, self.embedding_size)
+        self.reshape_first = P.Reshape().add_prim_attr('primitive_target', 'CPU')
 
     def _process_vocab_cache(self, slice_mode):
         """PS embeddingLookup cache check and process."""
@@ -292,21 +340,29 @@ class EmbeddingLookup(Cell):
             parallel_mode = _get_parallel_mode()
             is_auto_parallel = parallel_mode in (ParallelMode.SEMI_AUTO_PARALLEL, ParallelMode.AUTO_PARALLEL)
             if is_auto_parallel:
-                device_num = get_group_size()
+                rank_size = get_group_size()
+                rank_id = get_rank()
                 full_batch = _get_full_batch()
-                if device_num > 1 and not (full_batch and slice_mode == "table_row_slice"):
+                if rank_size > 1 and not (full_batch and slice_mode == "table_row_slice"):
                     raise ValueError("The embeddingLookup cache of parameter server parallel only be used "
                                      "in 'full_batch' and 'table_row_slice' parallel strategy.")
-                self.vocab_cache_size = self.vocab_cache_size * device_num
+                self.vocab_cache_size = self.vocab_cache_size * rank_size
+                _set_rank_id(rank_id)
             self.cache_enable = True
             if _is_role_worker():
                 self.vocab_size = self.vocab_cache_size
+                if context.get_context("enable_sparse") != self.sparse:
+                    raise ValueError("The value of parameter 'sparse' must be same for all EmbeddingLookup "
+                                     "kernels and equal the value of 'enable_sparse' in context setting in "
+                                     "parameter server cache mode")
 
-    def _set_voacb_cache_enable(self, vocab_cache_size, embedding_size, vocab_size):
+    def _set_voacb_cache_enable_for_ps(self, vocab_cache_size, embedding_size, vocab_size):
         """PS embeddingLookup cache enable set."""
         self.embedding_table.cache_enable = True
         self.embedding_table.is_param_ps = True
         _set_cache_enable(True)
+        if self.sparse:
+            self.forward_unique = True
         if _is_role_worker():
             _insert_hash_table_size(self.embedding_table.name, vocab_cache_size, embedding_size, vocab_size)
 
@@ -316,7 +372,7 @@ class EmbeddingLookup(Cell):
         else:
             if self.forward_unique:
                 shp = self.shape(indices) + (self.embedding_size,)
-                indices_flatten = self.reshape(indices, (-1,))
+                indices_flatten = self.reshape_first(indices, (-1,))
                 unique_id, unique_idx = self.unique(indices_flatten)
                 weight_unique = self.gatherv2(self.embedding_table, unique_id, 0)
                 weight_flatten = self.gather_revert(weight_unique, unique_idx, 0)
@@ -339,7 +395,7 @@ class MultiFieldEmbeddingLookup(EmbeddingLookup):
         When 'target' is set to 'CPU', this module will use
         P.EmbeddingLookup().add_prim_attr('primitive_target', 'CPU') which
         specified 'offset = 0' to lookup table.
-        When 'target' is set to 'DEVICE', this module will use P.GatherV2() which
+        When 'target' is set to 'DEVICE', this module will use P.Gather() which
         specified 'axis = 0' to lookup table.
         The vectors with the same field_ids  will be combined by the 'operator', such as 'SUM', 'MAX' and
         'MEAN'. Ensure the input_values of the padded id is zero, so that they can be ignored. The final
@@ -362,20 +418,30 @@ class MultiFieldEmbeddingLookup(EmbeddingLookup):
         max_norm (Union[float, None]): A maximum clipping value. The data type must be float16, float32
                                        or None. Default: None
         sparse (bool): Using sparse mode. When 'target' is set to 'CPU', 'sparse' has to be true. Default: True.
-        operator (string): The pooling method for the features in one field. Support 'SUM, 'MEAN' and 'MAX'
+        operator (str): The pooling method for the features in one field. Support 'SUM, 'MEAN' and 'MAX'
 
     Inputs:
-        - **input_indices** (Tensor) - The shape of tensor is :math:`(batch_size, seq_length)`.
+        - **input_indices** (Tensor) - The shape of tensor is :math:`(batch\_size, seq\_length)`.
           Specifies the indices of elements of the original Tensor. Input_indices must be a 2d tensor in
           this interface. Type is Int32, Int64.
-        - **input_values** (Tensor) - The shape of tensor is :math:`(batch_size, seq_length)`.
+        - **input_values** (Tensor) - The shape of tensor is :math:`(batch\_size, seq\_length)`.
           Specifies the weights of elements of the input_indices. The lookout vector will multiply with
           the input_values. Type is Float32.
-        - **field_ids** (Tensor)  - The shape of tensor is :math:`(batch_size, seq_length)`.
+        - **field_ids** (Tensor)  - The shape of tensor is :math:`(batch\_size, seq\_length)`.
           Specifies the field id of elements of the input_indices. Type is Int32.
 
     Outputs:
-        Tensor, the shape of tensor is :math:`(batch_size, field_size, embedding_size)`. Type is Float32.
+        Tensor, the shape of tensor is :math:`(batch\_size, field\_size, embedding\_size)`. Type is Float32.
+
+    Raises:
+        TypeError: If `vocab_size` or `embedding_size` or `field_size` is not an int.
+        TypeError: If `sparse` is not a bool or `feature_num_list` is not a tuple.
+        ValueError: If `vocab_size` or `embedding_size` or `field_size` is less than 1.
+        ValueError: If `target` is neither 'CPU' nor 'DEVICE'.
+        ValueError: If `slice_mode` is not one of 'batch_slice', 'field_slice', 'table_row_slice', 'table_column_slice'.
+        ValueError: If `sparse` is False and `target` is 'CPU'.
+        ValueError: If `slice_mode` is 'field_slice' and `feature_num_list` is None.
+        ValueError: If `operator` is not one of 'SUM', 'MAX', 'MEAN'.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -384,7 +450,7 @@ class MultiFieldEmbeddingLookup(EmbeddingLookup):
         >>> input_indices = Tensor([[2, 4, 6, 0, 0], [1, 3, 5, 0, 0]], mindspore.int32)
         >>> input_values = Tensor([[1, 1, 1, 0, 0], [1, 1, 1, 0, 0]], mindspore.float32)
         >>> field_ids = Tensor([[0, 1, 1, 0, 0], [0, 0, 1, 0, 0]], mindspore.int32)
-        >>> net = nn.MultiFieldEmbeddingLookup(10, 2, field_size=2, operator='SUM')
+        >>> net = nn.MultiFieldEmbeddingLookup(10, 2, field_size=2, operator='SUM', target='DEVICE')
         >>> out = net(input_indices, input_values, field_ids)
         >>> print(out.shape)
         (2, 2, 2)
@@ -401,13 +467,13 @@ class MultiFieldEmbeddingLookup(EmbeddingLookup):
 
         self.mul = P.Mul()
         self.inf_mask_mul = P.Mul()
-        self.bias_add = P.TensorAdd()
-        self.inf_add = P.TensorAdd()
+        self.bias_add = P.Add()
+        self.inf_add = P.Add()
         self.merge_op = None
         self.count_op = P.UnsortedSegmentSum()
         self.abs = P.Abs()
         self.equal = P.Equal()
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.cast = P.Cast()
         self.div_no_nan = P.DivNoNan()
         self.expand = P.ExpandDims()

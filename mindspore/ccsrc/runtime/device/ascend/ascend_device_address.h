@@ -41,9 +41,10 @@ class AscendDeviceAddress : public DeviceAddress {
   ~AscendDeviceAddress() override;
   bool SyncDeviceToHost(const ShapeVector &shape, size_t size, TypeId type, void *host_ptr) const override;
   bool SyncHostToDevice(const ShapeVector &shape, size_t size, TypeId type, const void *host_ptr) const override;
+  void ClearDeviceMemory() override;
   DeviceAddressType DeviceType() const override { return DeviceAddressType::kAscend; }
-  bool DumpMemToFile(bool dump_mode, const std::string &filepath, const std::string &host_fmt,
-                     const ShapeVector &host_shape, TypeId host_type) const override;
+  bool DumpMemToFile(const std::string &filepath, const std::string &host_fmt, const ShapeVector &host_shape,
+                     TypeId host_type, bool trans_flag) const override;
 #ifdef ENABLE_DEBUGGER
   bool LoadMemToHost(const std::string &tensor_name, int execution_order, const std::string &host_fmt,
                      const ShapeVector &host_shape, TypeId host_type, size_t slot, bool keep_prev) const override;

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,21 +18,28 @@
 #include <string>
 
 #include "common/common.h"
+#include "include/api/status.h"
 #include "minddata/dataset/include/datasets.h"
-#include "minddata/dataset/include/status.h"
-#include "minddata/dataset/include/transforms.h"
 #include "minddata/dataset/include/text.h"
+#include "minddata/dataset/include/transforms.h"
+#include "minddata/dataset/text/vocab.h"
 
 using namespace mindspore::dataset;
+using mindspore::Status;
 using mindspore::dataset::DataType;
 using mindspore::dataset::ShuffleMode;
-using mindspore::dataset::Status;
 using mindspore::dataset::Tensor;
 using mindspore::dataset::Vocab;
 
 class MindDataTestPipeline : public UT::DatasetOpTesting {
  protected:
 };
+
+// Macro to compare 2 MSTensors as not equal; compare datasize only
+#define EXPECT_MSTENSOR_DATA_NE(_mstensor1, _mstensor2)       \
+do {                                                          \
+    EXPECT_NE(_mstensor1.DataSize(), _mstensor2.DataSize());  \
+} while (false)
 
 TEST_F(MindDataTestPipeline, TestVocabLookupOp) {
   MS_LOG(INFO) << "Doing MindDataTestPipeline-TestVocabLookupOp.";
@@ -49,7 +56,7 @@ TEST_F(MindDataTestPipeline, TestVocabLookupOp) {
   EXPECT_EQ(s, Status::OK());
 
   // Create Lookup operation on ds
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "<unk>", DataType("int32"));
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "<unk>", "int32");
   EXPECT_NE(lookup, nullptr);
 
   // Create Map operation on ds
@@ -62,17 +69,21 @@ TEST_F(MindDataTestPipeline, TestVocabLookupOp) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   std::vector<int32_t> expected = {2, 1, 4, 5, 6, 7};
   while (row.size() != 0) {
     auto ind = row["text"];
-    MS_LOG(INFO) << ind->shape() << " " << *ind;
-    std::shared_ptr<Tensor> expected_item;
-    Tensor::CreateScalar(expected[i], &expected_item);
-    EXPECT_EQ(*ind, *expected_item);
+    MS_LOG(INFO) << ind.Shape();
+    TEST_MS_LOG_MSTENSOR(INFO, "ind: ", ind);
+    std::shared_ptr<Tensor> de_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_item));
+    mindspore::MSTensor ms_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_item));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_item);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -93,7 +104,7 @@ TEST_F(MindDataTestPipeline, TestVocabLookupOpEmptyString) {
   EXPECT_EQ(s, Status::OK());
 
   // Create Lookup operation on ds
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "", DataType("int32"));
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "", "int32");
   EXPECT_NE(lookup, nullptr);
 
   // Create Map operation on ds
@@ -106,17 +117,21 @@ TEST_F(MindDataTestPipeline, TestVocabLookupOpEmptyString) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   std::vector<int32_t> expected = {2, 1, 4, 5, 6, 7};
   while (row.size() != 0) {
     auto ind = row["text"];
-    MS_LOG(INFO) << ind->shape() << " " << *ind;
-    std::shared_ptr<Tensor> expected_item;
-    Tensor::CreateScalar(expected[i], &expected_item);
-    EXPECT_EQ(*ind, *expected_item);
+    MS_LOG(INFO) << ind.Shape();
+    TEST_MS_LOG_MSTENSOR(INFO, "ind: ", ind);
+    std::shared_ptr<Tensor> de_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_item));
+    mindspore::MSTensor ms_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_item));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_item);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -136,20 +151,39 @@ TEST_F(MindDataTestPipeline, TestVocabLookupOpFail1) {
   EXPECT_EQ(s, Status::OK());
 
   // Create lookup op for ds
-  // Expected failure: "<unk>" is not a word of vocab
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "<unk>", DataType("int32"));
-  EXPECT_EQ(lookup, nullptr);
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "<unk>", "int32");
+  EXPECT_NE(lookup, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({lookup});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Lookup input ("<unk>" is not a word of vocab)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestVocabLookupOpFail2) {
   MS_LOG(INFO) << "Doing MindDataTestPipeline-TestVocabLookupOpFail2.";
+  // Create a TextFile Dataset
+  std::string data_file = datasets_root_path_ + "/testVocab/words.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
   // Vocab has nothing
   std::shared_ptr<Vocab> vocab;
 
   // Create lookup op
-  // Expected failure: vocab is null
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "", DataType("int32"));
-  EXPECT_EQ(lookup, nullptr);
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "", "int32");
+  EXPECT_NE(lookup, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({lookup});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Lookup input (vocab is null)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestVocabFromDataset) {
@@ -170,7 +204,7 @@ TEST_F(MindDataTestPipeline, TestVocabFromDataset) {
   EXPECT_EQ(home_index, 4);
 
   // Create Lookup operation on ds
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "<unk>", DataType("int32"));
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "<unk>", "int32");
   EXPECT_NE(lookup, nullptr);
 
   // Create Map operation on ds
@@ -183,17 +217,21 @@ TEST_F(MindDataTestPipeline, TestVocabFromDataset) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   std::vector<int32_t> expected = {4, 5, 3, 6, 7, 2};
   while (row.size() != 0) {
     auto ind = row["text"];
-    MS_LOG(INFO) << ind->shape() << " " << *ind;
-    std::shared_ptr<Tensor> expected_item;
-    Tensor::CreateScalar(expected[i], &expected_item);
-    EXPECT_EQ(*ind, *expected_item);
+    MS_LOG(INFO) << ind.Shape();
+    TEST_MS_LOG_MSTENSOR(INFO, "ind: ", ind);
+    std::shared_ptr<Tensor> de_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_item));
+    mindspore::MSTensor ms_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_item));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_item);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -216,7 +254,7 @@ TEST_F(MindDataTestPipeline, TestVocabFromDatasetDefault) {
   EXPECT_EQ(home_index, 2);
 
   // Create Lookup operation on ds
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "home");
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "home");
   EXPECT_NE(lookup, nullptr);
 
   // Create Map operation on ds
@@ -229,7 +267,7 @@ TEST_F(MindDataTestPipeline, TestVocabFromDatasetDefault) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -237,12 +275,21 @@ TEST_F(MindDataTestPipeline, TestVocabFromDatasetDefault) {
   std::vector<int64_t> not_expected = {2, 3, 1, 4, 5, 0};
   while (row.size() != 0) {
     auto ind = row["text"];
-    MS_LOG(INFO) << ind->shape() << " " << *ind;
-    std::shared_ptr<Tensor> expected_item, not_expected_item;
-    Tensor::CreateScalar(expected[i], &expected_item);
-    Tensor::CreateScalar(not_expected[i], &not_expected_item);
-    EXPECT_EQ(*ind, *expected_item);
-    EXPECT_NE(*ind, *not_expected_item);
+    MS_LOG(INFO) << ind.Shape();
+    TEST_MS_LOG_MSTENSOR(INFO, "ind: ", ind);
+
+    std::shared_ptr<Tensor> de_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_item));
+    mindspore::MSTensor ms_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_item));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_item);
+
+    std::shared_ptr<Tensor> de_not_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(not_expected[i], &de_not_expected_item));
+    mindspore::MSTensor ms_not_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_not_expected_item));
+    EXPECT_MSTENSOR_DATA_NE(ind, ms_not_expected_item);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -324,7 +371,7 @@ TEST_F(MindDataTestPipeline, TestVocabFromDatasetInt64) {
   EXPECT_EQ(home_index, 2);
 
   // Create Lookup operation on ds
-  std::shared_ptr<TensorOperation> lookup = text::Lookup(vocab, "home", DataType("int64"));
+  std::shared_ptr<TensorTransform> lookup = std::make_shared<text::Lookup>(vocab, "home", "int64");
   EXPECT_NE(lookup, nullptr);
 
   // Create Map operation on ds
@@ -337,7 +384,7 @@ TEST_F(MindDataTestPipeline, TestVocabFromDatasetInt64) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -345,12 +392,21 @@ TEST_F(MindDataTestPipeline, TestVocabFromDatasetInt64) {
   std::vector<int8_t> not_expected = {2, 3, 1, 4, 5, 0};
   while (row.size() != 0) {
     auto ind = row["text"];
-    MS_LOG(INFO) << ind->shape() << " " << *ind;
-    std::shared_ptr<Tensor> expected_item, not_expected_item;
-    Tensor::CreateScalar(expected[i], &expected_item);
-    Tensor::CreateScalar(not_expected[i], &not_expected_item);
-    EXPECT_EQ(*ind, *expected_item);
-    EXPECT_NE(*ind, *not_expected_item);
+    MS_LOG(INFO) << ind.Shape();
+    TEST_MS_LOG_MSTENSOR(INFO, "ind: ", ind);
+
+    std::shared_ptr<Tensor> de_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_item));
+    mindspore::MSTensor ms_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_item));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_item);
+
+    std::shared_ptr<Tensor> de_not_expected_item;
+    ASSERT_OK(Tensor::CreateScalar(not_expected[i], &de_not_expected_item));
+    mindspore::MSTensor ms_not_expected_item =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_not_expected_item));
+    EXPECT_MSTENSOR_DATA_NE(ind, ms_not_expected_item);
+
     iter->GetNextRow(&row);
     i++;
   }

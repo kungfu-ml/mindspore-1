@@ -25,7 +25,7 @@ operations for users to preprocess data: shuffle, batch, repeat, map, and zip.
 from ..core import config
 from .cache_client import DatasetCache
 from .datasets import *
-from .graphdata import GraphData
+from .graphdata import GraphData, SamplingStrategy
 from .iterators import *
 from .samplers import *
 from .serializer_deserializer import compare, deserialize, serialize, show
@@ -34,5 +34,5 @@ __all__ = ["CelebADataset", "Cifar100Dataset", "Cifar10Dataset", "CLUEDataset", 
            "GeneratorDataset", "GraphData", "ImageFolderDataset", "ManifestDataset", "MindDataset", "MnistDataset",
            "NumpySlicesDataset", "PaddedDataset", "TextFileDataset", "TFRecordDataset", "VOCDataset",
            "DistributedSampler", "PKSampler", "RandomSampler", "SequentialSampler", "SubsetRandomSampler",
-           "WeightedRandomSampler",
+           "WeightedRandomSampler", "SubsetSampler",
            "config", "DatasetCache", "Schema", "zip"]

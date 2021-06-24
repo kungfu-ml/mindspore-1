@@ -35,7 +35,7 @@ class LengthPenalty(nn.Cell):
     def __init__(self, weight=1.0, compute_type=mstype.float32):
         super(LengthPenalty, self).__init__()
         self.weight = weight
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.pow = P.Pow()
         self.div = P.RealDiv()
         self.five = Tensor(5.0, mstype.float32)
@@ -91,7 +91,6 @@ class TileBeam(nn.Cell):
         # add an dim
         input_tensor = self.expand(input_tensor, 1)
         # get tile shape: [1, beam, ...]
-        # shape = self.shape(input_tensor)
         tile_shape = (1,) + (self.beam_width,)
         for _ in range(len(shape) - 1):
             tile_shape = tile_shape + (1,)
@@ -172,7 +171,7 @@ class BeamSearchDecoder(nn.Cell):
                  max_decode_length=64,
                  sos_id=2,
                  eos_id=3,
-                 is_using_while=False,
+                 is_using_while=True,
                  compute_type=mstype.float32):
         super(BeamSearchDecoder, self).__init__()
 
@@ -188,7 +187,7 @@ class BeamSearchDecoder(nn.Cell):
         self.decoder = decoder
         self.is_using_while = is_using_while
 
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.expand = P.ExpandDims()
         self.reshape = P.Reshape()
         self.shape_flat = (-1,)
@@ -219,7 +218,7 @@ class BeamSearchDecoder(nn.Cell):
         self.start_ids = Tensor(np.full([batch_size * beam_width, 1], sos_id), mstype.int32)
         if self.is_using_while:
             self.start = Tensor(0, dtype=mstype.int32)
-            self.init_seq = Tensor(np.full([batch_size, beam_width, self.max_decode_length], sos_id),
+            self.init_seq = Tensor(np.full([batch_size, beam_width, self.max_decode_length + 1], sos_id),
                                    mstype.int32)
         else:
             self.init_seq = Tensor(np.full([batch_size, beam_width, 1], sos_id), mstype.int32)
@@ -402,12 +401,13 @@ class BeamSearchDecoder(nn.Cell):
         accu_attn_scores = self.accu_attn_scores
 
         if not self.is_using_while:
-            for _ in range(self.max_decode_length + 1):
+            for _ in range(self.max_decode_length):
                 cur_input_ids, state_log_probs, state_seq, state_length, decoder_hidden_state, accu_attn_scores, \
                 state_finished = self.one_step(cur_input_ids, enc_states, enc_attention_mask, state_log_probs,
                                                state_seq, state_length, None, decoder_hidden_state, accu_attn_scores,
                                                state_finished)
         else:
+            # At present, only ascend910 supports while operation.
             idx = self.start + 1
             ends = self.start + self.max_decode_length + 1
             while idx < ends:
@@ -419,7 +419,6 @@ class BeamSearchDecoder(nn.Cell):
 
         # add length penalty scores
         penalty_len = self.length_penalty(state_length)
-        # return penalty_len
         log_probs = self.real_div(state_log_probs, penalty_len)
         penalty_cov = C.clip_by_value(accu_attn_scores, 0.0, 1.0)
         penalty_cov = self.log(penalty_cov)

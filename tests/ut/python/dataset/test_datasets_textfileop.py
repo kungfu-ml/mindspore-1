@@ -195,7 +195,7 @@ def test_textline_dataset_to_device():
 def test_textline_dataset_exceptions():
     with pytest.raises(ValueError) as error_info:
         _ = ds.TextFileDataset(DATA_FILE, num_samples=-1)
-    assert "Input num_samples is not within the required interval" in str(error_info.value)
+    assert "num_samples exceeds the boundary" in str(error_info.value)
 
     with pytest.raises(ValueError) as error_info:
         _ = ds.TextFileDataset("does/not/exist/no.txt")
@@ -204,6 +204,15 @@ def test_textline_dataset_exceptions():
     with pytest.raises(ValueError) as error_info:
         _ = ds.TextFileDataset("")
     assert "The following patterns did not match any files" in str(error_info.value)
+
+    def exception_func(item):
+        raise Exception("Error occur!")
+    with pytest.raises(RuntimeError) as error_info:
+        data = ds.TextFileDataset(DATA_FILE)
+        data = data.map(operations=exception_func, input_columns=["text"], num_parallel_workers=1)
+        for _ in data.__iter__():
+            pass
+    assert "map operation: [PyFunc] failed. The corresponding data files" in str(error_info.value)
 
 
 if __name__ == "__main__":

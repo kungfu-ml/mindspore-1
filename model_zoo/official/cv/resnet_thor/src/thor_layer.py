@@ -187,7 +187,7 @@ class Conv2d_Thor_GPU(_Conv):
         self.batch_size = Tensor(batch_size, mstype.float16)
         self.transpose = P.Transpose()
         self.cast = P.Cast()
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.freq = Tensor(frequency, mstype.int32)
         self.axis = 0
         self.sqrt = P.Sqrt()
@@ -330,10 +330,10 @@ class Dense_Thor_GPU(Cell):
         self.dampingA = Tensor(np.identity(in_channels), mstype.float32)
         self.dampingG = Tensor(np.identity(out_channels), mstype.float32)
         self.cast = P.Cast()
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.freq = Tensor(frequency, mstype.int32)
         self.axis = 0
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.sqrt = P.Sqrt()
         self.cholesky = P.CholeskyTrsm(split_dim=split_dim)
         self.vector_matmul = P.BatchMatMul(transpose_a=True)
@@ -496,7 +496,7 @@ class Conv2d_Thor(_Conv):
             self.device_shape_pad_flag = True
             self.device_shape_pad = P.Pad(((0, 0), (0, C0 - self.in_channels), (0, 0), (0, C0 - self.in_channels)))
         self.slice = P.Slice()
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.freq = Tensor(frequency, mstype.int32)
         self.loss_scale = Tensor(1 / loss_scale, mstype.float16)
         self.axis = 0
@@ -586,7 +586,6 @@ class Conv2d_Thor(_Conv):
             matrix_A_inv = self.reshape(matrix_A_inv, self.matrix_A_device_temp_shape)
             matrix_A_inv = self.transpose(matrix_A_inv, (2, 0, 1, 3))
             self.matrix_A_inv = matrix_A_inv
-            self.matrix_G_inv = self.fake_G
             out = self.conv2d(x, self.weight)
             out = self.getG(out)
         else:
@@ -678,7 +677,7 @@ class Dense_Thor(Cell):
         self.pad = P.Pad(((0, 23), (0, 23)))
         self.pad1 = P.Pad(((0, 7), (0, 7)))
         self.slice = P.Slice()
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.assignadd = P.AssignAdd()
         self.freq = Tensor(frequency, mstype.int32)
         self.axis = 0
@@ -690,7 +689,7 @@ class Dense_Thor(Cell):
         self.exp = P.Exp()
         self.dampingA = Tensor(np.identity(2048), mstype.float32)
         self.dampingG = Tensor(np.identity(1024), mstype.float32)
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.sqrt = P.Sqrt()
         self.getG = P.InsertGradientOf(self.save_gradient)
 
@@ -751,7 +750,6 @@ class Dense_Thor(Cell):
             matrix_A_inv = self.transpose(matrix_A_inv, (2, 0, 1, 3))
             matrix_A_inv = self.cast(matrix_A_inv, mstype.float16)
             self.matrix_A_inv = matrix_A_inv
-            self.matrix_G_inv = self.fake_G
             output = self.matmul(x, self.weight)
             output = self.getG(output)
         else:

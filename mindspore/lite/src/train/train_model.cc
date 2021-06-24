@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "src/ops/primitive_c.h"
 #include "src/train/train_model.h"
 #include "src/common/log_adapter.h"
 #include "include/errorcode.h"
@@ -74,5 +73,19 @@ char *TrainModel::ExportBuf(char *buffer, size_t *len) const {
   memcpy(buffer, buf, buf_size_);
   *len = buf_size_;
   return buffer;
+}
+
+char *TrainModel::GetBuffer(size_t *len) const {
+  if (len == nullptr) {
+    MS_LOG(ERROR) << "len is nullptr";
+    return nullptr;
+  }
+  if (buf_size_ == 0 || buf == nullptr) {
+    MS_LOG(ERROR) << "Model::Export is only available for Train Session";
+    return nullptr;
+  }
+
+  *len = buf_size_;
+  return buf;
 }
 }  // namespace mindspore::lite

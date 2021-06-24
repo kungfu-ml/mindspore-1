@@ -13,17 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include "nnacl/fp32/activation_fp32.h"
 #include <float.h>
+#include "nnacl/fp32/activation_fp32.h"
+#include "nnacl/fp32/exp_fp32.h"
 #include "nnacl/errorcode.h"
 
 int Fp32Relu(const float *src, int length, float *dst) {
   int i = 0;
-#ifdef ENABLE_ARM
-  float32x4_t zero_4 = vdupq_n_f32(0.0f);
+#if defined(ENABLE_AVX)
+  MS_FLOAT32X8 zero_8 = MS_MOV256_F32(0.0f);
+  for (; i < length - 8; i += 8) {
+    MS_ST256_F32(dst + i, MS_MAX256_F32(MS_LD256_F32(src + i), zero_8));
+  }
+#endif
+
+#if defined(ENABLE_SSE) || defined(ENABLE_ARM)
+  MS_FLOAT32X4 zero = MS_MOVQ_F32(0.0f);
   for (; i < length - 4; i += 4) {
-    vst1q_f32(dst + i, vmaxq_f32(vld1q_f32(src + i), zero_4));
+    MS_STQ_F32(dst + i, MS_MAXQ_F32(MS_LDQ_F32(src + i), zero));
   }
 #endif
   for (; i < length; ++i) {
@@ -34,13 +41,24 @@ int Fp32Relu(const float *src, int length, float *dst) {
 
 int Fp32Relu6(const float *src, int length, float *dst) {
   int i = 0;
-#ifdef ENABLE_ARM
-  float32x4_t zero_4 = vdupq_n_f32(0.0f);
-  float32x4_t six_4 = vdupq_n_f32(6.0f);
+
+#if defined(ENABLE_AVX)
+  MS_FLOAT32X8 zero_8 = MS_MOV256_F32(0.0f);
+  MS_FLOAT32X8 six_8 = MS_MOV256_F32(6.0f);
+  for (; i < length - 8; i += 8) {
+    MS_FLOAT32X8 dst_tmp = MS_MAX256_F32(MS_LD256_F32(src + i), zero_8);
+    dst_tmp = MS_MIN256_F32(dst_tmp, six_8);
+    MS_ST256_F32(dst + i, dst_tmp);
+  }
+#endif
+
+#if defined(ENABLE_ARM) || defined(ENABLE_SSE)
+  MS_FLOAT32X4 zero = MS_MOVQ_F32(0.0f);
+  MS_FLOAT32X4 six = MS_MOVQ_F32(6.0f);
   for (; i < length - 4; i += 4) {
-    float32x4_t dst_4 = vmaxq_f32(vld1q_f32(src + i), zero_4);
-    dst_4 = vminq_f32(dst_4, six_4);
-    vst1q_f32(dst + i, dst_4);
+    MS_FLOAT32X4 dst_tmp = MS_MAXQ_F32(MS_LDQ_F32(src + i), zero);
+    dst_tmp = MS_MINQ_F32(dst_tmp, six);
+    MS_STQ_F32(dst + i, dst_tmp);
   }
 #endif
   for (; i < length; ++i) {
@@ -55,14 +73,21 @@ int Fp32Relu6(const float *src, int length, float *dst) {
 
 int LRelu(const float *src, int length, float *dst, float alpha) {
   int i = 0;
-#ifdef ENABLE_ARM64
-  float32x4_t alpha_4 = vdupq_n_f32(alpha);
+#if defined(ENABLE_AVX)
+  for (; i < length - 8; i += 8) {
+    MS_FLOAT32X8 src_tmp = MS_LD256_F32(src + i);
+    MS_FLOAT32X8 mul_tmp = MS_MUL256_N_F32(src_tmp, alpha);
+    MS_FLOAT32X8 mask = MS_CMP256_F32(src_tmp, MS_MOV256_F32(0.0f), 30);
+    MS_ST256_F32(dst + i, MS_BLEND256_F32(mul_tmp, src_tmp, mask));
+  }
+#endif
+
+#if defined(ENABLE_ARM) || defined(ENABLE_SSE)
   for (; i < length - 4; i += 4) {
-    float32x4_t src_4 = vld1q_f32(src + i);
-    float32x4_t mul_4 = vmulq_f32(src_4, alpha_4);
-    uint32x4_t flag = vclezq_f32(src_4);
-    float32x4_t dst_4 = vbslq_f32(flag, mul_4, src_4);
-    vst1q_f32(dst + i, dst_4);
+    MS_FLOAT32X4 src_tmp = MS_LDQ_F32(src + i);
+    MS_FLOAT32X4 mul_tmp = MS_MULQ_N_F32(src_tmp, alpha);
+    MS_FLOAT32X4 mask = MS_CMPGTQ_F32(src_tmp, MS_MOVQ_F32(0.0f));
+    MS_STQ_F32(dst + i, MS_BLENDQ_F32(mul_tmp, src_tmp, mask));
   }
 #endif
   for (; i < length; ++i) {
@@ -72,19 +97,24 @@ int LRelu(const float *src, int length, float *dst, float alpha) {
 }
 
 int Sigmoid(const float *src, int length, float *dst) {
-  const float upper_bound = 16.619047164916992188f;
-  const float lower_bound = -9.0f;
-  for (int i = 0; i < length; ++i) {
-    float input_val = src[i];
-    float result;
-    if (input_val > upper_bound) {
-      result = 1.0f;
-    } else if (input_val < lower_bound) {
-      result = exp(input_val);
-    } else {
-      result = 1.0f / (1.0f + exp(-input_val));
-    }
-    dst[i] = result;
+  int i = 0;
+#if defined(ENABLE_AVX)
+  for (; i < length - 8; i += 8) {
+    simd_exp_avx(-(MS_LD256_F32(src + i)), dst + i);
+    MS_ST256_F32(dst + i,
+                 MS_DIV256_F32(MS_MOV256_F32(1.0f), MS_ADD256_F32(MS_MOV256_F32(1.0f), MS_LD256_F32(dst + i))));
+  }
+#endif
+
+#if defined(ENABLE_ARM) || defined(ENABLE_SSE)
+  for (; i < length - 4; i += 4) {
+    simd_exp(-(MS_LDQ_F32(src + i)), dst + i);
+    MS_STQ_F32(dst + i, MS_DIVQ_F32(MS_MOVQ_F32(1.0f), MS_ADDQ_F32(MS_MOVQ_F32(1.0f), MS_LDQ_F32(dst + i))));
+  }
+#endif
+  for (; i < length; ++i) {
+    single_exp(-src[i], dst + i);
+    dst[i] = 1.0f / (1.0f + dst[i]);
   }
   return NNACL_OK;
 }
@@ -103,7 +133,21 @@ float TanhOpt(float src) {
 }
 
 int Tanh(const float *src, int length, float *dst) {
-  for (int i = 0; i < length; ++i) {
+  int i = 0;
+#if defined(ENABLE_AVX)
+  for (; i < length - 8; i += 8) {
+    MS_FLOAT32X8 input = MS_LD256_F32(src + i);
+    MS_ST256_F32(dst + i, MS_TANHX8_F32(input));
+  }
+#endif
+
+#if defined(ENABLE_ARM) || defined(ENABLE_SSE)
+  for (; i < length - 4; i += 4) {
+    MS_FLOAT32X4 input = MS_LDQ_F32(src + i);
+    MS_STQ_F32(dst + i, MS_TANHX4_F32(input));
+  }
+#endif
+  for (; i < length; ++i) {
     dst[i] = TanhOpt(src[i]);
   }
   return NNACL_OK;
@@ -115,12 +159,21 @@ int Swish(const float *src, int length, float *dst) {
     return NNACL_ERR;
   }
   int index = 0;
-#ifdef ENABLE_NEON
-  for (; index <= length - C4NUM; index += C4NUM) {
-    float32x4_t src_value = vld1q_f32(src + index);
-    float32x4_t sigmoid_value = vld1q_f32(dst + index);
-    float32x4_t result = vmulq_f32(src_value, sigmoid_value);
-    vst1q_f32(dst + index, result);
+#if defined(ENABLE_AVX)
+  for (; index <= length - 8; index += 8) {
+    MS_FLOAT32X8 src_value = MS_LD256_F32(src + index);
+    MS_FLOAT32X8 sigmoid_value = MS_LD256_F32(dst + index);
+    MS_FLOAT32X8 result = MS_MUL256_F32(src_value, sigmoid_value);
+    MS_ST256_F32(dst + index, result);
+  }
+#endif
+
+#if defined(ENABLE_ARM) || defined(ENABLE_SSE)
+  for (; index <= length - 4; index += 4) {
+    MS_FLOAT32X4 src_value = MS_LDQ_F32(src + index);
+    MS_FLOAT32X4 sigmoid_value = MS_LDQ_F32(dst + index);
+    MS_FLOAT32X4 result = MS_MULQ_F32(src_value, sigmoid_value);
+    MS_STQ_F32(dst + index, result);
   }
 #endif
   for (; index < length; index++) {
@@ -162,6 +215,48 @@ int HardTanh(const float *src, int length, float *dst, float min_val, float max_
   } else {
     for (i = 0; i < length; ++i) {
       dst[i] = src[i] < min_val ? min_val : (src[i] > max_val ? max_val : src[i]);
+    }
+  }
+  return NNACL_OK;
+}
+
+int Gelu(const float *src, int length, float *dst, bool approximate) {
+  if (src == NULL || dst == NULL) {
+    return NNACL_ERR;
+  }
+  int i = 0;
+  if (approximate) {
+    // dst = 0.5 * x * (1 + tanh((2 / pi) ^ 0.5 * (x + 0.044715x^3)))
+#if defined(ENABLE_AVX)
+    int C8 = UP_ROUND(length, C8NUM);
+    for (; i < C8; i += C8NUM) {
+      MS_FLOAT32X8 in = MS_LD256_F32(src + i);
+      MS_FLOAT32X8 res = 0.5f * in * (1.0f + MS_TANHX8_F32((0.79788456080287f + 0.035677408136f * in * in) * in));
+      MS_ST256_F32(dst + i, res);
+    }
+#endif
+#if defined(ENABLE_SSE) || defined(ENABLE_ARM)
+    int C4 = UP_ROUND(length, C4NUM);
+    for (; i < C4; i += C4NUM) {
+      MS_FLOAT32X4 in = MS_LDQ_F32(src + i);
+      MS_FLOAT32X4 res = 0.5f * in * (1.0f + MS_TANHX4_F32((0.79788456080287f + 0.035677408136f * in * in) * in));
+      MS_STQ_F32(dst + i, res);
+    }
+#endif
+    for (; i < length; i++) {
+      dst[i] = 0.5f * src[i] * (1.0f + TanhOpt((0.79788456080287f + 0.035677408136f * src[i] * src[i]) * src[i]));
+    }
+  } else {
+#if defined(ENABLE_AVX) || defined(ENABLE_SSE) || defined(ENABLE_ARM)
+    int C4 = UP_ROUND(length, C4NUM);
+    for (; i < C4; i += C4NUM) {
+      MS_FLOAT32X4 in = MS_LDQ_F32(src + i);
+      MS_FLOAT32X4 res = 0.5f * in * (1.0f + MS_ERFX4_F32(in / 1.4142135623730951f));
+      MS_STQ_F32(dst + i, res);
+    }
+#endif
+    for (; i < length; i++) {
+      dst[i] = 0.5f * src[i] * (1.0f + erff(src[i] / 1.4142135623730951f));
     }
   }
   return NNACL_OK;

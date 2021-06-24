@@ -56,6 +56,12 @@ int GetCVInterpolationMode(InterpolationMode mode);
 /// \return Status code
 int GetCVBorderType(BorderType type);
 
+/// \brief Returns the check result of tensor rank and tensor shape
+/// \param[in] tensor: The input tensor need to check
+/// \param[in] channel: The channel index of tensor shape.
+/// \param[out] return true if channel of tensor shape is 1 or 3.
+bool CheckTensorShape(const std::shared_ptr<Tensor> &tensor, const int &channel);
+
 /// \brief Returns flipped image
 /// \param[in] input/output: Tensor of shape <H,W,C> or <H,W> and any OpenCv compatible type, see CVTensor.
 /// \param flip_code: 1 for Horizontal (around y-axis), 0 for Vertical (around x-axis), -1 for both
@@ -96,6 +102,8 @@ Status Decode(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *out
 Status DecodeCv(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *output);
 
 bool IsNonEmptyJPEG(const std::shared_ptr<Tensor> &input);
+
+bool IsNonEmptyPNG(const std::shared_ptr<Tensor> &input);
 
 void JpegSetSource(j_decompress_ptr c_info, const void *data, int64_t data_size);
 
@@ -285,11 +293,28 @@ Status RgbaToRgb(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *
 /// \return Status code
 Status RgbaToBgr(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *output);
 
+/// \brief Take in a 3 channel image in RBG to GRAY
+/// \param[in] input The input image
+/// \param[out] output The output image
+/// \return Status code
+Status RgbToGray(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *output);
+
 /// \brief Get jpeg image width and height
 /// \param input: CVTensor containing the not decoded image 1D bytes
 /// \param img_width: the jpeg image width
 /// \param img_height: the jpeg image height
 Status GetJpegImageInfo(const std::shared_ptr<Tensor> &input, int *img_width, int *img_height);
+
+/// \brief Geometrically transform the input image
+/// \param[in] input Input Tensor
+/// \param[out] output Transformed Tensor
+/// \param[in] mat The transformation matrix
+/// \param[in] interpolation The interpolation mode
+/// \param[in] fill_r Red fill value for pad
+/// \param[in] fill_g Green fill value for pad
+/// \param[in] fill_b Blue fill value for pad
+Status Affine(const std::shared_ptr<Tensor> &input, std::shared_ptr<Tensor> *output, const std::vector<float_t> &mat,
+              InterpolationMode interpolation, uint8_t fill_r = 0, uint8_t fill_g = 0, uint8_t fill_b = 0);
 
 }  // namespace dataset
 }  // namespace mindspore

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
 #include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
@@ -71,7 +70,7 @@ Status MnistOp::Builder::SanityCheck() {
   err_msg += valid.find(builder_usage_) == valid.end()
                ? "Invalid parameter, usage must be 'train','test' or 'all', but got " + builder_usage_ + ".\n"
                : "";
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 MnistOp::MnistOp(const std::string &usage, int32_t num_workers, int32_t rows_per_buffer, std::string folder_path,
@@ -82,6 +81,8 @@ MnistOp::MnistOp(const std::string &usage, int32_t num_workers, int32_t rows_per
       row_cnt_(0),
       folder_path_(folder_path),
       rows_per_buffer_(rows_per_buffer),
+      image_path_({}),
+      label_path_({}),
       data_schema_(std::move(data_schema)) {
   io_block_queues_.Init(num_workers, queue_size);
 }
@@ -191,6 +192,7 @@ Status MnistOp::LoadTensorRow(row_id_type row_id, const MnistLabelPair &mnist_pa
   RETURN_IF_NOT_OK(Tensor::CreateScalar(mnist_pair.second, &label));
 
   (*trow) = TensorRow(row_id, {std::move(image), std::move(label)});
+  trow->setPath({image_path_[row_id], label_path_[row_id]});
   return Status::OK();
 }
 
@@ -346,6 +348,8 @@ Status MnistOp::ReadImageAndLabel(std::ifstream *image_reader, std::ifstream *la
     RETURN_IF_NOT_OK(Tensor::CreateFromMemory(img_tensor_shape, data_schema_->column(0).type(),
                                               reinterpret_cast<unsigned char *>(pixels), &image));
     image_label_pairs_.emplace_back(std::make_pair(image, labels_buf[j]));
+    image_path_.push_back(image_names_[index]);
+    label_path_.push_back(label_names_[index]);
   }
   return Status::OK();
 }
@@ -415,7 +419,8 @@ Status MnistOp::LaunchThreadsAndInitOp() {
   }
   RETURN_IF_NOT_OK(io_block_queues_.Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(wait_for_workers_post_.Register(tree_->AllTasks()));
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(num_workers_, std::bind(&MnistOp::WorkerEntry, this, std::placeholders::_1)));
+  RETURN_IF_NOT_OK(
+    tree_->LaunchWorkers(num_workers_, std::bind(&MnistOp::WorkerEntry, this, std::placeholders::_1), "", id()));
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(this->WalkAllFiles());
   RETURN_IF_NOT_OK(this->ParseMnistData());
@@ -451,12 +456,6 @@ Status MnistOp::CountTotalRows(const std::string &dir, const std::string &usage,
   }
 
   return Status::OK();
-}
-
-// Visitor accept method for NodePass
-Status MnistOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<MnistOp>(), modified);
 }
 
 Status MnistOp::ComputeColMap() {

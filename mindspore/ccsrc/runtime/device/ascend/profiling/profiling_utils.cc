@@ -37,7 +37,7 @@ constexpr char kIterEndNode[] = "PROFILING_ITER_END";
 // PROFILING_CUSTOM_LOGID_START 3
 constexpr uint64_t kProfilingFpStartLogId = 1;
 constexpr uint64_t kProfilingBpEndLogId = 2;
-constexpr uint64_t kProfilingIterEndLogId = 255;
+constexpr uint64_t kProfilingIterEndLogId = 65535;
 std::map<uint32_t, std::vector<CNodePtr>> ProfilingUtils::graph_profiling_cnode_;
 std::map<uint32_t, std::vector<std::string>> ProfilingUtils::graph_kernel_name_;
 std::map<uint32_t, std::vector<std::shared_ptr<ProfDesc>>> ProfilingUtils::graph_point_;
@@ -63,6 +63,9 @@ ProfilingTraceInfo ProfilingUtils::GetProfilingTraceFromEnv(NotNull<const sessio
   auto profiling_option = GetContextProfilingOption();
 
   ProfilingTraceInfo profiling_trace;
+  if (cnode_exec_order.empty()) {
+    return profiling_trace;
+  }
   profiling_trace.trace_begin = GetTraceBegin(cnode_exec_order, profiling_option);
   profiling_trace.trace_bp_end = GetTraceBpEnd(cnode_exec_order, profiling_option);
   profiling_trace.trace_netoutput = GetTraceNetoutput(cnode_exec_order, profiling_option);
@@ -161,7 +164,8 @@ std::string ProfilingUtils::GetTraceBpEnd(const std::vector<CNodePtr> &cnode_exe
     if (AnfAlgo::IsCommunicationOp(*iter)) {
       // store communication op input nodes' name
       std::set<std::string> ar_input_node_names;
-      for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(*iter); ++i) {
+      size_t input_num = AnfAlgo::GetInputTensorNum(*iter);
+      for (size_t i = 0; i < input_num; ++i) {
         auto input_node_with_index = AnfAlgo::GetPrevNodeOutput(*iter, i);
         auto input_node = input_node_with_index.first;
         ar_input_node_names.insert(input_node->fullname_with_scope());
@@ -374,12 +378,12 @@ void ProfilingUtils::ReportProfilingData(const std::vector<uint32_t> &task_ids, 
 
   auto context = MsContext::GetInstance();
   MS_EXCEPTION_IF_NULL(context);
-  TaskDescReporter task_reporter(context->get_param<uint32_t>(MS_CTX_DEVICE_ID), "vm.task_desc_info", ret->second);
+  TaskDescReporter task_reporter(context->get_param<uint32_t>(MS_CTX_DEVICE_ID), "vm_task_desc_info", ret->second);
   task_reporter.set_task_ids(task_ids);
   task_reporter.set_stream_ids(stream_ids);
   task_reporter.ReportData();
 
-  GraphDescReporter graph_reporter(context->get_param<uint32_t>(MS_CTX_DEVICE_ID), "vm.graph_desc_info", ret->second);
+  GraphDescReporter graph_reporter(context->get_param<uint32_t>(MS_CTX_DEVICE_ID), "vm_graph_desc_info", ret->second);
   graph_profiling_cnode_.erase(ret);
   graph_reporter.ReportData();
 
@@ -389,7 +393,7 @@ void ProfilingUtils::ReportProfilingData(const std::vector<uint32_t> &task_ids, 
     MS_LOG(ERROR) << "Graph id not found in graph_point";
     return;
   }
-  PointReporter point_reporter(context->get_param<uint32_t>(MS_CTX_DEVICE_ID), "vm.point");
+  PointReporter point_reporter(context->get_param<uint32_t>(MS_CTX_DEVICE_ID), "vm_point");
   for (const auto &point : point_iter->second) {
     point_reporter.AddReportData(point);
   }

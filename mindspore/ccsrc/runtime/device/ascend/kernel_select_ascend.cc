@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -53,19 +53,13 @@ enum MatchCountPriority : int {
   MATCH_COUNT_PRIORITY_END
 };
 const std::map<std::string, std::vector<std::string>> kNextOpFormatList = {
-  {prim::kPrimConv2D->name(), {kOpFormat_NC1HWC0, kOpFormat_FRAC_Z}},
-  {prim::kPrimFusedBatchNorm->name(),
-   {kOpFormat_NC1HWC0, kOpFormat_NC1HWC0, kOpFormat_NC1HWC0, kOpFormat_NC1HWC0, kOpFormat_NC1HWC0}}};
+  {prim::kPrimConv2D->name(), {kOpFormat_NC1HWC0, kOpFormat_FRAC_Z}}};
 
 bool MatchInferOutputDataType(const CNodePtr &cnode, const kernel::KernelBuildInfo &kernel_build_info) {
   MS_EXCEPTION_IF_NULL(cnode);
   // Check input data type
-  auto name = AnfAlgo::GetCNodeName(cnode);
   for (size_t input_index = 0; input_index < kernel_build_info.GetInputNum(); ++input_index) {
     TypeId input_origin_type = AnfAlgo::GetPrevNodeOutputInferDataType(cnode, input_index);
-    if ((name == kDynamicRNNOpName || name == kDynamicGRUV2OpName) && input_origin_type == kMetaTypeNone) {
-      continue;
-    }
     if (kernel_build_info.GetInputDeviceType(input_index) != input_origin_type) {
       return false;
     }
@@ -84,7 +78,8 @@ string GetPriorityMatchFormat(const CNodePtr &cnode) {
   bool is_init = false;
   bool need_change_nd = false;
   bool is_5d_input = false;
-  for (size_t index = 0; index < AnfAlgo::GetInputTensorNum(cnode); ++index) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(cnode);
+  for (size_t index = 0; index < input_num; ++index) {
     auto pre_output_format = AnfAlgo::GetPrevNodeOutputFormat(cnode, index);
     if (AnfAlgo::IsFeatureMapInput(cnode, index) &&
         kHWSpecialFormatSet.find(pre_output_format) != kHWSpecialFormatSet.end()) {
@@ -144,7 +139,8 @@ void UpdateCurMatchCounts(const kernel::KernelBuildInfo &kernel_build_info, cons
     MS_LOG(EXCEPTION) << "Out of range cur_kernel info_match_counts " << MATCH_COUNT_PRIORITY_END;
   }
   auto pri_match_format = GetPriorityMatchFormat(kernel_node);
-  for (size_t input_index = 0; input_index < AnfAlgo::GetInputTensorNum(kernel_node); ++input_index) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(kernel_node);
+  for (size_t input_index = 0; input_index < input_num; ++input_index) {
     auto input_anf_node = AnfAlgo::VisitKernelWithReturnType(AnfAlgo::GetInputNode(kernel_node, input_index), 0).first;
     MS_EXCEPTION_IF_NULL(input_anf_node);
     // we do not take ValueNode into consideration in graph kernel.
@@ -172,7 +168,8 @@ void UpdateCurMatchCounts(const kernel::KernelBuildInfo &kernel_build_info, cons
     }
   }
 
-  for (size_t output_index = 0; output_index < AnfAlgo::GetOutputTensorNum(kernel_node); ++output_index) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(kernel_node);
+  for (size_t output_index = 0; output_index < output_num; ++output_index) {
     // cal count of same output dtype between abstract and kernel info
     if (kernel_build_info.GetOutputDeviceType(output_index) ==
         AnfAlgo::GetOutputInferDataType(kernel_node, output_index)) {
@@ -234,6 +231,24 @@ std::vector<std::shared_ptr<kernel::KernelBuildInfo>> FilteredKernelInfoByDtype(
   return result;
 }
 
+bool CheckHitTargetDtype(const std::map<TypeId, TypeId> &type_map, const TypeId &in_dtype, const TypeId &device_dtype,
+                         bool *flag) {
+  auto iter = type_map.find(in_dtype);
+  // if infer dtype node in type_map and the infer dtype not equal kernel info dtype, return false
+  if (iter == type_map.end() && in_dtype != device_dtype) {
+    return false;
+  }
+  // infer dtype in type_map, but can not find dst dtype that supported raise or reduce,
+  // or infer dtype not equal kernel info dtype, return false
+  if (iter != type_map.end() && iter->second != device_dtype && in_dtype != device_dtype) {
+    return false;
+  }
+  if (in_dtype == kNumberTypeInt64 && device_dtype == kNumberTypeInt32) {
+    *flag = true;
+  }
+  return true;
+}
+
 bool TagRaiseReduce(const std::shared_ptr<kernel::KernelBuildInfo> &kernel_build_info, const CNodePtr &cnode,
                     const std::map<TypeId, TypeId> &type_map) {
   // filte kernel info that unsupported raise or reduce datatype
@@ -246,18 +261,8 @@ bool TagRaiseReduce(const std::shared_ptr<kernel::KernelBuildInfo> &kernel_build
     if (device_dtype == kNumberTypeFloat || device_dtype == kNumberTypeFloat32) {
       device_dtype = kNumberTypeFloat32;
     }
-    auto iter = type_map.find(in_dtype);
-    // if infer dtype node in type_map and the infer dtype not equal kernel info dtype, return false
-    if (iter == type_map.end() && in_dtype != device_dtype) {
+    if (!CheckHitTargetDtype(type_map, in_dtype, device_dtype, &flag)) {
       return false;
-    }
-    // infer dtype in type_map, but can not find dst dtype that supported raise or reduce,
-    // or infer dtype not equal kernel info dtype, return false
-    if (iter != type_map.end() && iter->second != device_dtype && in_dtype != device_dtype) {
-      return false;
-    }
-    if (in_dtype == kNumberTypeInt64 && device_dtype == kNumberTypeInt32) {
-      flag = true;
     }
   }
 
@@ -267,18 +272,9 @@ bool TagRaiseReduce(const std::shared_ptr<kernel::KernelBuildInfo> &kernel_build
     if (device_dtype == kNumberTypeFloat || device_dtype == kNumberTypeFloat32) {
       device_dtype = kNumberTypeFloat32;
     }
-    auto iter = type_map.find(in_dtype);
-    // if infer dtype node in type_map and the infer dtype not equal kernel info dtype, return false
-    if (iter == type_map.end() && in_dtype != device_dtype) {
+
+    if (!CheckHitTargetDtype(type_map, in_dtype, device_dtype, &flag)) {
       return false;
-    }
-    // infer dtype in type_map, but can not find dst dtype that supported raise or reduce,
-    // or infer dtype not equal kernel info dtype, return false
-    if (iter != type_map.end() && iter->second != device_dtype && in_dtype != device_dtype) {
-      return false;
-    }
-    if (in_dtype == kNumberTypeInt64 && device_dtype == kNumberTypeInt32) {
-      flag = true;
     }
   }
   if (flag) {
@@ -331,14 +327,14 @@ void SetCastAndWeightFormat(const CNodePtr &kernel_node) {
   if (!AnfAlgo::HasNodeAttr(kAttrPynativeNextIndex, kernel_node) ||
       !AnfAlgo::HasNodeAttr(kAttrPynativeNextOpName, kernel_node)) {
     MS_LOG(EXCEPTION) << "The node [" << kernel_node->DebugString() << "] attr of " << kAttrPynativeNextIndex << " or "
-                      << kAttrPynativeNextOpName << " has been not setted yet!"
+                      << kAttrPynativeNextOpName << " has not been set yet!"
                       << " trace: " << trace::DumpSourceLines(kernel_node);
   }
   auto next_index = AnfAlgo::GetNodeAttr<size_t>(kernel_node, kAttrPynativeNextIndex);
   auto next_op_name = AnfAlgo::GetNodeAttr<std::string>(kernel_node, kAttrPynativeNextOpName);
   auto iter = kNextOpFormatList.find(next_op_name);
   if (iter == kNextOpFormatList.end()) {
-    MS_LOG(INFO) << "The op name " << next_op_name << "has been not setted in the next op map ";
+    MS_LOG(INFO) << "The op name " << next_op_name << "has not been set in the next op map ";
     return;
   }
   if (iter->second.size() < next_index) {
@@ -377,7 +373,7 @@ void SetWeightFormat(const AnfNodePtr &real_input_node, const std::vector<string
   }
   if (AnfAlgo::GetOutputDeviceDataType(real_input_node, 0) == kTypeUnknown || is_ref) {
     builder->SetOutputsFormat(output_format);
-    std::vector<TypeId> output_type = {selected_kernel_info->GetInputDeviceType(input_index)};
+    std::vector<TypeId> output_type = {AnfAlgo::GetOutputInferDataType(real_input_node, 0)};
     builder->SetOutputsDeviceType(output_type);
     AnfAlgo::SetSelectKernelBuildInfo(builder->Build(), real_input_node.get());
   }
@@ -409,7 +405,8 @@ void SetTensorDeviceInfo(const CNodePtr &kernel_node) {
   MS_EXCEPTION_IF_NULL(kernel_node);
   auto selected_kernel_info = AnfAlgo::GetSelectKernelBuildInfo(kernel_node);
   MS_EXCEPTION_IF_NULL(selected_kernel_info);
-  for (size_t input_index = 0; input_index < AnfAlgo::GetInputTensorNum(kernel_node); ++input_index) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(kernel_node);
+  for (size_t input_index = 0; input_index < input_num; ++input_index) {
     auto input_kernel_node = AnfAlgo::GetInputNode(kernel_node, input_index);
     MS_EXCEPTION_IF_NULL(input_kernel_node);
     auto input_with_index = AnfAlgo::VisitKernel(input_kernel_node, 0);
@@ -442,7 +439,7 @@ KernelSelectStatus SetMatchedKernelInfo(const CNodePtr &kernel_node,
   bool precision_reduce = false;
   std::shared_ptr<kernel::KernelBuildInfo> selected_kernel_info = nullptr;
   // Matched kernel info
-  // Filter kernel info matched with me infered type
+  // Filter kernel info matched with me inferred type
   auto filtered_kernel_info_list = FilteredKernelInfoByDtype(kernel_node, kernel_info_list);
   if (!filtered_kernel_info_list.empty()) {
     selected_kernel_info = ChooseMatchedKernelInfo(kernel_node, filtered_kernel_info_list);
@@ -516,6 +513,57 @@ KernelSelectStatus SelectKernelInfo(const CNodePtr &kernel_node, KernelType kern
   }
   return select_status;
 }
+
+void SetKernelInfo(const CNodePtr &kernel_node, KernelType kernel_type) {
+  auto kernel_info = static_cast<device::KernelInfo *>(kernel_node->kernel_info());
+  MS_EXCEPTION_IF_NULL(kernel_info);
+  auto kernel_build_info = kernel_info->select_kernel_build_info();
+  MS_EXCEPTION_IF_NULL(kernel_build_info);
+
+  if (AnfAlgo::IsGraphKernel(kernel_node)) {
+    return;
+  }
+
+  auto builder = std::make_shared<kernel::KernelBuildInfo::KernelBuildInfoBuilder>();
+  builder->SetOriginDataFormat(kernel_build_info->GetOriginDataFormat());
+  builder->SetInputsFormat(kernel_build_info->GetAllInputFormats());
+  builder->SetInputsDeviceType(kernel_build_info->GetAllInputDeviceTypes());
+  builder->SetOutputsFormat(kernel_build_info->GetAllOutputFormats());
+  builder->SetOutputsDeviceType(kernel_build_info->GetAllOutputDeviceTypes());
+  builder->SetOpPattern(kernel_build_info->op_pattern());
+  builder->SetFusionType(kernel_build_info->fusion_type());
+
+  auto new_kernel_type = kernel_type;
+  auto new_processor = kernel_build_info->processor();
+  if (kernel_type == UNKNOWN_KERNEL_TYPE) {
+    std::vector<std::shared_ptr<kernel::KernelBuildInfo>> kernel_info_list;
+    std::vector<std::shared_ptr<kernel::KernelBuildInfo>> aicpu_kernel_info_list;
+    kernel::KernelQuery(kernel_node, &kernel_info_list, kernel_type);
+    auto select_status = SetMatchedKernelInfo(kernel_node, kernel_info_list);
+    if (select_status != kNoMatched) {
+      new_kernel_type = TBE_KERNEL;
+      new_processor = kernel::Processor::AICORE;
+      MS_LOG(INFO) << kernel_node->fullname_with_scope() << " uses TBE_KERNEL";
+    } else {
+      kernel::AICPUQuery(kernel_node, &aicpu_kernel_info_list);
+      select_status = SetMatchedKernelInfo(kernel_node, aicpu_kernel_info_list);
+      if (select_status != kNoMatched) {
+        new_kernel_type = AICPU_KERNEL;
+        new_processor = kernel::Processor::AICPU;
+        MS_LOG(INFO) << kernel_node->fullname_with_scope() << " uses AICPU_KERNEL";
+      }
+    }
+  }
+  if (new_kernel_type == UNKNOWN_KERNEL_TYPE) {
+    new_kernel_type = AKG_KERNEL;
+    new_processor = kernel::Processor::AICORE;
+    MS_LOG(INFO) << kernel_node->fullname_with_scope() << " uses AKG_KERNEL";
+  }
+  builder->SetKernelType(new_kernel_type);
+  builder->SetProcessor(new_processor);
+  AnfAlgo::SetSelectKernelBuildInfo(builder->Build(), kernel_node.get());
+}
+
 }  // namespace ascend
 }  // namespace device
 }  // namespace mindspore

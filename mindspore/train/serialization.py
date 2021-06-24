@@ -14,16 +14,21 @@
 # ============================================================================
 """Model and parameters serialization."""
 import os
+import sys
 import stat
 import math
+import shutil
 from threading import Thread, Lock
 import numpy as np
+
 import mindspore.nn as nn
 import mindspore.context as context
 from mindspore import log as logger
 from mindspore.train.checkpoint_pb2 import Checkpoint
 from mindspore.train.print_pb2 import Print
 from mindspore.train.node_strategy_pb2 import ParallelStrategyMap, ParallelLayouts
+from mindspore.train.mind_ir_pb2 import ModelProto as mindir_model
+from mindspore.train.mind_ir_pb2 import GraphProto as graph_proto
 from mindspore.common.tensor import Tensor
 from mindspore.common.initializer import initializer
 from mindspore.common.parameter import Parameter
@@ -33,6 +38,7 @@ from mindspore._checkparam import check_input_data, Validator
 from mindspore.compression.export import quant_export
 from mindspore.parallel._tensor import _load_tensor
 from mindspore.parallel._utils import _infer_rank_list, _remove_repeated_slices
+from .._c_expression import load_mindir
 
 
 tensor_to_ms_type = {"Int8": mstype.int8, "Uint8": mstype.uint8, "Int16": mstype.int16, "Uint16": mstype.uint16,
@@ -46,6 +52,7 @@ tensor_to_np_type = {"Int8": np.int8, "Uint8": np.uint8, "Int16": np.int16, "Uin
 
 _ckpt_mutex = Lock()
 SLICE_SIZE = 512 * 1024 * 1024
+TOTAL_SAVE = 1024 * 1024
 
 
 def _special_process_par(par, new_par):
@@ -93,7 +100,7 @@ def _update_param(param, new_param):
     if isinstance(param.data, Tensor) and not isinstance(new_param.data, Tensor):
         if param.data.shape != (1,) and param.data.shape != ():
             logger.error("Failed to combine the net and the parameters for param %s.", param.name)
-            msg = ("Net parameters {} shape({}) is not (1,), inconsitent with parameter_dict's(scalar)."
+            msg = ("Net parameters {} shape({}) is not (1,), inconsistent with parameter_dict's(scalar)."
                    .format(param.name, param.data.shape))
             raise RuntimeError(msg)
         param.set_data(initializer(new_param.data, param.data.shape, param.data.dtype))
@@ -147,16 +154,17 @@ def save_checkpoint(save_obj, ckpt_file_name, integrated_save=True, async_save=F
     Saves checkpoint info to a specified file.
 
     Args:
-        save_obj (nn.Cell or list): The cell object or data list(each element is a dictionary, like
-                                    [{"name": param_name, "data": param_data},...], the type of param_name would
-                                    be string, and the type of param_data would be parameter or tensor).
+        save_obj (Union[Cell, list]): The cell object or data list(each element is a dictionary, like
+                                      [{"name": param_name, "data": param_data},...], the type of
+                                      param_name would be string, and the type of param_data would
+                                      be parameter or `Tensor`).
         ckpt_file_name (str): Checkpoint file name. If the file name already exists, it will be overwritten.
         integrated_save (bool): Whether to integrated save in automatic model parallel scene. Default: True
         async_save (bool): Whether asynchronous execution saves the checkpoint to a file. Default: False
 
     Raises:
-        TypeError: If the parameter save_obj is not nn.Cell or list type.And if the parameter integrated_save and
-                   async_save are not bool type.
+        TypeError: If the parameter save_obj is not `nn.Cell` or list type. And if the parameter
+                   `integrated_save` and `async_save` are not bool type.
     """
 
     if not isinstance(save_obj, nn.Cell) and not isinstance(save_obj, list):
@@ -222,6 +230,49 @@ def _check_param_prefix(filter_prefix, param_name):
     return False
 
 
+def load(file_name):
+    """
+    Load MindIR.
+
+    The returned object can be executed by a `GraphCell`. However, there are some limitations to the current use
+    of `GraphCell`, see class :class:`mindspore.nn.GraphCell` for more details.
+
+    Args:
+        file_name (str): MindIR file name.
+
+    Returns:
+        Object, a compiled graph that can executed by `GraphCell`.
+
+    Raises:
+        ValueError: MindIR file is incorrect.
+
+    Examples:
+        >>> import numpy as np
+        >>> import mindspore.nn as nn
+        >>> from mindspore import Tensor
+        >>> from mindspore.train import export, load
+        >>>
+        >>> net = nn.Conv2d(1, 1, kernel_size=3)
+        >>> input = Tensor(np.ones([1, 1, 3, 3]).astype(np.float32))
+        >>> export(net, input, file_name="net", file_format="MINDIR")
+        >>> graph = load("net.mindir")
+        >>> net = nn.GraphCell(graph)
+        >>> output = net(input)
+    """
+    if not isinstance(file_name, str):
+        raise ValueError("The file name must be string.")
+    if not os.path.exists(file_name):
+        raise ValueError("The file does not exist.")
+    if not file_name.endswith(".mindir"):
+        raise ValueError("The MindIR should end with mindir, please input the correct file name.")
+
+    logger.info("Execute the process of loading mindir.")
+    graph = load_mindir(file_name)
+    if graph is None:
+        raise RuntimeError("Load MindIR failed.")
+    return graph
+
+
 def load_checkpoint(ckpt_file_name, net=None, strict_load=False, filter_prefix=None):
     """
     Loads checkpoint info from a specified file.
@@ -241,34 +292,12 @@ def load_checkpoint(ckpt_file_name, net=None, strict_load=False, filter_prefix=N
         ValueError: Checkpoint file is incorrect.
 
     Examples:
+        >>> from mindspore import load_checkpoint
+        >>>
         >>> ckpt_file_name = "./checkpoint/LeNet5-1_32.ckpt"
         >>> param_dict = load_checkpoint(ckpt_file_name, filter_prefix="conv1")
     """
-    if not isinstance(ckpt_file_name, str):
-        raise ValueError("The ckpt_file_name must be string.")
-
-    if not os.path.exists(ckpt_file_name):
-        raise ValueError("The checkpoint file is not exist.")
-
-    if ckpt_file_name[-5:] != ".ckpt":
-        raise ValueError("Please input the correct checkpoint file name.")
-
-    if os.path.getsize(ckpt_file_name) == 0:
-        raise ValueError("The checkpoint file may be empty, please make sure enter the correct file name.")
-
-    if filter_prefix is not None:
-        if not isinstance(filter_prefix, (str, list, tuple)):
-            raise TypeError(f"The type of filter_prefix must be str, list[str] or tuple[str] "
-                            f"when filter_prefix is not None, but got {str(type(filter_prefix))}.")
-        if isinstance(filter_prefix, str):
-            filter_prefix = (filter_prefix,)
-        if not filter_prefix:
-            raise ValueError("The filter_prefix can't be empty when filter_prefix is list or tuple.")
-        for index, prefix in enumerate(filter_prefix):
-            if not isinstance(prefix, str):
-                raise TypeError(f"The type of filter_prefix must be str, list[str] or tuple[str], "
-                                f"but got {str(type(prefix))} at index {index}.")
-
+    ckpt_file_name, filter_prefix = _check_checkpoint_param(ckpt_file_name, filter_prefix)
     logger.info("Execute the process of loading checkpoint files.")
     checkpoint_list = Checkpoint()
 
@@ -297,7 +326,6 @@ def load_checkpoint(ckpt_file_name, net=None, strict_load=False, filter_prefix=N
                 param_data = np.concatenate((param_data_list), axis=0)
                 param_data_list.clear()
                 dims = element.tensor.dims
-
                 if dims == [0]:
                     if 'Float' in data_type:
                         param_data = float(param_data[0])
@@ -328,6 +356,32 @@ def load_checkpoint(ckpt_file_name, net=None, strict_load=False, filter_prefix=N
     return parameter_dict
 
 
+def _check_checkpoint_param(ckpt_file_name, filter_prefix=None):
+    """Check function load_checkpoint's parameter."""
+    if not isinstance(ckpt_file_name, str):
+        raise ValueError("The ckpt_file_name must be string.")
+
+    if not os.path.exists(ckpt_file_name):
+        raise ValueError("The checkpoint file does not exist.")
+
+    if ckpt_file_name[-5:] != ".ckpt":
+        raise ValueError("Please input the correct checkpoint file name.")
+
+    if filter_prefix is not None:
+        if not isinstance(filter_prefix, (str, list, tuple)):
+            raise TypeError(f"The type of filter_prefix must be str, list[str] or tuple[str] "
+                            f"when filter_prefix is not None, but got {str(type(filter_prefix))}.")
+        if isinstance(filter_prefix, str):
+            filter_prefix = (filter_prefix,)
+        if not filter_prefix:
+            raise ValueError("The filter_prefix can't be empty when filter_prefix is list or tuple.")
+        for index, prefix in enumerate(filter_prefix):
+            if not isinstance(prefix, str):
+                raise TypeError(f"The type of filter_prefix must be str, list[str] or tuple[str], "
+                                f"but got {str(type(prefix))} at index {index}.")
+    return ckpt_file_name, filter_prefix
+
+
 def load_param_into_net(net, parameter_dict, strict_load=False):
     """
     Loads parameters into network.
@@ -342,6 +396,8 @@ def load_param_into_net(net, parameter_dict, strict_load=False):
         TypeError: Argument is not a Cell, or parameter_dict is not a Parameter dictionary.
 
     Examples:
+        >>> from mindspore import load_checkpoint, load_param_into_net
+        >>>
         >>> net = Net()
         >>> ckpt_file_name = "./checkpoint/LeNet5-1_32.ckpt"
         >>> param_dict = load_checkpoint(ckpt_file_name, filter_prefix="conv1")
@@ -422,11 +478,11 @@ def _save_graph(network, file_name):
     """
     logger.info("Execute the process of saving graph.")
 
-    graph_proto = network.get_func_graph_proto()
-    if graph_proto:
+    graph_pb = network.get_func_graph_proto()
+    if graph_pb:
         with open(file_name, "wb") as f:
-            f.write(graph_proto)
-        os.chmod(file_name, stat.S_IRUSR)
+            os.chmod(file_name, stat.S_IRUSR | stat.S_IWUSR)
+            f.write(graph_pb)
 
 
 def _get_merged_param_data(net, param_name, param_data, integrated_save):
@@ -454,6 +510,12 @@ def _get_merged_param_data(net, param_name, param_data, integrated_save):
     uniform_split = layout[4]
     opt_shard_group = layout[5]
 
+    allgather_net = None
+    if param_name in net.parallel_parameter_merge_net_dict:
+        allgather_net = net.parallel_parameter_merge_net_dict[param_name]
+    else:
+        logger.info("need to create allgather net for %s", param_name)
+
     if integrated_save:
         if uniform_split == 0:
             raise RuntimeError("Integrated save checkpoint only support uniform split tensor now.")
@@ -461,19 +523,25 @@ def _get_merged_param_data(net, param_name, param_data, integrated_save):
         # pipeline parallel need to be supported here later
         for dim in tensor_map:
             if dim != -1:
-                if opt_shard_group:
-                    allgather_net = get_allgather_cell(opt_shard_group, True)
-                else:
-                    allgather_net = get_allgather_cell(opt_shard_group, False)
+                if allgather_net is None:
+                    if opt_shard_group:
+                        allgather_net = get_allgather_cell(opt_shard_group, True)
+                    else:
+                        allgather_net = get_allgather_cell(opt_shard_group, False)
+                    net.parallel_parameter_merge_net_dict[param_name] = allgather_net
                 param_data = allgather_net(param_data)
                 if field_size:
                     return _reshape_param_data_with_weight(param_data, dev_mat, field_size)
                 return _reshape_param_data(param_data, dev_mat, tensor_map)
         if opt_shard_group:
-            allgather_net = get_allgather_cell(opt_shard_group, False)
+            if allgather_net is None:
+                allgather_net = get_allgather_cell(opt_shard_group, False)
+                net.parallel_parameter_merge_net_dict[param_name] = allgather_net
             param_data = allgather_net(param_data)
     elif opt_shard_group:
-        allgather_net = get_allgather_cell(opt_shard_group, False)
+        if allgather_net is None:
+            allgather_net = get_allgather_cell(opt_shard_group, False)
+            net.parallel_parameter_merge_net_dict[param_name] = allgather_net
         param_data = allgather_net(param_data)
     return param_data
 
@@ -507,17 +575,20 @@ def export(net, *inputs, file_name, file_format='AIR', **kwargs):
     """
     Export the MindSpore prediction model to a file in the specified format.
 
+    Notes:
+        When exporting to AIR format, the size of a single tensor can not exceed 2GB.
+
     Args:
         net (Cell): MindSpore network.
         inputs (Tensor): Inputs of the `net`.
         file_name (str): File name of the model to be exported.
         file_format (str): MindSpore currently supports 'AIR', 'ONNX' and 'MINDIR' format for exported model.
 
-            - AIR: Ascend Intermidiate Representation. An intermidiate representation format of Ascend model.
+            - AIR: Ascend Intermediate Representation. An intermediate representation format of Ascend model.
               Recommended suffix for output file is '.air'.
             - ONNX: Open Neural Network eXchange. An open format built to represent machine learning models.
               Recommended suffix for output file is '.onnx'.
-            - MINDIR: MindSpore Native Intermidiate Representation for Anf. An intermidiate representation format
+            - MINDIR: MindSpore Native Intermediate Representation for Anf. An intermediate representation format
               for MindSpore models.
               Recommended suffix for output file is '.mindir'.
 
@@ -556,31 +627,121 @@ def _export(net, file_name, file_format, *inputs):
     if is_dump_onnx_in_training:
         net.set_train(mode=False)
 
-    net.init_parameters_data()
     if file_format == 'AIR':
         phase_name = 'export.air'
         graph_id, _ = _executor.compile(net, *inputs, phase=phase_name)
-        file_name += ".air"
+        if not file_name.endswith('.air'):
+            file_name += ".air"
         _executor.export(file_name, graph_id)
     elif file_format == 'ONNX':
         phase_name = 'export.onnx'
         graph_id, _ = _executor.compile(net, *inputs, phase=phase_name, do_convert=False)
         onnx_stream = _executor._get_func_graph_proto(net, graph_id)
-        file_name += ".onnx"
+        if not file_name.endswith('.onnx'):
+            file_name += ".onnx"
         with open(file_name, 'wb') as f:
-            os.chmod(file_name, stat.S_IWUSR | stat.S_IRUSR)
+            os.chmod(file_name, stat.S_IRUSR | stat.S_IWUSR)
             f.write(onnx_stream)
     elif file_format == 'MINDIR':
-        phase_name = 'export.mindir'
-        graph_id, _ = _executor.compile(net, *inputs, phase=phase_name, do_convert=False)
-        onnx_stream = _executor._get_func_graph_proto(net, graph_id, 'mind_ir')
-        file_name += ".mindir"
-        with open(file_name, 'wb') as f:
-            os.chmod(file_name, stat.S_IWUSR | stat.S_IRUSR)
-            f.write(onnx_stream)
+        _save_mindir(net, file_name, *inputs)
 
     if is_dump_onnx_in_training:
         net.set_train(mode=True)
+
+
+def _save_mindir(net, file_name, *inputs):
+    """Save MindIR format file."""
+    model = mindir_model()
+    if net._auto_parallel_mode:
+        phase_name = "predict"
+    else:
+        phase_name = 'export.mindir'
+    graph_id, _ = _executor.compile(net, *inputs, phase=phase_name,
+                                    do_convert=False, auto_parallel_mode=net._auto_parallel_mode)
+    mindir_stream = _executor._get_func_graph_proto(net, graph_id, 'mind_ir')
+
+    net_dict = net.parameters_dict()
+    data_total = 0
+    save_together = True
+
+    model.ParseFromString(mindir_stream)
+    for param_proto in model.graph.parameter:
+        name = param_proto.name[param_proto.name.find(":") + 1:]
+        if name in net_dict.keys():
+            data_total += sys.getsizeof(net_dict[name].data.asnumpy().tobytes()) / 1024
+        else:
+            raise RuntimeError('Graph parameter: {} Undefined in network.'.format(param_proto.name))
+        if data_total > TOTAL_SAVE:
+            save_together = False
+            break
+
+    if save_together:
+        for param_proto in model.graph.parameter:
+            param_name = param_proto.name[param_proto.name.find(":")+1:]
+            if param_name in net_dict.keys():
+                param_data = net_dict[param_name].data.asnumpy().tobytes()
+                param_proto.raw_data = param_data
+            else:
+                logger.error("The parameter %s in the graph are not in the network.", param_name)
+                raise ValueError("The parameter in the graph must in the network.")
+        if not file_name.endswith('.mindir'):
+            file_name += ".mindir"
+        current_path = os.path.abspath(file_name)
+        dirname = os.path.dirname(current_path)
+        os.makedirs(dirname, exist_ok=True)
+        with open(file_name, 'wb') as f:
+            os.chmod(file_name, stat.S_IRUSR | stat.S_IWUSR)
+            f.write(model.SerializeToString())
+    else:
+        logger.warning("Parameters in the net capacity exceeds 1G, save MindIR model and parameters separately.")
+        # save parameter
+        file_prefix = file_name.split("/")[-1]
+        if file_prefix.endswith(".mindir"):
+            file_prefix = file_prefix[:-7]
+        current_path = os.path.abspath(file_name)
+        dirname = os.path.dirname(current_path)
+        data_path = dirname + "/" + file_prefix + "_variables"
+        if os.path.exists(data_path):
+            shutil.rmtree(data_path)
+        os.makedirs(data_path, exist_ok=True)
+        os.chmod(data_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        index = 0
+        graphproto = graph_proto()
+        data_size = 0
+
+        for name, param in net_dict.items():
+            for param_proto in model.graph.parameter:
+                if name == param_proto.name[param_proto.name.find(":") + 1:]:
+                    parameter = graphproto.parameter.add()
+                    parameter.name = param_proto.name
+                    parameter.data_type = param_proto.data_type
+                    for dim in param_proto.dims:
+                        parameter.dims.append(dim)
+                    byte_data = param.data.asnumpy().tobytes()
+                    parameter.raw_data = byte_data
+                    data_size += sys.getsizeof(byte_data) / 1024
+                    break
+            if data_size > TOTAL_SAVE:
+                data_file_name = data_path + "/" + "data_" + str(index)
+                with open(data_file_name, "ab") as f:
+                    os.chmod(data_file_name, stat.S_IRUSR | stat.S_IWUSR)
+                    f.write(graphproto.SerializeToString())
+                index += 1
+                data_size = 0
+                del graphproto.parameter[:]
+
+        if graphproto.parameter:
+            data_file_name = data_path + "/" + "data_" + str(index)
+            with open(data_file_name, "ab") as f:
+                os.chmod(data_file_name, stat.S_IRUSR | stat.S_IWUSR)
+                f.write(graphproto.SerializeToString())
+
+        # save graph
+        del model.graph.parameter[:]
+        graph_file_name = dirname + "/" + file_prefix + "_graph.mindir"
+        with open(graph_file_name, 'wb') as f:
+            os.chmod(graph_file_name, stat.S_IRUSR | stat.S_IWUSR)
+            f.write(model.SerializeToString())
 
 
 def _quant_export(network, *inputs, file_format, **kwargs):
@@ -668,13 +829,10 @@ def parse_print(print_file_name):
                 np_type = tensor_to_np_type[data_type]
                 param_data = np.fromstring(data, np_type)
                 ms_type = tensor_to_ms_type[data_type]
-                param_dim = []
-                for dim in dims:
-                    param_dim.append(dim)
-                if param_dim:
-                    param_value = param_data.reshape(param_dim)
+                if dims and dims != [0]:
+                    param_value = param_data.reshape(dims)
                     tensor_list.append(Tensor(param_value, ms_type))
-                # Scale type
+                # Scalar type
                 else:
                     data_type_ = data_type.lower()
                     if 'float' in data_type_:
@@ -827,11 +985,9 @@ def merge_sliced_parameter(sliced_parameters, strategy=None):
 
     Args:
         sliced_parameters (list[Parameter]): Parameter slices in order of rank_id.
-        strategy (dict): Parameter slice strategy, the default is None.
-            If strategy is None, just merge parameter slices in 0 axis order.
-
-            - key (str): Parameter name.
-            - value (<class 'node_strategy_pb2.ParallelLayouts'>): Slice strategy of this parameter.
+        strategy (Optional[dict]): Parameter slice strategy, whose key is parameter name and
+            value is slice strategy of this parameter. If strategy is None, just merge
+            parameter slices in 0 axis order. Default: None.
 
     Returns:
         Parameter, the merged parameter which has the whole data.
@@ -842,6 +998,9 @@ def merge_sliced_parameter(sliced_parameters, strategy=None):
         KeyError: The parameter name is not in keys of strategy.
 
     Examples:
+        >>> from mindspore.common.parameter import Parameter
+        >>> from mindspore.train import merge_sliced_parameter
+        >>>
         >>> sliced_parameters = [
         ...                      Parameter(Tensor(np.array([0.00023915, 0.00013939, -0.00098059])),
         ...                                "network.embedding_table"),
@@ -909,10 +1068,13 @@ def load_distributed_checkpoint(network, checkpoint_filenames, predict_strategy=
 
     Args:
         network (Cell): Network for distributed predication.
-        checkpoint_filenames (list[str]): The name of Checkpoint files in order of rank id.
-        predict_strategy (dict): Strategy of predication process, whose key is parameter name, and value is a list or
-            a tuple that the first four elements are [dev_matrix, tensor_map, param_split_shape, field]. If None,
-            it means that the predication process just uses single device. Default: None.
+        checkpoint_filenames (list(str)): The name of Checkpoint files
+            in order of rank id.
+        predict_strategy (Optional(dict)): Strategy of predication process, whose key
+            is parameter name, and value is a list or a tuple that the first four
+            elements are [dev_matrix, tensor_map, param_split_shape, field]. If None,
+            it means that the predication process just uses single device.
+            Default: None.
 
     Raises:
         TypeError: The type of inputs do not match the requirements.
@@ -1049,7 +1211,6 @@ def _merge_and_split(sliced_params, train_strategy, predict_strategy):
 
 def _load_single_param(ckpt_file_name, param_name):
     """Load a parameter from checkpoint."""
-    logger.info("Execute the process of loading checkpoint files.")
     checkpoint_list = Checkpoint()
 
     try:
@@ -1057,7 +1218,8 @@ def _load_single_param(ckpt_file_name, param_name):
             pb_content = f.read()
         checkpoint_list.ParseFromString(pb_content)
     except BaseException as e:
-        logger.error("Failed to read the checkpoint file `%s`, please check the correct of the file.", ckpt_file_name)
+        logger.error("Failed to read the checkpoint file `%s` during load single parameter,"
+                     " please check the correct of the file.", ckpt_file_name)
         raise ValueError(e.__str__())
 
     parameter = None
@@ -1091,8 +1253,7 @@ def _load_single_param(ckpt_file_name, param_name):
                         param_dim.append(dim)
                     param_value = param_data.reshape(param_dim)
                     parameter = Parameter(Tensor(param_value, ms_type), name=element.tag)
-            break
-        logger.info("Loading checkpoint files process is finished.")
+                break
 
     except BaseException as e:
         logger.error("Failed to load the checkpoint file `%s`.", ckpt_file_name)

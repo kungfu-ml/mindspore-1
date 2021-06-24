@@ -17,7 +17,7 @@ import numpy as np
 
 import mindspore.nn as nn
 from mindspore.ops.operations import NPUGetFloatStatus, NPUAllocFloatStatus, NPUClearFloatStatus, ReduceSum, \
-    LessEqual, ControlDepend
+    LessEqual
 from mindspore.parallel._utils import _get_device_num, _get_parallel_mode, _get_gradients_mean
 from mindspore.nn.wrap.grad_reducer import DistributedGradReducer
 from mindspore import Tensor
@@ -25,7 +25,7 @@ from mindspore.context import ParallelMode
 from mindspore.ops import composite as C
 from mindspore.ops import functional as F
 from mindspore.ops import operations as P
-from mindspore.common.parameter import ParameterTuple
+from mindspore.common.parameter import Parameter, ParameterTuple
 from mindspore.common import dtype as mstype
 
 
@@ -69,7 +69,6 @@ class TrainOneStepWithLossScaleCell(nn.Cell):
         self.base = Tensor(1, mstype.float32)
         self.reducer_flag = False
         self.less_equal = LessEqual()
-        self.depend_parameter_use = ControlDepend(depend_mode=1)
         self.allreduce = P.AllReduce()
         self.parallel_mode = _get_parallel_mode()
         self.grad_reducer = None
@@ -87,7 +86,6 @@ class TrainOneStepWithLossScaleCell(nn.Cell):
         if scale_update_cell:
             self.loss_scale = Parameter(Tensor(scale_update_cell.get_loss_scale(), dtype=mstype.float32),
                                         name="loss_scale")
-        self.add_flags(has_effect=True)
 
     def construct(self, data, coord_mask, conf_pos_mask, conf_neg_mask, cls_mask, t_coord, t_conf, t_cls, gt_list,
                   coord_mask_1, conf_pos_mask_1, conf_neg_mask_1, cls_mask_1, t_coord_1, t_conf_1, t_cls_1, gt_list_1,
@@ -100,16 +98,17 @@ class TrainOneStepWithLossScaleCell(nn.Cell):
                             coord_mask_1, conf_pos_mask_1, conf_neg_mask_1, cls_mask_1, t_coord_1, t_conf_1, t_cls_1,
                             gt_list_1, coord_mask_2, conf_pos_mask_2, conf_neg_mask_2, cls_mask_2, t_coord_2, t_conf_2,
                             t_cls_2, gt_list_2)
-
         # init overflow buffer
         init = self.alloc_status()
-
         # clear overflow buffer
-        self.clear_status(init)
+        init = F.depend(init, loss)
+        clear_status = self.clear_status(init)
+
         if sens is None:
             scaling_sens = self.loss_scale
         else:
             scaling_sens = sens
+        scaling_sens = F.depend(scaling_sens, clear_status)
 
         grads = self.grad(self.network, weights)(data, coord_mask, conf_pos_mask, conf_neg_mask, cls_mask, t_coord,
                                                  t_conf, t_cls, gt_list, coord_mask_1, conf_pos_mask_1, conf_neg_mask_1,
@@ -122,7 +121,9 @@ class TrainOneStepWithLossScaleCell(nn.Cell):
             grads = self.grad_reducer(grads)
 
         # get the overflow buffer
-        self.get_status(init)
+        init = F.depend(init, grads)
+        get_status = self.get_status(init)
+        init = F.depend(init, get_status)
 
         # sum overflow buffer elements, 0:not overflow , >0:overflow
         flag_sum = self.reduce_sum(init, (0,))
@@ -551,11 +552,11 @@ def cal_ap_voc2012(recall, precision):
     ap_val = 0.0
     eps = 1e-6
     assert len(recall) == len(precision)
-    lenght = len(recall)
-    cur_prec = precision[lenght - 1]
-    cur_rec = recall[lenght - 1]
+    length = len(recall)
+    cur_prec = precision[length - 1]
+    cur_rec = recall[length - 1]
 
-    for i in range(0, lenght - 1)[::-1]:
+    for i in range(0, length - 1)[::-1]:
         cur_prec = max(precision[i], cur_prec)
         if abs(recall[i] - cur_rec) > eps:
             ap_val += cur_prec * abs(recall[i] - cur_rec)
@@ -588,8 +589,8 @@ def cal_ap_11point(recall, precision):
     return ap_val
 
 
-def calc_recall_presicion_ap(ground_truth, ret_list, iou_thr=0.5):
-    '''calc_recall_presicion_ap'''
+def calc_recall_precision_ap(ground_truth, ret_list, iou_thr=0.5):
+    '''calc_recall_precision_ap'''
     print('calculate [recall | persicion | ap]...')
     evaluate = {}
     for cls in ret_list:
@@ -628,8 +629,8 @@ def calc_recall_presicion_ap(ground_truth, ret_list, iou_thr=0.5):
         fp = fp.cumsum()
 
         recall = tp / n_gt_obj
-        presicion = tp / (tp + fp)
-        ap = cal_ap_voc2012(recall, presicion)
-        evaluate[cls] = {'recall': recall, 'presicion': presicion, 'ap': ap}
+        precision = tp / (tp + fp)
+        ap = cal_ap_voc2012(recall, precision)
+        evaluate[cls] = {'recall': recall, 'precision': precision, 'ap': ap}
 
     return evaluate

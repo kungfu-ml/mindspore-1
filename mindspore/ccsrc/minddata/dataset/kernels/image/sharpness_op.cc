@@ -31,17 +31,11 @@ Status SharpnessOp::Compute(const std::shared_ptr<Tensor> &input, std::shared_pt
     std::shared_ptr<CVTensor> input_cv = CVTensor::AsCVTensor(input);
     cv::Mat input_img = input_cv->mat();
     if (!input_cv->mat().data) {
-      RETURN_STATUS_UNEXPECTED("Could not convert to CV Tensor");
+      RETURN_STATUS_UNEXPECTED("Sharpness: load image failed.");
     }
 
-    if (input_cv->Rank() != 3 && input_cv->Rank() != 2) {
-      RETURN_STATUS_UNEXPECTED("Shape not <H,W,C> or <H,W>");
-    }
-
-    /// Get number of channels and image matrix
-    std::size_t num_of_channels = input_cv->shape()[2];
-    if (num_of_channels != 1 && num_of_channels != 3) {
-      RETURN_STATUS_UNEXPECTED("Number of channels is not 1 or 3.");
+    if (input_cv->Rank() == 1 || input_cv->mat().dims > 2) {
+      RETURN_STATUS_UNEXPECTED("Sharpness: input tensor is not in shape of <H,W,C> or <H,W>.");
     }
 
     /// creating a smoothing filter. 1, 1, 1,
@@ -76,7 +70,7 @@ Status SharpnessOp::Compute(const std::shared_ptr<Tensor> &input, std::shared_pt
   }
 
   catch (const cv::Exception &e) {
-    RETURN_STATUS_UNEXPECTED("OpenCV error in random sharpness");
+    RETURN_STATUS_UNEXPECTED("Sharpness: " + std::string(e.what()));
   }
   return Status::OK();
 }

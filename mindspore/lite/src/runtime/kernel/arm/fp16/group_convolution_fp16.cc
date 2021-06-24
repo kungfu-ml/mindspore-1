@@ -18,12 +18,12 @@
 #include "schema/model_generated.h"
 #include "src/kernel_registry.h"
 #include "include/errorcode.h"
+#include "src/runtime/infer_manager.h"
 
 using mindspore::kernel::KERNEL_ARCH::kCPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_Conv2D;
 
 namespace mindspore::kernel {
 int GroupConvolutionFP16CPUKernel::Init() {
@@ -73,13 +73,14 @@ void GroupConvolutionFP16CPUKernel::FreeSubKernel() {
 
 int GroupConvolutionFP16CPUKernel::PreProcess() {
   if (!InferShapeDone()) {
-    auto ret = (const_cast<mindspore::lite::PrimitiveC *>(primitive_))->InferShape(in_tensors_, out_tensors_);
-    if (ret != RET_OK) {
-      (const_cast<mindspore::lite::PrimitiveC *>(primitive_))->set_infer_flag(false);
+    op_parameter_->infer_flag_ = true;
+
+    auto ret = lite::KernelInferShape(in_tensors_, &out_tensors_, op_parameter_);
+    if (ret != 0) {
+      op_parameter_->infer_flag_ = false;
       MS_LOG(ERROR) << "InferShape fail!";
       return ret;
     }
-    (const_cast<mindspore::lite::PrimitiveC *>(primitive_))->set_infer_flag(true);
 
     // if infershape func is called in runtime stage, we should malloc memory and set shape info for outputs of sub
     // kernels here.
@@ -87,11 +88,8 @@ int GroupConvolutionFP16CPUKernel::PreProcess() {
     std::vector<int> out_shape;
     for (int i = 0; i < group_num_; ++i) {
       // in
-      int in_batch = conv_param_->input_batch_;
-      int in_h = conv_param_->input_h_;
-      int in_w = conv_param_->input_w_;
-      int in_c = conv_param_->input_channel_;
-      in_shape = {in_batch, in_h, in_w, in_c};
+      auto in_tensor = in_tensors_.front();
+      in_shape = {in_tensor->Batch(), in_tensor->Height(), in_tensor->Width(), conv_param_->input_channel_};
       auto sub_kernel_in_tensor = group_convs_.at(i)->in_tensors().front();
       sub_kernel_in_tensor->set_shape(in_shape);
       ret = sub_kernel_in_tensor->MallocData();
@@ -101,11 +99,8 @@ int GroupConvolutionFP16CPUKernel::PreProcess() {
         return ret;
       }
       // out
-      int out_batch = conv_param_->output_batch_;
-      int out_h = conv_param_->output_h_;
-      int out_w = conv_param_->output_w_;
-      int out_c = conv_param_->output_channel_;
-      out_shape = {out_batch, out_h, out_w, out_c};
+      auto out_tensor = out_tensors_.front();
+      out_shape = {out_tensor->Batch(), out_tensor->Height(), out_tensor->Width(), conv_param_->output_channel_};
       auto sub_kernel_out_tensors = group_convs_[i]->out_tensors();
       for (auto tensor : sub_kernel_out_tensors) {
         tensor->set_shape(out_shape);
@@ -139,7 +134,8 @@ int GroupConvolutionFP16CPUKernel::PreProcess() {
 
 int GroupConvolutionFP16CPUKernel::SeparateInput(int group_id) {
   // input may either be float32 or float16
-  int in_plane = conv_param_->input_h_ * conv_param_->input_w_ * conv_param_->input_batch_;
+  auto in_tensor = in_tensors_.front();
+  int in_plane = in_tensor->Height() * in_tensor->Width() * in_tensor->Batch();
   int sub_in_channel = conv_param_->input_channel_;
   int ori_in_channel = sub_in_channel * group_num_;
   auto sub_in_data = group_convs_.at(group_id)->in_tensors().front()->data_c();
@@ -150,7 +146,7 @@ int GroupConvolutionFP16CPUKernel::SeparateInput(int group_id) {
     return RET_ERROR;
   }
   if (!(in_data_type == kNumberTypeFloat32 || in_data_type == kNumberTypeFloat16)) {
-    MS_LOG(ERROR) << "Invaild data type.";
+    MS_LOG(ERROR) << "Invalid data type.";
     return RET_ERROR;
   }
   if (in_tensors_.front()->data_type() == kNumberTypeFloat16) {
@@ -179,7 +175,8 @@ int GroupConvolutionFP16CPUKernel::SeparateInput(int group_id) {
 
 void GroupConvolutionFP16CPUKernel::PostConcat(int group_id) {
   // output is must float16 data type
-  int out_plane = conv_param_->output_h_ * conv_param_->output_w_ * conv_param_->output_batch_;
+  auto out_tensor = out_tensors_.front();
+  int out_plane = out_tensor->Height() * out_tensor->Width() * out_tensor->Batch();
   int sub_out_channel = conv_param_->output_channel_;
   int ori_out_channel = sub_out_channel * group_num_;
   auto sub_out_data = reinterpret_cast<float16_t *>(group_convs_.at(group_id)->out_tensors().front()->data_c());

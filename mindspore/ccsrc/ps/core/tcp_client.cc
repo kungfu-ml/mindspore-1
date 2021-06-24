@@ -30,8 +30,6 @@
 #include <string>
 #include <utility>
 
-#include "ps/core/comm_util.h"
-
 namespace mindspore {
 namespace ps {
 namespace core {
@@ -46,11 +44,12 @@ TcpClient::TcpClient(const std::string &address, std::uint16_t port)
       server_port_(port),
       is_stop_(true),
       is_connected_(false) {
-  message_handler_.SetCallback([this](const CommMessage &message) {
-    if (message_callback_) {
-      message_callback_(*this, message);
-    }
-  });
+  message_handler_.SetCallback(
+    [this](std::shared_ptr<MessageMeta> meta, const Protos &protos, const void *data, size_t size) {
+      if (message_callback_) {
+        message_callback_(meta, protos, data, size);
+      }
+    });
 }
 
 TcpClient::~TcpClient() {
@@ -87,6 +86,8 @@ void TcpClient::Init() {
     MS_LOG(EXCEPTION) << "The tcp client ip:" << server_address_ << " is illegal!";
   }
 
+  event_enable_debug_logging(EVENT_DBG_ALL);
+  event_set_log_callback(CommUtil::LogCallback);
   int result = evthread_use_pthreads();
   if (result != 0) {
     MS_LOG(EXCEPTION) << "Use event pthread failed!";
@@ -105,7 +106,7 @@ void TcpClient::Init() {
   sin.sin_addr.s_addr = inet_addr(server_address_.c_str());
   sin.sin_port = htons(server_port_);
 
-  buffer_event_ = bufferevent_socket_new(event_base_, -1, BEV_OPT_CLOSE_ON_FREE);
+  buffer_event_ = bufferevent_socket_new(event_base_, -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_THREADSAFE);
   MS_EXCEPTION_IF_NULL(buffer_event_);
 
   bufferevent_setcb(buffer_event_, ReadCallback, nullptr, EventCallback, this);
@@ -140,17 +141,9 @@ void TcpClient::StartWithDelay(int seconds) {
 void TcpClient::Stop() {
   std::lock_guard<std::mutex> lock(connection_mutex_);
   MS_LOG(INFO) << "Stop tcp client!";
-  if (event_base_got_break(event_base_)) {
-    MS_LOG(DEBUG) << "The event base has stopped!";
-    is_stop_ = true;
-    return;
-  }
-  if (!is_stop_.load()) {
-    is_stop_ = true;
-    int ret = event_base_loopbreak(event_base_);
-    if (ret != 0) {
-      MS_LOG(ERROR) << "Event base loop break failed!";
-    }
+  int ret = event_base_loopbreak(event_base_);
+  if (ret != 0) {
+    MS_LOG(ERROR) << "Event base loop break failed!";
   }
 }
 
@@ -172,16 +165,11 @@ void TcpClient::ReadCallback(struct bufferevent *bev, void *ctx) {
   MS_EXCEPTION_IF_NULL(bev);
   MS_EXCEPTION_IF_NULL(ctx);
   auto tcp_client = reinterpret_cast<TcpClient *>(ctx);
-  struct evbuffer *input = bufferevent_get_input(const_cast<struct bufferevent *>(bev));
-  MS_EXCEPTION_IF_NULL(input);
 
-  char read_buffer[4096];
+  char read_buffer[kMessageChunkLength];
+  int read = 0;
 
-  while (EVBUFFER_LENGTH(input) > 0) {
-    int read = evbuffer_remove(input, &read_buffer, sizeof(read_buffer));
-    if (read == -1) {
-      MS_LOG(EXCEPTION) << "Can not drain data from the event buffer!";
-    }
+  while ((read = bufferevent_read(bev, &read_buffer, sizeof(read_buffer))) > 0) {
     tcp_client->OnReadHandler(read_buffer, read);
   }
 }
@@ -189,7 +177,7 @@ void TcpClient::ReadCallback(struct bufferevent *bev, void *ctx) {
 void TcpClient::OnReadHandler(const void *buf, size_t num) {
   MS_EXCEPTION_IF_NULL(buf);
   if (read_callback_) {
-    read_callback_(*this, buf, num);
+    read_callback_(buf, num);
   }
   message_handler_.ReceiveMessage(buf, num);
 }
@@ -198,7 +186,7 @@ void TcpClient::TimerCallback(evutil_socket_t, int16_t, void *arg) {
   MS_EXCEPTION_IF_NULL(arg);
   auto tcp_client = reinterpret_cast<TcpClient *>(arg);
   if (tcp_client->on_timer_callback_) {
-    tcp_client->on_timer_callback_(*tcp_client);
+    tcp_client->on_timer_callback_();
   }
 }
 
@@ -222,12 +210,12 @@ void TcpClient::EventCallback(struct bufferevent *bev, std::int16_t events, void
     SetTcpNoDelay(fd);
     MS_LOG(INFO) << "Client connected!";
   } else if (events & BEV_EVENT_ERROR) {
-    MS_LOG(ERROR) << "Client connected error!";
+    MS_LOG(WARNING) << "Client connected BEV_EVENT_ERROR!";
     if (tcp_client->disconnected_callback_) {
       tcp_client->disconnected_callback_();
     }
   } else if (events & BEV_EVENT_EOF) {
-    MS_LOG(ERROR) << "Client connected end of file";
+    MS_LOG(WARNING) << "Client connected end of file";
   }
 }
 
@@ -245,7 +233,7 @@ void TcpClient::Start() {
   MSLOG_IF(mindspore::ERROR, ret == 1, NoExceptionType)
     << "Event base dispatch failed with no events pending or active!";
   MSLOG_IF(mindspore::ERROR, ret == -1, NoExceptionType) << "Event base dispatch failed with error occurred!";
-  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base dispatch with unexpect error code!";
+  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base dispatch with unexpected error code!";
 }
 
 void TcpClient::StartWithNoBlock() {
@@ -256,22 +244,68 @@ void TcpClient::StartWithNoBlock() {
   MSLOG_IF(INFO, ret == 0, NoExceptionType) << "Event base loop success!";
   MSLOG_IF(mindspore::ERROR, ret == 1, NoExceptionType) << "Event base loop failed with no events pending or active!";
   MSLOG_IF(mindspore::ERROR, ret == -1, NoExceptionType) << "Event base loop failed with error occurred!";
-  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base loop with unexpect error code!";
+  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base loop with unexpected error code!";
 }
 
 void TcpClient::SetMessageCallback(const OnMessage &cb) { message_callback_ = cb; }
 
-void TcpClient::SendMessage(const CommMessage &message) const {
+bool TcpClient::SendMessage(const CommMessage &message) const {
   MS_EXCEPTION_IF_NULL(buffer_event_);
-  size_t buf_size = message.ByteSizeLong();
-  std::vector<unsigned char> serialized(buf_size);
-  message.SerializeToArray(serialized.data(), SizeToInt(buf_size));
-  if (evbuffer_add(bufferevent_get_output(buffer_event_), &buf_size, sizeof(buf_size)) == -1) {
-    MS_LOG(EXCEPTION) << "Event buffer add header failed!";
+  bufferevent_lock(buffer_event_);
+  bool res = true;
+  size_t buf_size = IntToUint(message.ByteSizeLong());
+  uint32_t meta_size = SizeToUint(message.pb_meta().ByteSizeLong());
+  MessageHeader header;
+  header.message_proto_ = Protos::PROTOBUF;
+  header.message_length_ = buf_size;
+  header.message_meta_length_ = meta_size;
+  if (bufferevent_write(buffer_event_, &header, sizeof(header)) == -1) {
+    MS_LOG(ERROR) << "Event buffer add header failed!";
+    res = false;
   }
-  if (evbuffer_add(bufferevent_get_output(buffer_event_), serialized.data(), buf_size) == -1) {
-    MS_LOG(EXCEPTION) << "Event buffer add protobuf data failed!";
+  if (bufferevent_write(buffer_event_, message.pb_meta().SerializeAsString().data(), meta_size) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
   }
+  if (bufferevent_write(buffer_event_, message.data().data(), message.data().length()) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
+  }
+  bufferevent_unlock(buffer_event_);
+  return res;
+}
+
+bool TcpClient::SendMessage(std::shared_ptr<MessageMeta> meta, const Protos &protos, const void *data, size_t size) {
+  MS_EXCEPTION_IF_NULL(buffer_event_);
+  MS_EXCEPTION_IF_NULL(meta);
+  MS_EXCEPTION_IF_NULL(data);
+  bufferevent_lock(buffer_event_);
+  bool res = true;
+
+  MessageHeader header;
+  header.message_proto_ = protos;
+  header.message_meta_length_ = SizeToUint(meta->ByteSizeLong());
+  header.message_length_ = size + header.message_meta_length_;
+
+  if (bufferevent_write(buffer_event_, &header, sizeof(header)) == -1) {
+    MS_LOG(ERROR) << "Event buffer add header failed!";
+    res = false;
+  }
+  if (bufferevent_write(buffer_event_, meta->SerializeAsString().data(), meta->ByteSizeLong()) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
+  }
+  if (bufferevent_write(buffer_event_, data, size) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
+  }
+  int result = bufferevent_flush(buffer_event_, EV_READ | EV_WRITE, BEV_FLUSH);
+  if (result < 0) {
+    MS_LOG(ERROR) << "Bufferevent flush failed!";
+    res = false;
+  }
+  bufferevent_unlock(buffer_event_);
+  return res;
 }
 
 void TcpClient::StartTimer(const uint32_t &time) {
@@ -291,7 +325,6 @@ void TcpClient::StartTimer(const uint32_t &time) {
 void TcpClient::set_timer_callback(const OnTimer &timer) { on_timer_callback_ = timer; }
 
 const event_base &TcpClient::eventbase() { return *event_base_; }
-
 }  // namespace core
 }  // namespace ps
 }  // namespace mindspore

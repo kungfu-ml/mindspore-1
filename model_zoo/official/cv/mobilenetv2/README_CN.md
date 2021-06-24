@@ -56,9 +56,9 @@ MobileNetV2总体网络架构如下：
 # 环境要求
 
 - 硬件（Ascend/GPU/CPU）
-    - 使用Ascend、GPU或CPU处理器来搭建硬件环境。如需试用Ascend处理器，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx)至ascend@huawei.com，审核通过即可获得资源。
+    - 使用Ascend、GPU或CPU处理器来搭建硬件环境。
 - 框架
-    - [MindSpore](https://www.mindspore.cn/install/en)
+    - [MindSpore](https://www.mindspore.cn/install)
 - 如需查看详情，请参见如下资源：
     - [MindSpore教程](https://www.mindspore.cn/tutorial/training/zh-CN/master/index.html)
     - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/zh-CN/master/index.html)
@@ -96,6 +96,32 @@ MobileNetV2总体网络架构如下：
 - Ascend: sh run_train.sh Ascend [DEVICE_NUM] [VISIABLE_DEVICES(0,1,2,3,4,5,6,7)] [RANK_TABLE_FILE] [DATASET_PATH] [CKPT_PATH] [FREEZE_LAYER] [FILTER_HEAD]
 - GPU: sh run_trian.sh GPU [DEVICE_NUM] [VISIABLE_DEVICES(0,1,2,3,4,5,6,7)] [DATASET_PATH] [CKPT_PATH] [FREEZE_LAYER] [FILTER_HEAD]
 - CPU: sh run_trian.sh CPU [DATASET_PATH] [CKPT_PATH] [FREEZE_LAYER] [FILTER_HEAD]
+
+`DATASET_PATH`是训练的路径. 我们使用`ImageFolderDataset` 作为默认数据处理方式, 这种数据处理方式是从原始目录中读取图片，目录结构如下, 训练时设置`DATASET_PATH=dataset/train`，验证时设置`DATASET_PATH=dataset/val`:
+
+```path
+        └─dataset
+            └─train
+              ├─class1
+                ├─0001.jpg
+                ......
+                └─xxxx.jpg
+              ......
+              ├─classx
+                ├─0001.jpg
+                ......
+                └─xxxx.jpg
+            └─val
+              ├─class1
+                ├─0001.jpg
+                ......
+                └─xxxx.jpg
+              ......
+              ├─classx
+                ├─0001.jpg
+                ......
+                └─xxxx.jpg
+```
 
 `CKPT_PATH` `FREEZE_LAYER` 和 `FILTER_HEAD` 是可选择的选项, 如果设置`CKPT_PATH`, `FREEZE_LAYER` 也必须同时设置. `FREEZE_LAYER` 可以是 ["none", "backbone"], 如果设置 `FREEZE_LAYER`="backbone", 训练过程中backbone中的参数会被冻结，同时不会从checkpoint中加载head部分的参数. 如果`FILTER_HEAD`=True, 不会从checkpoint中加载head部分的参数.
 
@@ -222,7 +248,7 @@ python export.py --platform [PLATFORM] --ckpt_file [CKPT_PATH] --file_format [EX
 
 # 随机情况说明
 
-<!-- [dataset.py](http://dataset.py/)中设置了“create_dataset”函数内的种子，同时还使用了train.py中的随机种子。-->
+<!-- `dataset.py`中设置了“create_dataset”函数内的种子，同时还使用了train.py中的随机种子。-->
 在train.py中，设置了numpy.random、minspore.common.Initializer、minspore.ops.composite.random_ops和minspore.nn.probability.distribution所使用的种子。
 
 # ModelZoo主页

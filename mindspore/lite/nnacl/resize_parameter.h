@@ -23,7 +23,15 @@ typedef struct ResizeParameter {
   int method_;
   int64_t new_height_;
   int64_t new_width_;
-  bool align_corners_;
+  int coordinate_transform_mode_;
+  float cubic_coeff_;
   bool preserve_aspect_ratio_;
 } ResizeParameter;
+
+typedef struct CropAndResizeParameter {
+  // primitive parameter
+  OpParameter op_parameter_;
+  int method_;
+  float extrapolation_value_;
+} CropAndResizeParameter;
 #endif  // MINDSPORE_LITE_NNACL_RESIZE_PARAMETER_H_

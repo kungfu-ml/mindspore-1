@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,14 +28,15 @@ _lazy_adam_opt = C.MultitypeFuncGraph("lazy_adam_opt")
 
 
 @_lazy_adam_opt.register("Function", "Function", "Function", "Function", "Bool", "Bool", "Bool", "Tensor", "Tensor",
-                         "Tensor", "Tensor", "Tensor", "Tensor", "RowTensor", "Tensor", "Tensor", "Tensor", "Bool")
+                         "Tensor", "Tensor", "Tensor", "Tensor", "RowTensor", "Tensor", "Tensor", "Tensor", "Bool",
+                         "Bool")
 def _run_opt_with_sparse(opt, sparse_opt, push, pull, use_locking, use_nesterov, target, beta1_power, beta2_power,
-                         beta1, beta2, eps, lr, gradient, params, m, v, ps_parameter):
+                         beta1, beta2, eps, lr, gradient, params, m, v, ps_parameter, cache_enable):
     """Apply sparse lazy adam optimizer to the weight parameter when the gradient is sparse."""
     success = True
     indices = gradient.indices
     values = gradient.values
-    if ps_parameter:
+    if ps_parameter and not cache_enable:
         op_shape = P.Shape()
         shapes = (op_shape(params), op_shape(m), op_shape(v),
                   op_shape(beta1_power), op_shape(beta2_power), op_shape(lr), op_shape(beta1),
@@ -48,7 +49,7 @@ def _run_opt_with_sparse(opt, sparse_opt, push, pull, use_locking, use_nesterov,
         success = F.depend(success, sparse_opt(params, m, v, beta1_power, beta2_power, lr, beta1, beta2,
                                                eps, values, indices))
     else:
-        op_gather = P.GatherV2()
+        op_gather = P.Gather()
         op_sqrt = P.Sqrt()
         scatter_add = P.ScatterAdd(use_locking)
         scatter_update = P.ScatterUpdate(use_locking)
@@ -75,12 +76,12 @@ def _run_opt_with_sparse(opt, sparse_opt, push, pull, use_locking, use_nesterov,
 
 
 @_lazy_adam_opt.register("Function", "Function", "Function", "Function", "Bool", "Bool", "Bool", "Tensor", "Tensor",
-                         "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Bool")
-def _run_opt_with_one_number(opt, sparse_opt, push, pull, use_locking, use_nesterov, target, beta1_power,
-                             beta2_power, beta1, beta2, eps, lr, gradient, params, moment1, moment2, ps_parameter):
+                         "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Tensor", "Bool", "Bool")
+def _run_opt_with_one_number(opt, sparse_opt, push, pull, use_locking, use_nesterov, target, beta1_power, beta2_power,
+                             beta1, beta2, eps, lr, gradient, params, moment1, moment2, ps_parameter, cache_enable):
     """Apply lazy adam optimizer to the weight parameter using Tensor."""
     success = True
-    if ps_parameter:
+    if ps_parameter and not cache_enable:
         op_shape = P.Shape()
         success = F.depend(success, pull(push((beta1_power, beta2_power, lr, beta1, beta2, eps, gradient),
                                               (op_shape(params), op_shape(moment1), op_shape(moment2))), params))
@@ -129,6 +130,10 @@ class LazyAdam(Optimizer):
         weight decay is positive. When not separating parameter groups, the `weight_decay` in the API will be applied
         on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
 
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
+
         To improve parameter groups performance, the customized order of parameters can be supported.
 
         The sparse strategy is applied while the SparseGatherV2 operator being used for forward network.
@@ -153,6 +158,10 @@ class LazyAdam(Optimizer):
               the order will be followed in optimizer. There are no other keys in the `dict` and the parameters which
               in the value of 'order_params' must be in one of group parameters.
 
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
+
         learning_rate (Union[float, Tensor, Iterable, LearningRateSchedule]): A value or a graph for the learning rate.
             When the learning_rate is an Iterable or a Tensor in a 1D dimension, use dynamic learning rate, then
             the i-th step will take the i-th value as the learning rate. When the learning_rate is LearningRateSchedule,
@@ -173,9 +182,12 @@ class LazyAdam(Optimizer):
         use_nesterov (bool): Whether to use Nesterov Accelerated Gradient (NAG) algorithm to update the gradients.
             If true, update the gradients using NAG.
             If false, update the gradients without using NAG. Default: False.
-        weight_decay (float): Weight decay (L2 penalty). Default: 0.0.
-        loss_scale (float): A floating point value for the loss scale. Should be equal to or greater than 1. Default:
-                            1.0.
+        weight_decay (Union[float, int]): Weight decay (L2 penalty). Default: 0.0.
+        loss_scale (float): A floating point value for the loss scale. Should be equal to or greater than 1. In general,
+            use the default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update`
+            in `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
 
     Inputs:
         - **gradients** (tuple[Tensor]) - The gradients of `params`, the shape is the same as `params`.
@@ -183,8 +195,18 @@ class LazyAdam(Optimizer):
     Outputs:
         Tensor[bool], the value is True.
 
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `beta1`, `beta2`, `eps` or `loss_scale` is not a float.
+        TypeError: If `weight_decay` is neither float nor int.
+        TypeError: If `use_locking` or `use_nesterov` is not a bool.
+        ValueError: If `loss_scale` or `eps` is less than or equal to 0.
+        ValueError: If `beta1`, `beta2` is not in range (0.0, 1.0).
+        ValueError: If `weight_decay` is less than 0.
+
     Supported Platforms:
-        ``Ascend``
+        ``Ascend`` ``GPU``
 
     Examples:
         >>> net = Net()
@@ -194,12 +216,14 @@ class LazyAdam(Optimizer):
         >>> #2) Use parameter groups and set different values
         >>> conv_params = list(filter(lambda x: 'conv' in x.name, net.trainable_params()))
         >>> no_conv_params = list(filter(lambda x: 'conv' not in x.name, net.trainable_params()))
-        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01},
+        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01, 'grad_centralization':True},
         ...                 {'params': no_conv_params, 'lr': 0.01},
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.LazyAdam(group_params, learning_rate=0.1, weight_decay=0.0)
-        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0.
+        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01 and grad
+        >>> # centralization of True.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0 and grad
+        >>> # centralization of False.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -236,6 +260,7 @@ class LazyAdam(Optimizer):
         gradients = self.decay_weight(gradients)
         gradients = self.scale_grad(gradients)
         gradients = self._grad_sparse_indices_deduplicate(gradients)
+        gradients = self.gradients_centralization(gradients)
         lr = self.get_lr()
 
         self.beta1_power = self.beta1_power * self.beta1
@@ -245,12 +270,14 @@ class LazyAdam(Optimizer):
             success = self.map_(F.partial(_lazy_adam_opt, self.opt, self.sparse_opt, self._ps_push, self._ps_pull,
                                           self.use_locking, self.use_nesterov, self._is_device,
                                           self.beta1_power, self.beta2_power, self.beta1, self.beta2, self.eps),
-                                lr, gradients, self.parameters, self.moment1, self.moment2, self.ps_parameters)
+                                lr, gradients, self.parameters, self.moment1, self.moment2, self.ps_parameters,
+                                self.cache_enable)
         else:
             success = self.map_(F.partial(_lazy_adam_opt, self.opt, self.sparse_opt, self._ps_push, self._ps_pull,
                                           self.use_locking, self.use_nesterov, self._is_device,
                                           self.beta1_power, self.beta2_power, self.beta1, self.beta2, self.eps, lr),
-                                gradients, self.parameters, self.moment1, self.moment2, self.ps_parameters)
+                                gradients, self.parameters, self.moment1, self.moment2, self.ps_parameters,
+                                self.cache_enable)
         return success
 
     @Optimizer.target.setter

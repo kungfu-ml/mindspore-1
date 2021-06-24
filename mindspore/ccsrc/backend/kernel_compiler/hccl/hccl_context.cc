@@ -19,16 +19,20 @@
 #include "hccl/hccl.h"
 
 constexpr auto kHcclConfigFile = "MINDSPORE_HCCL_CONFIG_PATH";
+constexpr auto kHcclConfigFileOld = "RANK_TABLE_FILE";
 
 namespace mindspore {
 namespace kernel {
-std::string GetRankId() {
-  std::string rank_id_str;
-  rank_id_str = std::getenv("RANK_ID");
-  if (rank_id_str.empty()) {
-    MS_LOG(ERROR) << "Get hccl rankid failed, please set env RANK_ID";
+int GetRankId() {
+  auto rank_id_env = std::getenv("RANK_ID");
+  if (rank_id_env == nullptr) {
+    MS_LOG(EXCEPTION) << "No RANK_ID, please export RANK_ID";
   }
-  return rank_id_str;
+  try {
+    return std::stoi(rank_id_env);
+  } catch (std::invalid_argument &e) {
+    MS_LOG(EXCEPTION) << "Invalid rankd id env:" << rank_id_env;
+  }
 }
 
 bool HcclContext::InitHccl() {
@@ -37,10 +41,18 @@ bool HcclContext::InitHccl() {
   }
   auto config_file = std::getenv(kHcclConfigFile);
   if (config_file == nullptr) {
-    MS_LOG(ERROR) << "Get hccl config file failed";
+    config_file = std::getenv(kHcclConfigFileOld);
+    if (config_file == nullptr) {
+      MS_LOG(ERROR) << "Get hccl rank table file failed. Please export MINDSPORE_HCCL_CONFIG_PATH or RANK_TABLE_FILE";
+      return false;
+    }
+  }
+
+  rank_id_ = GetRankId();
+  if (rank_id_ < 0 || rank_id_ > 7) {
+    MS_LOG(ERROR) << "rank_id needs to be between 0-7";
     return false;
   }
-  rank_id_ = std::stoi(GetRankId());
 
   auto hccl_result = HcclCommInitClusterInfo(config_file, rank_id_, &hccl_comm_);
   if (hccl_result != HCCL_SUCCESS) {

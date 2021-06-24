@@ -33,6 +33,7 @@
 #include "utils/comm_manager.h"
 #include "frontend/parallel/context.h"
 #include "pipeline/jit/parse/resolve.h"
+#include "frontend/parallel/step_parallel.h"
 
 namespace mindspore {
 namespace opt {
@@ -155,7 +156,7 @@ class CheckBpropEliminater : public AnfVisitor {
   AnfNodePtr x_{nullptr};
 };
 
-// {prim::kPrimMirrorMiniStep, X, Y, Z} -> X
+// {prim::kPrimMirrorMiniStep, X, Z} -> X
 class MirrorMiniStepEliminater : public AnfVisitor {
  public:
   AnfNodePtr operator()(const OptimizerPtr &, const AnfNodePtr &node) override {
@@ -163,16 +164,64 @@ class MirrorMiniStepEliminater : public AnfVisitor {
       return nullptr;
     }
 
-    auto cnode = node->cast<CNodePtr>();
-    if (cnode == nullptr) {
-      return nullptr;
-    }
-    auto inputs = cnode->inputs();
+    auto &inputs = node->cast<CNodePtr>()->inputs();
     if (inputs.size() < 2) {
       return nullptr;
     }
 
     return inputs[1];
+  }
+
+  void Visit(const AnfNodePtr &) override {}
+};
+
+// {prim::kPrimVirtualAdd, X, Z} -> X
+class VirtualAddEliminater : public AnfVisitor {
+ public:
+  AnfNodePtr operator()(const OptimizerPtr &, const AnfNodePtr &node) override {
+    if (!IsPrimitiveCNode(node, prim::kPrimVirtualAdd) || node->func_graph() == nullptr) {
+      return nullptr;
+    }
+
+    auto &inputs = node->cast<CNodePtr>()->inputs();
+    if (inputs.size() < 2) {
+      return nullptr;
+    }
+
+    return inputs[1];
+  }
+
+  void Visit(const AnfNodePtr &) override {}
+};
+
+// {prim::kPrimMiniStepAllGather, X, Z} -> {prim::kPrimAllGather, X}
+class MiniStepAllGatherPass : public AnfVisitor {
+ public:
+  AnfNodePtr operator()(const OptimizerPtr &, const AnfNodePtr &node) override {
+    if (!IsPrimitiveCNode(node, prim::kPrimMiniStepAllGather) || node->func_graph() == nullptr) {
+      return nullptr;
+    }
+
+    auto &inputs = node->cast<CNodePtr>()->inputs();
+    if (inputs.size() < 2) {
+      return nullptr;
+    }
+    auto prim = GetValueNode<PrimitivePtr>(node->cast<CNodePtr>()->input(0));
+    MS_EXCEPTION_IF_NULL(prim);
+    auto attrs = prim->attrs();
+    std::string group = attrs[parallel::GROUP]->ToString();
+    auto fusion = attrs[parallel::FUSION];
+    parallel::Operator op = parallel::CreateAllGatherOp(group);
+    std::vector<AnfNodePtr> node_input = parallel::CreateInput(op, inputs[1], parallel::PARALLEL_OPTIMIZER_ALLGATHER);
+    auto prim_anf_node = node_input[0]->cast<ValueNodePtr>();
+    prim = GetValueNode<PrimitivePtr>(prim_anf_node);
+    MS_EXCEPTION_IF_NULL(prim);
+    attrs = prim->attrs();
+    attrs[parallel::FUSION] = fusion;
+    prim->SetAttrs(attrs);
+    auto func_graph = inputs[1]->func_graph();
+    CNodePtr new_node = func_graph->NewCNode(node_input);
+    return new_node;
   }
 
   void Visit(const AnfNodePtr &) override {}
@@ -328,6 +377,80 @@ class PynativeEliminater : public OptimizerCaller {
     return out;
   }
 
+ private:
+  AnfNodePtr OperatorHandle1(const PatternNode<AnfNodePtr> &arg, const AnfNodePtr &node) {
+    auto rep = (arg).GetNode(node);
+    if (rep != nullptr) {
+      if (rep->isa<ValueNode>()) {
+        auto value_node = rep->cast<ValueNodePtr>();
+        auto new_value_node = NewValueNode(FillZero(value_node->value()));
+        new_value_node->set_has_new_value(value_node->has_new_value());
+        MS_LOG(DEBUG) << "Zeros_like replace ok " << rep->DebugString(4);
+        return new_value_node;
+      }
+    }
+    return nullptr;
+  }
+
+  AnfNodePtr OperatorHandle2(const PatternNode<AnfNodePtr> &arg, const AnfNodePtr &node) {
+    auto rep = (arg).GetNode(node);
+    if (rep != nullptr) {
+      if (rep->isa<ValueNode>() && !HasAbstractMonad(rep)) {
+        auto value_node = rep->cast<ValueNodePtr>();
+        auto new_value_node = NewValueNode(FillZero(value_node->value()));
+        new_value_node->set_has_new_value(value_node->has_new_value());
+        MS_LOG(DEBUG) << "Zeros_like replace ok 2 " << rep->DebugString(4);
+        return new_value_node;
+      }
+    }
+    return nullptr;
+  }
+
+  void OperatorHandle3(const std::vector<PatternNode<AnfNodePtr>> &args, const AnfNodePtr &node) {
+    for (size_t i = 0; i < 2; i++) {
+      auto rep = (args[i]).GetNode(node);
+      if (rep != nullptr && rep->isa<ValueNode>()) {
+        auto value_node = rep->cast<ValueNodePtr>();
+        MS_EXCEPTION_IF_NULL(value_node);
+        auto &value = value_node->value();
+        MS_EXCEPTION_IF_NULL(value);
+        // when the use count of value node equals to one, it only used in binop_grad_common function
+        if (value->isa<tensor::Tensor>() && value_node->used_graph_count() == 1) {
+          auto tensor = value->cast<tensor::TensorPtr>();
+          MS_EXCEPTION_IF_NULL(tensor);
+          auto new_tensor = std::make_shared<tensor::Tensor>(tensor->Dtype()->type_id(), tensor->shape());
+          value_node->set_value(new_tensor);
+        }
+      }
+    }
+  }
+
+  AnfNodePtr OperatorHandle4(const PatternNode<AnfNodePtr> &arg, const PatternNode<AnfNodePtr> &arg1,
+                             const AnfNodePtr &node) {
+    auto rep = (arg).GetNode(node);
+    if (rep != nullptr) {
+      if (rep->isa<ValueNode>()) {
+        MS_LOG(DEBUG) << "Rep is " << rep->DebugString(4);
+        ValueNodePtr new_node;
+        auto value_node = rep->cast<ValueNodePtr>();
+        auto rep1 = (arg1).GetNode(node);
+        if (rep1 != nullptr) {
+          if (rep1->isa<ValueNode>()) {
+            auto idx = rep1->cast<ValueNodePtr>();
+            if (!value_node->value()->isa<ValueTuple>()) {
+              return nullptr;
+            }
+            new_node = NewValueNode(FillGetItem(value_node->value(), idx->value()));
+            new_node->set_has_new_value(value_node->has_new_value());
+          }
+        }
+        MS_LOG(DEBUG) << "Fill getitem  replace ok " << new_node->DebugString(4);
+        return new_node;
+      }
+    }
+    return nullptr;
+  }
+
  public:
   AnfNodePtr operator()(const OptimizerPtr &, const AnfNodePtr &node) override {
     MS_LOG(DEBUG) << "Start replace node " << node->DebugString(4);
@@ -342,15 +465,9 @@ class PynativeEliminater : public OptimizerCaller {
     if ((pattern).TryCapture(node) &&
         (CheckNameSpaceVNode(symbol_str_vnode.GetNode(node), "SymbolStr") &&
          CheckSymbolVNode(c_vnode.GetNode(node), "C") && CheckStrVNode(zeros_like_vnode.GetNode(node), "zeros_like"))) {
-      auto rep = (arg).GetNode(node);
-      if (rep != nullptr) {
-        if (rep->isa<ValueNode>()) {
-          auto value_node = rep->cast<ValueNodePtr>();
-          auto new_value_node = NewValueNode(FillZero(value_node->value()));
-          new_value_node->set_has_new_value(value_node->has_new_value());
-          MS_LOG(DEBUG) << "Zeros_like replace ok " << rep->DebugString(4);
-          return new_value_node;
-        }
+      auto new_value_node = OperatorHandle1(arg, node);
+      if (new_value_node != nullptr) {
+        return new_value_node;
       }
     }
     MS_LOG(DEBUG) << "End replace 1 " << node->DebugString(4);
@@ -360,15 +477,9 @@ class PynativeEliminater : public OptimizerCaller {
 
     if ((pattern1).TryCapture(node) && (CheckNameSpaceVNode(symbol_str_vnode.GetNode(node), "SymbolStr") &&
                                         CheckSymbolVNode(zeros_like_vnode.GetNode(node), "zeros_like"))) {
-      auto rep = (arg).GetNode(node);
-      if (rep != nullptr) {
-        if (rep->isa<ValueNode>()) {
-          auto value_node = rep->cast<ValueNodePtr>();
-          auto new_value_node = NewValueNode(FillZero(value_node->value()));
-          new_value_node->set_has_new_value(value_node->has_new_value());
-          MS_LOG(DEBUG) << "Zeros_like replace ok 2 " << rep->DebugString(4);
-          return new_value_node;
-        }
+      auto new_value_node = OperatorHandle2(arg, node);
+      if (new_value_node != nullptr) {
+        return new_value_node;
       }
     }
     // {prim:getattr, {prim::resolve, SymbolStr, binop_grad_common}, x, y, out, dout} -> {shape(x), shape(y), out, dout}
@@ -379,22 +490,7 @@ class PynativeEliminater : public OptimizerCaller {
     auto pattern_binop = PCNode(resolve_binop, args[0], args[1], args[2], args[3]);
     if ((pattern_binop).TryCapture(node) && (CheckNameSpaceVNode(symbol_str_vnode.GetNode(node), "SymbolStr") &&
                                              CheckSymbolVNode(binop_grad_common.GetNode(node), "binop_grad_common"))) {
-      for (size_t i = 0; i < 2; i++) {
-        auto rep = (args[i]).GetNode(node);
-        if (rep != nullptr && rep->isa<ValueNode>()) {
-          auto value_node = rep->cast<ValueNodePtr>();
-          MS_EXCEPTION_IF_NULL(value_node);
-          auto &value = value_node->value();
-          MS_EXCEPTION_IF_NULL(value);
-          // when the use count of value node equals to one, it only used in binop_grad_common function
-          if (value->isa<tensor::Tensor>() && value_node->used_graph_count() == 1) {
-            auto tensor = value->cast<tensor::TensorPtr>();
-            MS_EXCEPTION_IF_NULL(tensor);
-            auto new_tensor = std::make_shared<tensor::Tensor>(tensor->Dtype()->type_id(), tensor->shape());
-            value_node->set_value(new_tensor);
-          }
-        }
-      }
+      OperatorHandle3(args, node);
       return nullptr;
     }
     // resolve(CommonOPS, getitem)((tensors), 3)
@@ -403,26 +499,9 @@ class PynativeEliminater : public OptimizerCaller {
     auto pattern2 = PCNode(resolve2, arg, arg1);
     if ((pattern2).TryCapture(node) && (CheckNameSpaceVNode(symbol_str_vnode.GetNode(node), "CommonOPS") &&
                                         CheckSymbolVNode(getitem_vnode.GetNode(node), "getitem"))) {
-      auto rep = (arg).GetNode(node);
-      if (rep != nullptr) {
-        if (rep->isa<ValueNode>()) {
-          MS_LOG(DEBUG) << "Rep is " << rep->DebugString(4);
-          ValueNodePtr new_node;
-          auto value_node = rep->cast<ValueNodePtr>();
-          auto rep1 = (arg1).GetNode(node);
-          if (rep1 != nullptr) {
-            if (rep1->isa<ValueNode>()) {
-              auto idx = rep1->cast<ValueNodePtr>();
-              if (!value_node->value()->isa<ValueTuple>()) {
-                return nullptr;
-              }
-              new_node = NewValueNode(FillGetItem(value_node->value(), idx->value()));
-              new_node->set_has_new_value(value_node->has_new_value());
-            }
-          }
-          MS_LOG(DEBUG) << "Fill getitem  replace ok " << new_node->DebugString(4);
-          return new_node;
-        }
+      auto new_value_node = OperatorHandle4(arg, arg1, node);
+      if (new_value_node != nullptr) {
+        return new_value_node;
       }
     }
 
@@ -436,12 +515,12 @@ class AllReduceConstElim : public OptimizerCaller {
   AnfNodePtr operator()(const OptimizerPtr &, const AnfNodePtr &node) override {
     PatternNode<AnfNodePtr> x;
     auto pattern = PPrimitive(prim::kPrimAllReduce, x);
-    // If AllReduce takes contant value as input and values across devices are all the same(ensured by parallel mode)
+    // If AllReduce takes constant value as input and values across devices are all the same(ensured by parallel mode)
     if (pattern.TryCapture(node) && IsVNode(x.GetNode(node)) &&
         (pattern.GetFuncGraph()->has_flag(parallel::AUTO_PARALLEL) ||
          pattern.GetFuncGraph()->has_flag(parallel::SEMI_AUTO_PARALLEL))) {
       auto cur_func_graph = pattern.GetFuncGraph();
-      // If reduce operation is sum, then multiply constant by number of devices, otherwise just return the contant
+      // If reduce operation is sum, then multiply constant by number of devices, otherwise just return the constant
       auto prim_cnode = pattern.GetOriginalNode();
       MS_EXCEPTION_IF_NULL(prim_cnode);
       auto primitive = GetCNodePrimitive(prim_cnode);
@@ -481,6 +560,37 @@ class AllReduceConstElim : public OptimizerCaller {
     return nullptr;
   }
 };
+
+// This pattern introduced by Depend(CollectCNodeWithIsolateNodes) in program_specialize.cc
+// {{prim::kPrimDepend, X, Y}, Xs}->{prim::kPrimDepend, {X, Xs}, Y}
+class FloatDependGCall : public AnfVisitor {
+ public:
+  AnfNodePtr operator()(const OptimizerPtr &, const AnfNodePtr &node) override {
+    if (!node->isa<CNode>() || node->func_graph() == nullptr) {
+      return nullptr;
+    }
+
+    auto &inputs = node->cast<CNodePtr>()->inputs();
+    // as IsCNodeDup had checked the size of inputs must be greater or equal than 1, so no check here.
+    if (IsPrimitiveCNode(inputs[0], prim::kPrimDepend)) {
+      auto &depend_inputs = inputs[0]->cast<CNodePtr>()->inputs();
+      if (depend_inputs.size() != 3) {
+        return nullptr;
+      }
+      // put {Y, Xs} to new_inputs;
+      std::vector<AnfNodePtr> new_inputs({depend_inputs[1]});
+      new_inputs.insert(new_inputs.end(), inputs.cbegin() + 1, inputs.cend());
+      TraceGuard guard(std::make_shared<TraceCopy>(node->debug_info()));
+      ScopePtr scope = node->scope();
+      ScopeGuard scope_guard(scope);
+      auto new_call_node = node->func_graph()->NewCNode(new_inputs);
+      auto new_node = node->func_graph()->NewCNode({depend_inputs[0], new_call_node, depend_inputs[2]});
+      return new_node;
+    }
+    return nullptr;
+  }
+};
+
 }  // namespace irpass
 }  // namespace opt
 }  // namespace mindspore

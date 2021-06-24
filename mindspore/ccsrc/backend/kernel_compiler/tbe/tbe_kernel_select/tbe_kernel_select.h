@@ -43,16 +43,16 @@ class TbeKernelSelect {
   void GetAgnosticPatternKernelInfo(const OpInfo &op_info);
   void GetBroadcastPatternKernelInfo(const OpInfo &op_info);
   void GetReducePatternKernelInfo(const OpInfo &op_info);
-  void FilterInVaildKernelInfo();
-  bool FilterInVaildShape(const KernelBuildInfoIter &kernel_build_info_iter);
+  void FilterInVaildKernelInfo(const OpInfo &op_info);
+  bool FilterInVaildShape(const KernelBuildInfoIter &kernel_build_info_iter, bool is_dynamic_input);
   static bool IsShapeMatchFormat(const std::vector<size_t> &shape, const std::string &format);
   bool TbeCheckSupported(const KernelBuildInfoIter &kernel_build_info_iter);
   static void SetTbeBuildCommonInfo(const OpInfo &op_info, KernelBuildInfo::KernelBuildInfoBuilder *builder);
+  std::vector<int64_t> GetNodeDynamicInputs();
   bool GenBuilderItem(bool is_input, size_t kernel_build_info_index, size_t real_io_tensor_num,
                       const std::vector<std::shared_ptr<OpIOInfo>> &ios_info,
                       const std::vector<int64_t> &dyn_input_sizes, std::vector<std::string> *formats,
-                      std::vector<TypeId> *device_types, std::vector<std::vector<Axis>> *reshape_types);
-  static void StringToAxisVector(const std::string &reshape_type_str, std::vector<Axis> *reshape_type_vec);
+                      std::vector<TypeId> *device_types, std::vector<std::string> *reshape_types);
   static void CreateNewOpInfo(const OpInfo &op_info, const SupportFormat &support_format, OpInfo *op_info_new);
   static void CreateNewOpIOInfo(const OpIOInfo &op_io_info,
                                 const std::vector<std::vector<std::string>> &support_format_item, size_t index,

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,8 +23,9 @@
 #include <vector>
 
 #include "minddata/dataset/engine/datasetops/source/mindrecord_op.h"
-
+#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/status.h"
+
 namespace mindspore {
 namespace dataset {
 
@@ -54,7 +55,7 @@ MindDataNode::MindDataNode(const std::string &dataset_file, const std::vector<st
 
 std::shared_ptr<DatasetNode> MindDataNode::Copy() {
   std::shared_ptr<MindDataNode> node;
-  std::shared_ptr<SamplerObj> sampler = (sampler_ == nullptr) ? nullptr : sampler_->Copy();
+  std::shared_ptr<SamplerObj> sampler = (sampler_ == nullptr) ? nullptr : sampler_->SamplerCopy();
   if (dataset_files_.empty()) {
     node = std::make_shared<MindDataNode>(dataset_file_, columns_list_, sampler, padded_sample_, num_padded_);
   } else {
@@ -168,6 +169,8 @@ Status MindDataNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_o
   }
 
   RETURN_IF_NOT_OK(mindrecord_op->Init());
+  mindrecord_op->set_total_repeats(GetTotalRepeats());
+  mindrecord_op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
   node_ops->push_back(mindrecord_op);
 
   return Status::OK();
@@ -203,5 +206,16 @@ Status MindDataNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &si
   return Status::OK();
 }
 
+// Visitor accepting method for IRNodePass
+Status MindDataNode::Accept(IRNodePass *const p, bool *const modified) {
+  // Downcast shared pointer then call visitor
+  return p->Visit(shared_from_base<MindDataNode>(), modified);
+}
+
+// Visitor accepting method for IRNodePass
+Status MindDataNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
+  // Downcast shared pointer then call visitor
+  return p->VisitAfter(shared_from_base<MindDataNode>(), modified);
+}
 }  // namespace dataset
 }  // namespace mindspore

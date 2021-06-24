@@ -28,8 +28,8 @@ namespace mindspore::kernel {
 class ActivationOpenCLKernel : public OpenCLKernel {
  public:
   ActivationOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                         const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs),
+                         const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : OpenCLKernel(parameter, inputs, outputs, ctx),
         type_(reinterpret_cast<ActivationParameter *>(parameter)->type_),
         alpha_(reinterpret_cast<ActivationParameter *>(parameter)->alpha_) {}
   ~ActivationOpenCLKernel() override = default;
@@ -44,7 +44,7 @@ class ActivationOpenCLKernel : public OpenCLKernel {
   static std::string GetActTypeString(int act_type);
   int type_;
   float alpha_;
-  GpuTensorInfo outShape = GpuTensorInfo(nullptr);
+  GpuTensorInfo outShape;
 };
 
 }  // namespace mindspore::kernel

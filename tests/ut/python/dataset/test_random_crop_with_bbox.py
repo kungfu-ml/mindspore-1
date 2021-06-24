@@ -236,7 +236,7 @@ def test_random_crop_with_bbox_op_bad_c():
     data_voc2 = ds.VOCDataset(DATA_DIR_VOC, task="Detection", usage="train", shuffle=False, decode=True)
     check_bad_bbox(data_voc2, test_op, InvalidBBoxType.HeightOverflow, "bounding boxes is out of bounds of the image")
     data_voc2 = ds.VOCDataset(DATA_DIR_VOC, task="Detection", usage="train", shuffle=False, decode=True)
-    check_bad_bbox(data_voc2, test_op, InvalidBBoxType.NegativeXY, "min_x")
+    check_bad_bbox(data_voc2, test_op, InvalidBBoxType.NegativeXY, "negative value")
     data_voc2 = ds.VOCDataset(DATA_DIR_VOC, task="Detection", usage="train", shuffle=False, decode=True)
     check_bad_bbox(data_voc2, test_op, InvalidBBoxType.WrongShape, "4 features")
 
@@ -260,7 +260,7 @@ def test_random_crop_with_bbox_op_bad_padding():
             break
     except ValueError as err:
         logger.info("Got an exception in DE: {}".format(str(err)))
-        assert "Input padding is not within the required interval of (0 to 2147483647)." in str(err)
+        assert "Input padding is not within the required interval of [0, 2147483647]." in str(err)
 
     try:
         test_op = c_vision.RandomCropWithBBox([512, 512], padding=[16777216, 16777216, 16777216, 16777216])
@@ -273,7 +273,7 @@ def test_random_crop_with_bbox_op_bad_padding():
             break
     except RuntimeError as err:
         logger.info("Got an exception in DE: {}".format(str(err)))
-        assert "RandomCropBBoxOp padding size is too big, it\'s more than 3 times the original size." in str(err)
+        assert "padding size is three times bigger than the image size" in str(err)
 
 
 if __name__ == "__main__":

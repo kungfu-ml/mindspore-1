@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "./tinyxml2.h"
 #include "minddata/dataset/core/tensor.h"
 #include "minddata/dataset/engine/data_buffer.h"
 #include "minddata/dataset/engine/data_schema.h"
@@ -33,6 +34,9 @@
 #include "minddata/dataset/util/status.h"
 #include "minddata/dataset/util/wait_post.h"
 
+using tinyxml2::XMLDocument;
+using tinyxml2::XMLElement;
+using tinyxml2::XMLError;
 namespace mindspore {
 namespace dataset {
 // Forward declares
@@ -206,12 +210,6 @@ class VOCOp : public ParallelOp, public RandomAccessOp {
                                  const py::dict &dict, std::map<std::string, int32_t> *output_class_indexing);
 #endif
 
-  /// \brief Base-class override for NodePass visitor acceptor
-  /// \param[in] p Pointer to the NodePass to be accepted
-  /// \param[out] modified Indicator if the node was changed at all
-  /// \return Status of the node visit
-  Status Accept(NodePass *p, bool *modified) override;
-
   // Op name getter
   // @return Name of the current Op
   std::string Name() const override { return "VOCOp"; }
@@ -259,6 +257,12 @@ class VOCOp : public ParallelOp, public RandomAccessOp {
   // @param const std::string &path - path to annotation xml
   // @return Status The status code returned
   Status ParseAnnotationBbox(const std::string &path);
+
+  // @param XMLElement *bbox_node - bbox node info found in json object
+  // @param const char *name - sub node name in object
+  // @param float *value - value of certain sub node
+  // @return Status The status code returned
+  void ParseNodeValue(XMLElement *bbox_node, const char *name, float *value);
 
   // @param const std::shared_ptr<Tensor> &sample_ids - sample ids of tensor
   // @param std::vector<int64_t> *keys - image id

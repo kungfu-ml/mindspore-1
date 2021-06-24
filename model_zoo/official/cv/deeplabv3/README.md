@@ -12,6 +12,8 @@
     - [Script Parameters](#script-parameters)
     - [Training Process](#training-process)
     - [Evaluation Process](#evaluation-process)
+    - [Export MindIR](#export-mindir)
+    - [Inference Process](#inference-process)
 - [Model Description](#model-description)
     - [Performance](#performance)
         - [Evaluation Performance](#evaluation-performance)
@@ -72,7 +74,7 @@ For FP16 operators, if the input data type is FP32, the backend of MindSpore wil
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-- Prepare hardware environment with Ascend. If you want to try Ascend , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+- Prepare hardware environment with Ascend.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
@@ -116,7 +118,7 @@ run_distribute_train_s16_r1.sh
 run_distribute_train_s8_r1.sh
 ```
 
-3. Train s8 with voctrain dataset, finetuning from model in pervious step, training script is:
+3. Train s8 with voctrain dataset, finetuning from model in previous step, training script is:
 
 ```shell
 run_distribute_train_s8_r2.sh
@@ -302,7 +304,7 @@ do
 done
 ```
 
-3. Train s8 with voctrain dataset, finetuning from model in pervious step, training script is as follows:
+3. Train s8 with voctrain dataset, finetuning from model in previous step, training script is as follows:
 
 ```shell
 # run_distribute_train_s8_r2.sh
@@ -428,6 +430,14 @@ epoch: 3 step: 1, loss is 1.5099041
 ...
 ```
 
+#### Transfer Training
+
+You can train your own model based on pretrained model. You can perform transfer training by following steps.
+
+1. Convert your own dataset to Pascal VOC datasets. Otherwise you have to add your own data preprocess code.
+2. Set argument `filter_weight` to `True`, `ckpt_pre_trained` to pretrained checkpoint and `num_classes` to the classes of your dataset while calling `train.py`, this will filter the final conv weight from the pretrained model.
+3. Build your own bash scripts using new config and arguments for further convenient.
+
 ## [Evaluation Process](#contents)
 
 ### Usage
@@ -478,6 +488,39 @@ Our result were obtained by running the applicable training script. To achieve t
 
 Note: There OS is output stride, and MS is multiscale.
 
+## [Export MindIR](#contents)
+
+Currently, batchsize can only set to 1.
+
+```shell
+python export.py --ckpt_file [CKPT_PATH] --file_name [FILE_NAME] --file_format [FILE_FORMAT]
+```
+
+The ckpt_file parameter is required,
+`EXPORT_FORMAT` should be in ["AIR", "MINDIR"]
+
+## [Inference Process](#contents)
+
+### Usage
+
+Before performing inference, the air file must bu exported by export script on the 910 environment.
+Current batch_Size can only be set to 1. The precision calculation process needs about 70G+ memory space.
+
+```shell
+# Ascend310 inference
+bash run_infer_310.sh [MINDIR_PATH] [DATA_PATH] [DATA_ROOT] [DATA_LIST] [DEVICE_ID]
+```
+
+`DEVICE_ID` is optional, default value is 0.
+
+### result
+
+Inference result is saved in current path, you can find result in acc.log file.
+
+| **Network**    | OS=16 | OS=8 | MS   | Flip  | mIOU  | mIOU in paper |
+| :----------: | :-----: | :----: | :----: | :-----: | :-----: | :-------------: |
+| deeplab_v3 |       | √    |      |       | 78.84 | 78.51    |
+
 # [Model Description](#contents)
 
 ## [Performance](#contents)
@@ -496,7 +539,7 @@ Note: There OS is output stride, and MS is multiscale.
 | Loss Function              | Softmax Cross Entropy                                  |
 | Outputs                    | probability                                       |
 | Loss                       | 0.0065883575                                       |
-| Speed                      | 60 ms/step（1pc, s16）<br> 480 ms/step（8pcs, s16） <br> 244 ms/step (8pcs, s8)      |  
+| Speed                      | 60 fps（1pc, s16）<br> 480 fps（8pcs, s16） <br> 244 fps (8pcs, s8)      |  
 | Total time                 | 8pcs: 706 mins                     |
 | Parameters (M)             | 58.2                                       |
 | Checkpoint for Fine tuning | 443M (.ckpt file)                       |

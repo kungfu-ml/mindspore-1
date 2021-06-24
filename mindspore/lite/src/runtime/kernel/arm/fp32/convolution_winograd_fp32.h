@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_WINOGRAD_H_
-#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_WINOGRAD_H_
+#ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_WINOGRAD_FP32_H_
+#define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_WINOGRAD_FP32_H_
 
 #include <vector>
 #include "src/lite_kernel.h"
-#include "nnacl/winograd_transform.h"
-#include "nnacl/minimal_filtering_generator.h"
+#include "nnacl/fp32/winograd_transform.h"
+#include "nnacl/base/minimal_filtering_generator.h"
+#include "nnacl/fp32/conv_winograd_fp32.h"
 #include "src/runtime/kernel/arm/base/convolution_base.h"
 
 namespace mindspore::kernel {
@@ -28,10 +29,11 @@ class ConvolutionWinogradCPUKernel : public ConvolutionBaseCPUKernel {
  public:
   ConvolutionWinogradCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
                                const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                               const mindspore::lite::PrimitiveC *primitive, int output_unit)
-      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx, primitive),
+                               int output_unit, float *origin_weight, float *origin_bias)
+      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx),
         output_unit_(output_unit),
-        trans_weight_(nullptr) {}
+        origin_weight_(origin_weight),
+        origin_bias_(origin_bias) {}
   ~ConvolutionWinogradCPUKernel() override {
     if (trans_weight_ != nullptr) {
       free(trans_weight_);
@@ -41,6 +43,7 @@ class ConvolutionWinogradCPUKernel : public ConvolutionBaseCPUKernel {
   int Init() override;
   int ReSize() override;
   int Run() override;
+  int Eval() override;
   int RunImpl(int task_id);
   int InitWeightBias();
   int InitTmpBuffer();
@@ -66,9 +69,13 @@ class ConvolutionWinogradCPUKernel : public ConvolutionBaseCPUKernel {
       col_buffer_ = nullptr;
     }
   }
-  int kernel_unit_;
-  int input_unit_;
+  int kernel_unit_{0};
+  int input_unit_{0};
   int output_unit_;
+  int oc_block_{0};
+  int tile_num_{0};
+  float *origin_weight_;  // do not free
+  float *origin_bias_;    // do not free
   float *tmp_data_ = nullptr;
   float *trans_input_ = nullptr;
   float *gemm_out_ = nullptr;
@@ -80,4 +87,4 @@ class ConvolutionWinogradCPUKernel : public ConvolutionBaseCPUKernel {
 };
 
 }  // namespace mindspore::kernel
-#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_WINOGRAD_H_
+#endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_CONVOLUTION_WINOGRAD_FP32_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "schema/inner/model_generated.h"
 #include "src/common/log_adapter.h"
 #include "ir/dtype/type_id.h"
+#include "src/common/utils.h"
 
 namespace mindspore {
 namespace lite {
@@ -37,7 +38,6 @@ using schema::QuantParamT;
 using schema::TensorT;
 using schema::Format::Format_NCHW;
 using schema::Format::Format_NHWC;
-using STATUS = int;
 
 std::unique_ptr<QuantParamT> GetTensorQuantParam(const std::unique_ptr<TensorT> &tensor);
 
@@ -70,9 +70,9 @@ class TensorCache {
     index++;
     if (Category == CONST || Category == TF_CONST || Category == GRAPH_INPUT) {
       tensor->refCount = 1;
-      tensor->nodeType = schema::NodeType_ValueNode;
+      tensor->nodeType = NodeType_ValueNode;
     } else {
-      tensor->nodeType = schema::NodeType_Parameter;
+      tensor->nodeType = NodeType_Parameter;
     }
     tensor->name = name;
     tensors.push_back(tensor);

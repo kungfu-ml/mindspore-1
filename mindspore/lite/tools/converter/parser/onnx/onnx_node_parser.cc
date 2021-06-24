@@ -24,18 +24,36 @@ namespace mindspore {
 namespace lite {
 int OnnxNodeParser::opset_version_ = 0;
 
-schema::PadMode OnnxNodeParser::GetOnnxPadMode(const onnx::AttributeProto &onnx_node_attr) {
+mindspore::PadMode OnnxNodeParser::GetOnnxPadMode(const onnx::AttributeProto &onnx_node_attr) {
   if (onnx_node_attr.s() == "NOTSET") {
-    return schema::PadMode_NOTSET;
-  } else if (onnx_node_attr.s() == "SAME_UPPER") {
-    return schema::PadMode_SAME_UPPER;
-  } else if (onnx_node_attr.s() == "SAME_LOWER") {
-    return schema::PadMode_SAME_LOWER;
+    return mindspore::PadMode::PAD;
+  } else if (onnx_node_attr.s() == "SAME_UPPER" || onnx_node_attr.s() == "SAME_LOWER") {
+    return mindspore::PadMode::SAME;
   } else if (onnx_node_attr.s() == "VALID") {
-    return schema::PadMode_VALID;
+    return mindspore::PadMode::VALID;
   } else {
     MS_LOG(ERROR) << "unsupported padMode";
-    return schema::PadMode_NOTSET;
+    return mindspore::PadMode::PAD;
+  }
+}
+
+STATUS OnnxNodeParser::GetPadMode(const onnx::AttributeProto &onnx_node_attr, std::string *mode) {
+  if (onnx_node_attr.s() == "NOTSET") {
+    *mode = "NOTSET";
+    return RET_OK;
+  } else if (onnx_node_attr.s() == "SAME_UPPER") {
+    *mode = "SAME_UPPER";
+    return RET_OK;
+  } else if (onnx_node_attr.s() == "SAME_LOWER") {
+    *mode = "SAME_LOWER";
+    return RET_OK;
+  } else if (onnx_node_attr.s() == "VALID") {
+    *mode = "VALID";
+    return RET_OK;
+  } else {
+    MS_LOG(ERROR) << "unsupported padMode";
+    *mode = "NOTSET";
+    return RET_ERROR;
   }
 }
 
@@ -48,20 +66,38 @@ STATUS OnnxNodeParser::GetTensorDataFromOnnx(const onnx::TensorProto &onnx_tenso
   switch (onnx_tensor.data_type()) {
     case onnx::TensorProto_DataType_FLOAT:
       *type = OnnxModelParser::GetDataTypeFromOnnx(onnx::TensorProto_DataType_FLOAT);
-      for (size_t i = 0; i < data_count; i++) {
-        value->push_back(reinterpret_cast<const float *>(onnx_tensor.raw_data().data())[i]);
+      if (onnx_tensor.float_data_size() > 0) {
+        for (int i = 0; i < onnx_tensor.float_data_size(); i++) {
+          value->push_back(onnx_tensor.float_data(i));
+        }
+      } else {
+        for (size_t i = 0; i < data_count; i++) {
+          value->push_back(reinterpret_cast<const float *>(onnx_tensor.raw_data().data())[i]);
+        }
       }
       break;
     case onnx::TensorProto_DataType_INT32:
       *type = OnnxModelParser::GetDataTypeFromOnnx(onnx::TensorProto_DataType_INT32);
-      for (size_t i = 0; i < data_count; i++) {
-        value->push_back(static_cast<float>(reinterpret_cast<const int32_t *>(onnx_tensor.raw_data().data())[i]));
+      if (onnx_tensor.int32_data_size() > 0) {
+        for (int i = 0; i < onnx_tensor.int32_data_size(); i++) {
+          value->push_back(onnx_tensor.int32_data(i));
+        }
+      } else {
+        for (size_t i = 0; i < data_count; i++) {
+          value->push_back(static_cast<float>(reinterpret_cast<const int32_t *>(onnx_tensor.raw_data().data())[i]));
+        }
       }
       break;
     case onnx::TensorProto_DataType_INT64:
       *type = OnnxModelParser::GetDataTypeFromOnnx(onnx::TensorProto_DataType_INT32);
-      for (size_t i = 0; i < data_count; i++) {
-        value->push_back(static_cast<float>(reinterpret_cast<const int64_t *>(onnx_tensor.raw_data().data())[i]));
+      if (onnx_tensor.int64_data_size() > 0) {
+        for (int i = 0; i < onnx_tensor.int64_data_size(); i++) {
+          value->push_back(onnx_tensor.int64_data(i));
+        }
+      } else {
+        for (size_t i = 0; i < data_count; i++) {
+          value->push_back(static_cast<float>(reinterpret_cast<const int64_t *>(onnx_tensor.raw_data().data())[i]));
+        }
       }
       break;
     default:

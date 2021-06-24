@@ -18,18 +18,17 @@
 
 #include <vector>
 #include "include/errorcode.h"
-#include "nnacl/depth_to_space.h"
+#include "nnacl/base/depth_to_space_base.h"
 #include "nnacl/int8/depth_to_space_int8.h"
-#include "nnacl/quantization/quantize.h"
+#include "mindspore/lite/nnacl/int8/quantize.h"
 #include "src/runtime/kernel/arm/base/depth_to_space_base.h"
 
 namespace mindspore::kernel {
 class DepthToSpaceInt8CPUKernel : public DepthToSpaceBaseCPUKernel {
  public:
   DepthToSpaceInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                            const mindspore::lite::PrimitiveC *primitive)
-      : DepthToSpaceBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : DepthToSpaceBaseCPUKernel(parameter, inputs, outputs, ctx) {}
   ~DepthToSpaceInt8CPUKernel() = default;
 
   int Init() override;

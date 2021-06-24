@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,9 +27,13 @@ using mindspore::schema::PrimitiveType_Resize;
 namespace mindspore::kernel {
 int ResizeNPUKernel::IsSupport(const std::vector<lite::Tensor *> &inputs, const std::vector<lite::Tensor *> &outputs,
                                OpParameter *opParameter) {
-  if (resize_parameter_->method_ != schema::ResizeMethod_LINEAR ||
-      resize_parameter_->method_ == schema::ResizeMethod_NEAREST) {
+  if (resize_parameter_->method_ != schema::ResizeMethod_LINEAR &&
+      resize_parameter_->method_ != schema::ResizeMethod_NEAREST) {
     MS_LOG(WARNING) << "Unsupported resize method type:" << resize_parameter_->method_;
+    return RET_ERROR;
+  }
+  if (inputs[0]->Height() > outputs[0]->Height() || inputs[0]->Width() > outputs[0]->Width()) {
+    MS_LOG(WARNING) << "Npu resize does not support reduction.";
     return RET_ERROR;
   }
   return RET_OK;
@@ -42,29 +46,34 @@ int ResizeNPUKernel::SetNPUInputs(const std::vector<lite::Tensor *> &inputs, con
   vector<int32_t> dataValue = {static_cast<int32_t>(resize_parameter_->new_height_),
                                static_cast<int32_t>(resize_parameter_->new_width_)};
   sizeTensor->SetData(reinterpret_cast<uint8_t *>(dataValue.data()), 2 * sizeof(int32_t));
-  auto out_size = new (std::nothrow) hiai::op::Const(name_ + "_size");
-  out_size->set_attr_value(sizeTensor);
+  out_size_ = new (std::nothrow) hiai::op::Const(name_ + "_size");
+  out_size_->set_attr_value(sizeTensor);
   if (resize_parameter_->method_ == schema::ResizeMethod_LINEAR) {
     auto op = new (std::nothrow) hiai::op::ResizeBilinearV2(name_);
     if (op == nullptr) {
       MS_LOG(ERROR) << " op is nullptr.";
       return RET_ERROR;
     }
-    op->set_attr_align_corners(resize_parameter_->align_corners_);
+    op->set_attr_align_corners(resize_parameter_->coordinate_transform_mode_ ==
+                               schema::CoordinateTransformMode_ALIGN_CORNERS);
     op->set_input_x(*npu_inputs[0]);
-    op->set_input_size(*out_size);
+    op->set_input_size(*out_size_);
     op->set_attr_half_pixel_centers(resize_parameter_->preserve_aspect_ratio_);
     op_ = op;
-  } else {
+  } else if (resize_parameter_->method_ == schema::ResizeMethod_NEAREST) {
     auto op = new (std::nothrow) hiai::op::ResizeNearestNeighborV2(name_);
     if (op == nullptr) {
       MS_LOG(ERROR) << " op is nullptr.";
       return RET_ERROR;
     }
-    op->set_attr_align_corners(resize_parameter_->align_corners_);
+    op->set_attr_align_corners(resize_parameter_->coordinate_transform_mode_ ==
+                               schema::CoordinateTransformMode_ALIGN_CORNERS);
     op->set_input_x(*npu_inputs[0]);
-    op->set_input_size(*out_size);
+    op->set_input_size(*out_size_);
     op_ = op;
+  } else {
+    MS_LOG(WARNING) << "Unsupported resize method type:" << resize_parameter_->method_;
+    return RET_ERROR;
   }
   return RET_OK;
 }
@@ -75,6 +84,10 @@ ResizeNPUKernel::~ResizeNPUKernel() {
   if (op_ != nullptr) {
     delete op_;
     op_ = nullptr;
+  }
+  if (out_size_ != nullptr) {
+    delete out_size_;
+    out_size_ = nullptr;
   }
 }
 REG_KERNEL(kNPU, kNumberTypeFloat32, PrimitiveType_Resize, NPUKernelCreator<ResizeNPUKernel>)

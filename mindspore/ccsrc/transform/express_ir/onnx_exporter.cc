@@ -25,6 +25,7 @@
 #include "ir/func_graph.h"
 #include "base/core_ops.h"
 #include "proto/onnx.pb.h"
+#include "utils/check_convert_utils.h"
 
 namespace mindspore {
 enum OpMergeMode {
@@ -43,6 +44,15 @@ struct OpMergedInfo {
 
 using GenAttrFuncType =
   std::function<void(ValuePtr, onnx::AttributeProto_AttributeType, onnx::AttributeProto *, const PrimitivePtr &)>;
+
+static AnfNodePtr GetRealInput(const AnfNodePtr &origin_input) {
+  AnfNodePtr input = origin_input;
+  while (IsPrimitiveCNode(input, prim::kPrimDepend) || IsPrimitiveCNode(input, prim::kPrimLoad)) {
+    // Skip Depend and Load cnodes.
+    input = input->cast<CNodePtr>()->inputs().at(1);
+  }
+  return input;
+}
 
 template <typename T, size_t rep_cnt = 0>
 void SetAttrValueToProto(const ValuePtr &value, onnx::AttributeProto_AttributeType attr_type,
@@ -102,8 +112,9 @@ void SetAttrTupleValueToProto(const ValuePtr &value, onnx::AttributeProto_Attrib
 void SetPoolingPadMode(const ValuePtr &value, onnx::AttributeProto_AttributeType,
                        onnx::AttributeProto *const attr_proto, const PrimitivePtr &) {
   attr_proto->set_type(onnx::AttributeProto_AttributeType_STRING);
-  auto attr_value = GetValue<std::string>(value);
-  if (attr_value == "VALID") {
+  int64_t attr_value;
+  CheckAndConvertUtils::GetPadModEnumValue(value, &attr_value, true);
+  if (attr_value == PadMode::VALID) {
     attr_proto->set_s("VALID");
   } else {
     attr_proto->set_s("SAME_UPPER");
@@ -165,7 +176,7 @@ class OpNameInfo {
 #define OPERATOR_ONNX_CONVERT_DEFINE(name, onnx_name, impl) \
   OpNameInfo GetOpOnnxConvertInfo_##name() { return impl.set_op_type(#name).set_onnx_type(#onnx_name); }
 
-OPERATOR_ONNX_CONVERT_DEFINE(TensorAdd, Add, OpNameInfo())
+OPERATOR_ONNX_CONVERT_DEFINE(Add, Add, OpNameInfo())
 OPERATOR_ONNX_CONVERT_DEFINE(Mul, Mul, OpNameInfo())
 
 OPERATOR_ONNX_CONVERT_DEFINE(ReLU, Relu, OpNameInfo())
@@ -186,10 +197,11 @@ OPERATOR_ONNX_CONVERT_DEFINE(
           [](ValuePtr value, onnx::AttributeProto_AttributeType, onnx::AttributeProto *const attr_proto,
              const PrimitivePtr &prim) {
             attr_proto->set_type(onnx::AttributeProto_AttributeType_STRING);
-            auto attr_value = GetValue<std::string>(value);
-            if (attr_value == "valid") {
+            int64_t attr_value;
+            CheckAndConvertUtils::GetPadModEnumValue(value, &attr_value);
+            if (attr_value == PadMode::VALID) {
               attr_proto->set_s("VALID");
-            } else if (attr_value == "same") {
+            } else if (attr_value == PadMode::SAME) {
               attr_proto->set_s("SAME_UPPER");
             } else {  // pad_mode is 'pad', use attribute 'pad_list' to fill ONNX attribute 'pads'
               attr_proto->set_name("pads");
@@ -229,26 +241,26 @@ OPERATOR_ONNX_CONVERT_DEFINE(SimpleMean, AveragePool, OpNameInfo())
 OPERATOR_ONNX_CONVERT_DEFINE(
   MaxPool, MaxPool,
   OpNameInfo()
-    .Attr("ksize", "kernel_shape", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>)
-    .Attr("padding", "auto_pad", onnx::AttributeProto_AttributeType_STRING, SetPoolingPadMode)
+    .Attr("kernel_size", "kernel_shape", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>)
+    .Attr("pad_mode", "auto_pad", onnx::AttributeProto_AttributeType_STRING, SetPoolingPadMode)
     .Attr("strides", "strides", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>))
 
 OPERATOR_ONNX_CONVERT_DEFINE(
   MaxPoolWithArgmax, MaxPool,
   OpNameInfo()
-    .Attr("ksize", "kernel_shape", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>)
-    .Attr("padding", "auto_pad", onnx::AttributeProto_AttributeType_STRING, SetPoolingPadMode)
+    .Attr("kernel_size", "kernel_shape", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>)
+    .Attr("pad_mode", "auto_pad", onnx::AttributeProto_AttributeType_STRING, SetPoolingPadMode)
     .Attr("strides", "strides", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>))
 
 OPERATOR_ONNX_CONVERT_DEFINE(
   AvgPool, AveragePool,
   OpNameInfo()
-    .Attr("ksize", "kernel_shape", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>)
-    .Attr("padding", "auto_pad", onnx::AttributeProto_AttributeType_STRING, SetPoolingPadMode)
+    .Attr("kernel_size", "kernel_shape", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>)
+    .Attr("pad_mode", "auto_pad", onnx::AttributeProto_AttributeType_STRING, SetPoolingPadMode)
     .Attr("strides", "strides", onnx::AttributeProto_AttributeType_INTS, SetAttrTupleValueToProto<2>))
 
-OPERATOR_ONNX_CONVERT_DEFINE(GatherV2, Gather, OpNameInfo())
-OPERATOR_ONNX_CONVERT_DEFINE(make_tuple, SequenceConstruct, OpNameInfo())
+OPERATOR_ONNX_CONVERT_DEFINE(Gather, Gather, OpNameInfo())
+OPERATOR_ONNX_CONVERT_DEFINE(MakeTuple, SequenceConstruct, OpNameInfo())
 OPERATOR_ONNX_CONVERT_DEFINE(Concat, Concat, OpNameInfo())
 OPERATOR_ONNX_CONVERT_DEFINE(RealDiv, Div, OpNameInfo())
 OPERATOR_ONNX_CONVERT_DEFINE(ReduceSum, ReduceSum, OpNameInfo())
@@ -257,7 +269,7 @@ OPERATOR_ONNX_CONVERT_DEFINE(Sub, Sub, OpNameInfo())
 #define OP_CONVERT_FUNCTION_NAME(name) GetOpOnnxConvertInfo_##name
 
 void RegisterOpConverters(const std::function<void(OpNameInfo &&)> &fn) {
-  fn(OP_CONVERT_FUNCTION_NAME(TensorAdd)());
+  fn(OP_CONVERT_FUNCTION_NAME(Add)());
   fn(OP_CONVERT_FUNCTION_NAME(Mul)());
 
   fn(OP_CONVERT_FUNCTION_NAME(ReLU)());
@@ -275,7 +287,7 @@ void RegisterOpConverters(const std::function<void(OpNameInfo &&)> &fn) {
   fn(OP_CONVERT_FUNCTION_NAME(BatchNorm)());
   fn(OP_CONVERT_FUNCTION_NAME(MatMul)());
 
-  fn(OP_CONVERT_FUNCTION_NAME(make_tuple)());
+  fn(OP_CONVERT_FUNCTION_NAME(MakeTuple)());
   fn(OP_CONVERT_FUNCTION_NAME(Concat)());
   fn(OP_CONVERT_FUNCTION_NAME(RealDiv)());
   fn(OP_CONVERT_FUNCTION_NAME(BiasAdd)());
@@ -526,7 +538,12 @@ void OnnxExporter::MatchAndMark(const FuncGraphPtr &func_graph, const std::vecto
       // if the key `input` does not exist, just create a new one
       op_merged_infos[cnode].referred_count += 1;
     }
-    for (auto &input : cnode->inputs()) {
+    for (auto &orig_input : cnode->inputs()) {
+      if (HasAbstractMonad(orig_input)) {
+        // Skip monad inputs.
+        continue;
+      }
+      auto input = GetRealInput(orig_input);
       if (!input->isa<CNode>()) {
         continue;
       }
@@ -834,16 +851,17 @@ void OnnxExporter::ExportPrimDepthwiseConv2d(const FuncGraphPtr & /*func_graph*/
 
   // set pad
   onnx_attr_proto = node_proto->add_attribute();
-  auto attr_value = GetValue<std::string>(prim->GetAttr("pad_mode"));
+  int64_t attr_value;
+  CheckAndConvertUtils::GetPadModEnumValue(prim->GetAttr("pad_mode"), &attr_value);
   onnx_attr_proto->set_name("auto_pad");
   onnx_attr_proto->set_type(onnx::AttributeProto_AttributeType_STRING);
-  if (attr_value == "valid") {
+  if (attr_value == PadMode::VALID) {
     onnx_attr_proto->set_s("VALID");
-  } else if (attr_value == "same") {
+  } else if (attr_value == PadMode::SAME) {
     onnx_attr_proto->set_s("SAME_UPPER");
   } else {
     onnx_attr_proto->set_name("pads");
-    SetAttrTupleValueToProto(prim->GetAttr("pads"), onnx::AttributeProto_AttributeType_INTS, onnx_attr_proto, prim);
+    SetAttrTupleValueToProto(prim->GetAttr("pad_list"), onnx::AttributeProto_AttributeType_INTS, onnx_attr_proto, prim);
   }
   // set strides
   onnx_attr_proto = node_proto->add_attribute();
@@ -970,7 +988,7 @@ void OnnxExporter::ExportCNode(const FuncGraphPtr &func_graph, const CNodePtr &n
   }
 
   // MindSpore GatherV2(x, indices, axis) --> ONNX Pow(x, indices)
-  if (node->IsApply(prim::kPrimGatherV2)) {
+  if (node->IsApply(prim::kPrimGather)) {
     return ExportPrimGatherV2(func_graph, node, node_map_ptr, graph_proto);
   }
 
@@ -983,7 +1001,9 @@ void OnnxExporter::ExportCNode(const FuncGraphPtr &func_graph, const CNodePtr &n
   std::vector<AnfNodePtr> op_inputs;
   // first process node input 1,2,..., since when node input is a ValueNode, here need to create a Constant Operator
   for (size_t i = 1; i < inputs.size(); i++) {
-    op_inputs.push_back(inputs[i]);
+    if (!HasAbstractMonad(inputs[i])) {
+      op_inputs.push_back(inputs[i]);
+    }
   }
   auto op_value = dyn_cast<ValueNode>(op);
   if (op_value == nullptr) {
@@ -994,7 +1014,9 @@ void OnnxExporter::ExportCNode(const FuncGraphPtr &func_graph, const CNodePtr &n
     MS_LOG(EXCEPTION) << "Need to support node op type " << op_value->value()->type_name();
   }
 
-  (*node_map_ptr)[node] = ExportPrimitive(func_graph, node_map_ptr, prim, op_inputs, graph_proto);
+  if (!IsPrimitiveEquals(prim, prim::kPrimMakeTuple)) {
+    (*node_map_ptr)[node] = ExportPrimitive(func_graph, node_map_ptr, prim, op_inputs, graph_proto);
+  }
 }
 
 size_t OnnxExporter::ExportPrimitive(const FuncGraphPtr & /*func_graph*/, std::map<AnfNodePtr, size_t> *node_map_ptr,
@@ -1003,12 +1025,11 @@ size_t OnnxExporter::ExportPrimitive(const FuncGraphPtr & /*func_graph*/, std::m
   auto op_map = OpConvertRegistry::GetOpConvertMap();
   auto op_iter = op_map.find(prim->name());
   if (op_iter == op_map.end()) {
-    MS_LOG(EXCEPTION) << "Can not find key " << prim->name() << " in convert map";
+    MS_LOG(EXCEPTION) << "Can not find key " << prim->name() << " in convert map. "
+                      << "Exporting " << prim->name() << " operator is not yet supported.";
   }
   const OpNameInfo &op_convert_info = op_iter->second;
-
   auto node_idx = AllocateNodeIndex();
-
   onnx::NodeProto *node_proto = graph_proto->add_node();
   node_proto->add_output(std::to_string(node_idx));
   node_proto->set_op_type(op_convert_info.onnx_type());
@@ -1099,12 +1120,13 @@ void OnnxExporter::ExportOutput(const FuncGraphPtr & /*func_graph*/, const CNode
   SetValueInfoType(arg, output_proto, false);
 }
 
-std::string OnnxExporter::GetNodeInputName(const AnfNodePtr &node, std::map<AnfNodePtr, size_t> *node_map_ptr,
+std::string OnnxExporter::GetNodeInputName(const AnfNodePtr &orig_node, std::map<AnfNodePtr, size_t> *node_map_ptr,
                                            onnx::GraphProto *const graph_proto) {
+  auto node = GetRealInput(orig_node);
   if (node->isa<CNode>()) {
     auto iter = node_map_ptr->find(node);
     if (iter == node_map_ptr->end()) {
-      MS_LOG(EXCEPTION) << "Can not find node '" << node->ToString() << "' in node_map";
+      MS_LOG(EXCEPTION) << "Can not find node '" << node->DebugString() << "' in node_map";
     }
     return std::to_string(iter->second);
   }

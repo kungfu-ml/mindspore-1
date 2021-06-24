@@ -24,10 +24,9 @@ namespace mindspore::kernel {
 class ConvolutionGradFilterCPUKernel : public LiteKernel {
  public:
   explicit ConvolutionGradFilterCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                                          const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                                          const mindspore::lite::PrimitiveC *primitive)
+                                          const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
 
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
   ~ConvolutionGradFilterCPUKernel() override {}
 
   int Init() override;
@@ -36,11 +35,15 @@ class ConvolutionGradFilterCPUKernel : public LiteKernel {
   int Execute(int task_id);
 
  private:
-  size_t ws_size = 0;
+  size_t ws_size_ = 0;
+  bool do_img2col_ = true;
+  bool do_dw_ = false;
+  std::mutex lock_;
+  size_t mat_alloc_ = 0;
 #ifdef ENABLE_ARM32
-  const int chunk = C4NUM;
+  const int chunk_ = C4NUM * 2;
 #else
-  const int chunk = C12NUM;
+  const int chunk_ = C12NUM * 2;
 #endif
 };
 }  // namespace mindspore::kernel

@@ -41,13 +41,15 @@ const BaseRef SubstituteDropout::DefinePattern() const {
 void SetNewKernelInfo(const CNodePtr &kernel_node) {
   std::vector<std::string> inputs_format;
   std::vector<TypeId> inputs_type;
-  for (size_t input_index = 0; input_index < AnfAlgo::GetInputTensorNum(kernel_node); ++input_index) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(kernel_node);
+  for (size_t input_index = 0; input_index < input_num; ++input_index) {
     inputs_format.emplace_back(AnfAlgo::GetPrevNodeOutputFormat(kernel_node, input_index));
     inputs_type.push_back(AnfAlgo::GetPrevNodeOutputDeviceDataType(kernel_node, input_index));
   }
   std::vector<std::string> outputs_format;
   std::vector<TypeId> outputs_type;
-  for (size_t output_index = 0; output_index < AnfAlgo::GetOutputTensorNum(kernel_node); ++output_index) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(kernel_node);
+  for (size_t output_index = 0; output_index < output_num; ++output_index) {
     outputs_format.emplace_back(AnfAlgo::GetPrevNodeOutputFormat(kernel_node, output_index));
     outputs_type.push_back(AnfAlgo::GetOutputInferDataType(kernel_node, output_index));
   }
@@ -69,15 +71,13 @@ const AnfNodePtr SubstituteDropout::Process(const FuncGraphPtr &func_graph, cons
   MS_EXCEPTION_IF_NULL(node);
   CNodePtr cnode = node->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(cnode);
-  if (cnode->inputs().size() < kDropoutInputNum) {
-    MS_LOG(EXCEPTION) << "Dropout's input num is wrong";
-  }
+  CheckCNodeInputSize(cnode, kDropoutInputTensorNum);
   AbstractBasePtr old_abstract = cnode->abstract()->Clone();
   auto shape = AnfAlgo::GetInputDeviceShape(cnode, 0);
   ShapeVector shape_i64;
   std::transform(shape.begin(), shape.end(), std::back_inserter(shape_i64), [](size_t x) { return SizeToLong(x); });
 
-  // The primitive should use a clone, otherwise the attr seed will be overrided.
+  // The primitive should use a clone, otherwise the attr seed will be overridden.
   AnfNodePtrList uniform_input = {NewValueNode(prim::kPrimCudnnUniformReal->Clone())};
   auto tensor = std::make_shared<tensor::Tensor>(kNumberTypeInt64, ShapeVector(1, SizeToLong(shape.size())),
                                                  static_cast<void *>(&shape[0]), kNumberTypeInt64);
@@ -98,8 +98,8 @@ const AnfNodePtr SubstituteDropout::Process(const FuncGraphPtr &func_graph, cons
 
   // create new uniform_real_node
   auto uniform_real_node = func_graph->NewCNode(uniform_input);
-  AnfAlgo::GetCNodePrimitive(uniform_real_node)->set_attr("seed", MakeValue(SizeToLong(seed_++)));
-  AnfAlgo::GetCNodePrimitive(uniform_real_node)->set_attr("seed2", MakeValue(SizeToLong(seed_++)));
+  SetNodeAttrSafely("seed", MakeValue(SizeToLong(seed_++)), uniform_real_node);
+  SetNodeAttrSafely("seed2", MakeValue(SizeToLong(seed_++)), uniform_real_node);
   auto uniform_abstract = std::make_shared<abstract::AbstractTensor>(std::make_shared<Float>(32), shape_i64);
   uniform_real_node->set_abstract(uniform_abstract);
   uniform_real_node->set_kernel_info(std::make_shared<device::KernelInfo>());
@@ -110,7 +110,7 @@ const AnfNodePtr SubstituteDropout::Process(const FuncGraphPtr &func_graph, cons
   new_node_inputs.push_back(cnode->input(1));
   new_node_inputs.push_back(uniform_real_node);
   auto new_node = func_graph->NewCNode(new_node_inputs);
-  AnfAlgo::GetCNodePrimitive(new_node)->set_attr("keep_prob", AnfAlgo::GetCNodePrimitive(cnode)->GetAttr("keep_prob"));
+  SetNodeAttrSafely("keep_prob", MakeValue(AnfAlgo::GetNodeAttr<float>(cnode, "keep_prob")), new_node);
   new_node->set_abstract(old_abstract);
   new_node->set_kernel_info(std::make_shared<device::KernelInfo>());
   SetNewKernelInfo(new_node);

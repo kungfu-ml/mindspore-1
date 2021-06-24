@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "debug/draw.h"
 #include "ir/tensor.h"
 #include "utils/symbolic.h"
+#include "base/core_ops.h"
 
 namespace mindspore {
 namespace abstract {
@@ -154,7 +155,7 @@ TEST_F(TestPrim, test_list_map) {
   AbstractBasePtr abstract_v2 = FromValue(static_cast<int64_t>(2), false);
   AbstractBasePtr abstract_u2 = FromValue(static_cast<int64_t>(2), false);
   auto abstract_list2 = std::make_shared<AbstractList>(AbstractBasePtrList({abstract_v2, abstract_u2}));
-  auto prim_scalar_add = std::make_shared<Primitive>("scalar_add");
+  auto prim_scalar_add = std::make_shared<Primitive>(prim::kScalarAdd);
   AbstractBasePtr abstract_func = ToAbstract(prim_scalar_add);
 
   args_spec_list.push_back(abstract_func);
@@ -179,7 +180,7 @@ TEST_F(TestPrim, test_list_reduce) {
   AbstractBasePtr abstract_v1 = FromValue(v1, false);
   AbstractBasePtr abstract_v2 = FromValue(v1, false);
   auto abstract_list = std::make_shared<AbstractList>(AbstractBasePtrList({abstract_v1, abstract_v2}));
-  auto prim_scalar_add = std::make_shared<Primitive>("scalar_add");
+  auto prim_scalar_add = std::make_shared<Primitive>(prim::kScalarAdd);
   AbstractBasePtr abstract_func = ToAbstract(prim_scalar_add);
 
   args_spec_list.push_back(abstract_func);
@@ -291,25 +292,9 @@ TEST_F(TestPrim, test_J_2) {
   ASSERT_TRUE(res_J_1 != nullptr);
 }
 
-TEST_F(TestPrim, test_dot) {
-  auto dot = std::make_shared<Primitive>("dot");
-  FuncGraphPtr func_graph = MakeFuncGraph(dot, 2);
-
-  auto a1 = UTPrimUtils::ArrayFloat64Of({2, 3});
-  auto a2 = UTPrimUtils::ArrayFloat64Of({3, 4});
-  std::vector<int64_t> expectedA = {2, 4};
-  auto expected = UTPrimUtils::ArrayFloat64Of({2, 4});
-
-  AbstractBasePtrList args_spec_list = {a1, a2};
-
-  AbstractTensorPtr res = dyn_cast<AbstractTensor>(engine_->Run(func_graph, args_spec_list).inferred->abstract());
-
-  ASSERT_TRUE(*(dyn_cast<Shape>(res->GetShapeTrack())) == *(dyn_cast<Shape>(expected->GetShapeTrack())));
-}
-
 // tail half
 TEST_F(TestPrim, test_switch1) {
-  PrimitivePtr switch_ = std::make_shared<Primitive>("switch");
+  PrimitivePtr switch_ = std::make_shared<Primitive>("Switch");
   FuncGraphPtr func_graph = MakeFuncGraph(switch_, 3);
 
   AbstractBasePtr arg0 = FromValue(true, false);
@@ -322,7 +307,7 @@ TEST_F(TestPrim, test_switch1) {
 }
 
 TEST_F(TestPrim, test_switch2) {
-  PrimitivePtr switch_ = std::make_shared<Primitive>("switch");
+  PrimitivePtr switch_ = std::make_shared<Primitive>("Switch");
   FuncGraphPtr func_graph = MakeFuncGraph(switch_, 3);
 
   AbstractBasePtr arg0 = FromValue(false, false);
@@ -625,65 +610,6 @@ TEST_F(TestPrim, test_tensor_to_scalar_prim) {
   MS_LOG(INFO) << "result: " << res->ToString();
   MS_LOG(INFO) << "expected: " << expected->ToString();
   ASSERT_TRUE(*res == *expected);
-}
-
-TEST_F(TestPrim, test_fused_batch_norm) {
-  PrimitivePtr fused_batch_norm = prim::kPrimFusedBatchNorm;
-  fused_batch_norm->AddAttr("epsilon", MakeValue(0.001f));
-  fused_batch_norm->AddAttr("momentum", MakeValue(0.1f));
-
-  FuncGraphPtr func_graph = MakeFuncGraph(fused_batch_norm, 5);
-
-  // NCHW
-  std::vector<int64_t> inputs_dims = {128, 64, 32, 64};
-  std::vector<int64_t> scale_dims = {64};
-  std::vector<int64_t> offset_dims = {64};
-  std::vector<int64_t> mean_dims = {64};
-  std::vector<int64_t> variance_dims = {64};
-
-  tensor::TensorPtr inputs = std::make_shared<tensor::Tensor>();
-  inputs->set_data_type(kNumberTypeFloat32);
-  inputs->set_shape(inputs_dims);
-
-  tensor::TensorPtr scale = std::make_shared<tensor::Tensor>();
-  scale->set_data_type(kNumberTypeFloat32);
-  scale->set_shape(scale_dims);
-
-  tensor::TensorPtr offset = std::make_shared<tensor::Tensor>();
-  offset->set_data_type(kNumberTypeFloat32);
-  offset->set_shape(offset_dims);
-
-  tensor::TensorPtr mean = std::make_shared<tensor::Tensor>();
-  mean->set_data_type(kNumberTypeFloat32);
-  mean->set_shape(mean_dims);
-
-  tensor::TensorPtr variance = std::make_shared<tensor::Tensor>();
-  variance->set_data_type(kNumberTypeFloat32);
-  variance->set_shape(variance_dims);
-
-  AbstractBasePtr abstract_inputs = FromValue(inputs, true);
-  AbstractBasePtr abstract_scale = FromValue(scale, true);
-  AbstractBasePtr abstract_offset = FromValue(offset, true);
-  AbstractBasePtr abstract_mean = FromValue(mean, true);
-  AbstractBasePtr abstract_variance = FromValue(variance, true);
-  AbstractBasePtrList args_spec_list = {abstract_inputs, abstract_scale, abstract_offset, abstract_mean,
-                                        abstract_variance};
-
-  AbstractBasePtr expected0 = abstract_inputs->Clone();
-  AbstractBasePtr expected1 = abstract_scale->Clone();
-
-  AbstractBasePtr res = engine_->Run(func_graph, args_spec_list).inferred->abstract();
-  MS_LOG(INFO) << "result: " << res->ToString();
-  MS_LOG(INFO) << "expected0: " << expected0->ToString();
-  MS_LOG(INFO) << "expected1: " << expected1->ToString();
-
-  std::shared_ptr<AbstractTuple> abs_tuple = dyn_cast<AbstractTuple>(res);
-  ASSERT_TRUE(abs_tuple != nullptr);
-  ASSERT_TRUE(*abs_tuple->elements()[0] == *expected0);
-  ASSERT_TRUE(*abs_tuple->elements()[1] == *expected1);
-  ASSERT_TRUE(*abs_tuple->elements()[2] == *expected1);
-  ASSERT_TRUE(*abs_tuple->elements()[3] == *expected1);
-  ASSERT_TRUE(*abs_tuple->elements()[4] == *expected1);
 }
 
 TEST_F(TestPrim, test_pooling) {

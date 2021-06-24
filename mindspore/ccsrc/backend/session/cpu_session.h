@@ -29,7 +29,7 @@ class CPUSession : public SessionBasic {
  public:
   CPUSession() = default;
   ~CPUSession() override = default;
-  void Init(uint32_t device_id) override { InitExecutor(kCPUDevice, device_id); }
+  void Init(uint32_t device_id) override;
 
  protected:
   void UnifyMindIR(const KernelGraphPtr &graph) override { return; }
@@ -46,10 +46,10 @@ class CPUSession : public SessionBasic {
                  VectorRef *outputs, const std::vector<int64_t> &tensors_mask) override;
 
  private:
+  void Reorder(std::vector<CNodePtr> *node_list);
   void SetKernelInfo(const KernelGraph *kernel_graph);
   void BuildKernel(const KernelGraph *kernel_graph);
   void SetOutputFlags(const VectorRef &base_ref, std::vector<tensor::TensorPtr> *outputs_tensors);
-  void SyncValueNodeDeviceAddr(const std::shared_ptr<KernelGraph> &kernel_graph);
   device::cpu::CPUKernelRuntime runtime_;
 };
 MS_REG_SESSION(kCPUDevice, CPUSession);

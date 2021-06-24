@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,18 +16,14 @@
 #include "minddata/dataset/engine/datasetops/filter_op.h"
 #include <algorithm>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <vector>
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/core/constants.h"
 #include "minddata/dataset/core/global_context.h"
 #include "minddata/dataset/core/tensor.h"
 #include "minddata/dataset/engine/data_buffer.h"
-#include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/kernels/tensor_op.h"
 #include "minddata/dataset/util/log_adapter.h"
 #include "minddata/dataset/util/task_manager.h"
@@ -43,7 +39,7 @@ Status FilterOp::Builder::SanityCheck() {
   err += builder_num_workers_ <= 0 ? "Invalid parameter, num_parallel_workers must be greater than 0, but got " +
                                        std::to_string(builder_num_workers_) + ".\n"
                                    : "";
-  return err.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, common::SafeCStr(err));
+  return err.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, common::SafeCStr(err));
 }
 
 FilterOp::Builder::Builder() {
@@ -66,12 +62,12 @@ FilterOp::FilterOp(const std::vector<std::string> &in_col_names, int32_t num_wor
 Status FilterOp::operator()() {
   // The operator class just starts off threads by calling the tree_ function.
   if (tree_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
   }
   filter_queues_.Init(num_workers_, oc_queue_size_);
   RETURN_IF_NOT_OK(filter_queues_.Register(tree_->AllTasks()));
   Status rc =
-    tree_->LaunchWorkers(num_workers_, std::bind(&FilterOp::WorkerEntry, this, std::placeholders::_1), Name());
+    tree_->LaunchWorkers(num_workers_, std::bind(&FilterOp::WorkerEntry, this, std::placeholders::_1), Name(), id());
   // Synchronize with TaskManager.
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(rc);
@@ -244,19 +240,7 @@ Status FilterOp::InvokePredicateFunc(const TensorRow &input, bool *out_predicate
   RETURN_IF_NOT_OK(predicate_func_->Compute(input, &output));
   RETURN_IF_NOT_OK(output.at(0)->GetItemAt(out_predicate, {}));
 
-  return Status(StatusCode::kOK, "FilterOp predicate func call succeed");
-}
-
-// Visitor accept method for NodePass
-Status FilterOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<FilterOp>(), modified);
-}
-
-// Visitor pre-accept method for NodePass
-Status FilterOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->PreRunOnNode(shared_from_base<FilterOp>(), modified);
+  return Status(StatusCode::kSuccess, "FilterOp predicate func call succeed");
 }
 
 }  // namespace dataset

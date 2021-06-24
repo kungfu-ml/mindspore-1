@@ -100,13 +100,13 @@ void FeedTeOpTensorOutputArg(const NotNull<CNodePtr> &cnode,
 void FeedTeOpConstTensor(const NotNull<CNodePtr> &cnode, const std::map<uint32_t, tensor::TensorPtr> &depend_tensor_map,
                          NotNull<std::map<std::string, optiling::TeConstTensorData> *> const_inputs) {
   MS_LOG(INFO) << "FeedTeOpConstTensor start, node:" << cnode->fullname_with_scope();
-  if (!AnfAlgo::HasNodeAttr(kDynamicShapeDepends, cnode.get())) {
+  auto depends_list_me = abstract::GetDependsFormMap(cnode);
+  if (depends_list_me.empty()) {
     MS_LOG(INFO) << "No input depend found, " << cnode->fullname_with_scope();
     return;
   }
 
   std::vector<int> depends_list;
-  std::vector<int64_t> depends_list_me = AnfAlgo::GetNodeAttr<std::vector<int64_t>>(cnode.get(), kDynamicShapeDepends);
   (void)std::transform(depends_list_me.begin(), depends_list_me.end(), std::back_inserter(depends_list),
                        [](const int64_t &value) { return static_cast<int>(value); });
   for (auto index : depends_list) {
@@ -138,9 +138,8 @@ void FeedTeOpConstTensor(const NotNull<CNodePtr> &cnode, const std::map<uint32_t
 void OpTilingCalculater::Init() {
   MS_LOG(INFO) << "Start init OpTilingCalculater";
   tiling_func_map_ = optiling::OpTilingRegistryInterf::RegisteredOpInterf();
-  MS_LOG(INFO) << "tiling_func_map_ size:" << tiling_func_map_.size();
-  for (const auto &iter : tiling_func_map_) {
-    MS_LOG(INFO) << "Regist tiling func:" << iter.first;
+  if (tiling_func_map_.empty()) {
+    MS_LOG(EXCEPTION) << "Get register tiling func failed.";
   }
 }
 
@@ -148,8 +147,9 @@ std::string GetRealOpType(const std::string &op_type) {
   static const std::map<std::string, std::string> kOpTypeMap = {
     {"SparseApplyFtrl", "SparseApplyFtrlD"},
     {"SparseApplyProximalAdagrad", "SparseApplyProximalAdagradD"},
-    {"SparseGatherV2", "GatherV2"},
+    {"SparseGatherV2", "Gather"},
     {"Pad", "PadD"},
+    {"Concat", "ConcatD"},
   };
   auto iter = kOpTypeMap.find(op_type);
   if (iter == kOpTypeMap.end()) {
@@ -160,7 +160,7 @@ std::string GetRealOpType(const std::string &op_type) {
 
 void OpTilingCalculater::CalculateTiling(const NotNull<CNodePtr> &cnode, const optiling::OpCompileInfo &op_compile_info,
                                          const std::map<uint32_t, tensor::TensorPtr> &depend_tensor_map,
-                                         NotNull<optiling::OpRunInfo *> op_run_info) {
+                                         const NotNull<optiling::OpRunInfo *> op_run_info) {
   optiling::TeOpParas op_param;
   std::string op_type = AnfAlgo::GetCNodeName(cnode.get());
   MS_LOG(INFO) << "[DynamicShape] calculate tiling, op_type:" << op_type;

@@ -58,7 +58,7 @@ For FP16 operators, if the input data type is FP32, the backend of MindSpore wil
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-    - Prepare hardware environment with Ascend. If you want to try Ascend  , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
@@ -148,7 +148,7 @@ sh scripts/run_standalone_train.sh DEVICE_ID DATA_PATH
 
 ### Result
 
-Training result will be stored in the example path. Checkpoints will be stored at `. /ckpt_0` by default, and training log will be redirected to `log.txt` like followings.
+Training result will be stored in the example path. Checkpoints will be stored at `. /ckpt_0` by default, and training log will be redirected to `log.txt` like following.
 
 ``` shell
 epoch: 1 step: 1251, loss is 4.8427444
@@ -182,7 +182,7 @@ sh scripts/run_eval.sh DEVICE_ID DATA_DIR PATH_CHECKPOINT
 
 ### Result
 
-Evaluation result will be stored in the example path, you can find result like the followings in `eval.log`.
+Evaluation result will be stored in the example path, you can find result like the following in `eval.log`.
 
 ```shell
 result: {'Loss': 1.7797744848789312, 'Top_1_Acc': 0.7985777243589743, 'Top_5_Acc': 0.9485777243589744}

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,6 +54,8 @@ Status BuildVocabNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node
   std::shared_ptr<BuildVocabOp> build_vocab_op;
   build_vocab_op = std::make_shared<BuildVocabOp>(vocab_, columns_, freq_range_, top_k_, special_tokens_,
                                                   special_first_, num_workers_, connector_que_size_);
+  build_vocab_op->set_total_repeats(GetTotalRepeats());
+  build_vocab_op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
   node_ops->push_back(build_vocab_op);
   return Status::OK();
 }
@@ -87,13 +89,13 @@ Status BuildVocabNode::ValidateParams() {
 }
 
 // Visitor accepting method for IRNodePass
-Status BuildVocabNode::Accept(IRNodePass *p, bool *modified) {
+Status BuildVocabNode::Accept(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->Visit(shared_from_base<BuildVocabNode>(), modified);
 }
 
 // Visitor accepting method for IRNodePass
-Status BuildVocabNode::AcceptAfter(IRNodePass *p, bool *modified) {
+Status BuildVocabNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->VisitAfter(shared_from_base<BuildVocabNode>(), modified);
 }

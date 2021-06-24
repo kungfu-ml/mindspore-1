@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 #include "minddata/dataset/util/random.h"
 #include "minddata/dataset/util/wait_post.h"
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
@@ -34,8 +33,7 @@ RandomDataOp::Builder::Builder()
       builder_num_workers_(0),
       builder_op_connector_size_(0),
       builder_rows_per_buffer_(0),
-      builder_total_rows_(0),
-      builder_sampler_(nullptr) {
+      builder_total_rows_(0) {
   // Some arguments to the RandomDataOp have a default argument that is taken from the config.
   // The user may override these defaults by using the builder set methods.
   std::shared_ptr<ConfigManager> cfg = GlobalContext::config_manager();
@@ -48,9 +46,8 @@ RandomDataOp::Builder::Builder()
 Status RandomDataOp::Builder::Build(std::shared_ptr<RandomDataOp> *out_op) {
   RETURN_IF_NOT_OK(SanityCheck());
 
-  *out_op =
-    std::make_shared<RandomDataOp>(builder_num_workers_, builder_op_connector_size_, builder_rows_per_buffer_,
-                                   builder_total_rows_, std::move(builder_data_schema_), std::move(builder_sampler_));
+  *out_op = std::make_shared<RandomDataOp>(builder_num_workers_, builder_op_connector_size_, builder_rows_per_buffer_,
+                                           builder_total_rows_, std::move(builder_data_schema_));
 
   return Status::OK();
 }
@@ -65,8 +62,8 @@ Status RandomDataOp::Builder::SanityCheck() const {
 
 // Constructor for RandomDataOp
 RandomDataOp::RandomDataOp(int32_t num_workers, int32_t op_connector_size, int64_t rows_per_buffer, int64_t total_rows,
-                           std::unique_ptr<DataSchema> data_schema, std::shared_ptr<SamplerRT> sampler)
-    : ParallelOp(num_workers, op_connector_size, std::move(sampler)),
+                           std::unique_ptr<DataSchema> data_schema)
+    : ParallelOp(num_workers, op_connector_size),
       buffer_id_(0),
       rows_per_buffer_(rows_per_buffer),
       total_rows_(total_rows),
@@ -80,8 +77,7 @@ RandomDataOp::RandomDataOp(int32_t num_workers, int32_t op_connector_size, int64
   if (total_rows_ == 0) {
     total_rows_ = GenRandomInt(1, kMaxTotalRows);
   }
-  // If the user did not provide a schema, then we will ask the op to generate a pseudo-random
-  // schema.
+  // If the user did not provide a schema, then we will ask the op to generate a pseudo-random schema.
   // See details of generateSchema function to learn what type of schema it will create.
   if (data_schema_ == nullptr) {
     GenerateSchema();
@@ -200,7 +196,7 @@ Status RandomDataOp::operator()() {
 
   // RandomDataOp doesn't need the master thread to stay around.  Kick off the workers and then master exits.
   RETURN_IF_NOT_OK(
-    tree_->LaunchWorkers(num_workers_, std::bind(&RandomDataOp::WorkerEntry, this, std::placeholders::_1)));
+    tree_->LaunchWorkers(num_workers_, std::bind(&RandomDataOp::WorkerEntry, this, std::placeholders::_1), "", id()));
 
   // required task group setup after launching workers
   TaskManager::FindMe()->Post();
@@ -330,7 +326,7 @@ Status RandomDataOp::PackAndSend(int32_t worker_id, std::unique_ptr<TensorQTable
 // A helper function to create random data for the row
 Status RandomDataOp::CreateRandomRow(int32_t worker_id, TensorRow *new_row) {
   if (new_row == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Missing tensor row output");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Missing tensor row output");
   }
 
   // Create a tensor for each column, then add the tensor to the row
@@ -361,7 +357,7 @@ Status RandomDataOp::CreateRandomRow(int32_t worker_id, TensorRow *new_row) {
     buf = std::make_unique<unsigned char[]>(size_in_bytes);
     int ret_code = memset_s(buf.get(), size_in_bytes, random_byte, size_in_bytes);
     if (ret_code != 0) {
-      return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Failed to set random bytes for a tensor.");
+      return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Failed to set random bytes for a tensor.");
     }
 
     RETURN_IF_NOT_OK(Tensor::CreateFromMemory(*new_shape, current_col.type(), buf.get(), &new_tensor));
@@ -380,7 +376,7 @@ Status RandomDataOp::Reset() {
 
   // Ensure all guys are in the waitpost
   if (guys_in_ != num_workers_) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Issuing a reset, but some workers are missing from epochSync!");
   }
 
@@ -407,12 +403,6 @@ Status RandomDataOp::Reset() {
   epoch_sync_wait_post_.Set();
 
   return Status::OK();
-}
-
-// Visitor accept method for NodePass
-Status RandomDataOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<RandomDataOp>(), modified);
 }
 
 Status RandomDataOp::ComputeColMap() {

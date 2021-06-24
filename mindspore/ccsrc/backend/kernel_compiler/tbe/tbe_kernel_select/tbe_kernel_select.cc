@@ -31,11 +31,9 @@
 #include "backend/optimizer/common/helper.h"
 #include "backend/session/anf_runtime_algorithm.h"
 #include "backend/session/kernel_build_client.h"
-#include "frontend/parallel/ops_info/ops_utils.h"
 #include "nlohmann/json.hpp"
 
-namespace mindspore {
-namespace kernel {
+namespace mindspore::kernel {
 constexpr auto kName = "name";
 constexpr auto kDtype = "dtype";
 constexpr auto kFormat = "format";
@@ -59,43 +57,35 @@ void TbeKernelSelect::TbeMetadataInfoEx() {
 
   auto op_info_ptr = tbe::TbeDynamicShapeUtil::FindOp(node_name_, cnode_ptr_);
   if (!op_info_ptr) {
-    MS_LOG(INFO) << "Warning: Cann't find tbe core opinfo, node type: " << node_name_;
     return;
   }
   if (!TbePropertyChecker::CheckTbeProperties(cnode_ptr_)) {
     MS_LOG(INFO) << "Warning: node(" << cnode_ptr_->fullname_with_scope() << ") not support tbe aicore.";
     return;
   }
-  MS_LOG(INFO) << "Start to tbe metadata info. node type: " << node_name_
-               << ", node name: " << cnode_ptr_->fullname_with_scope();
-  OpPattern pattern = op_info_ptr->op_pattern();
-  if (pattern == kCommonPattern) {
-    GetCommonPatternKernelInfo(*op_info_ptr);
-  } else if (pattern == kDynamicFormatPattern) {
+
+  if (op_info_ptr->is_dynamic_format()) {
     GetDynamicFormatPatternKernelInfo(*op_info_ptr);
-  } else if (pattern == kFormatAgnosticPattern) {
-    GetAgnosticPatternKernelInfo(*op_info_ptr);
-  } else if (pattern == kBroadcastPattern) {
-    GetBroadcastPatternKernelInfo(*op_info_ptr);
-  } else if (pattern == kReducePattern) {
-    GetReducePatternKernelInfo(*op_info_ptr);
   } else {
-    MS_LOG(INFO) << "Warning: op pattern is invailed.";
+    OpPattern pattern = op_info_ptr->op_pattern();
+    if (pattern == kCommonPattern) {
+      GetCommonPatternKernelInfo(*op_info_ptr);
+    } else if (pattern == kFormatAgnosticPattern) {
+      GetAgnosticPatternKernelInfo(*op_info_ptr);
+    } else if (pattern == kBroadcastPattern) {
+      GetBroadcastPatternKernelInfo(*op_info_ptr);
+    } else if (pattern == kReducePattern) {
+      GetReducePatternKernelInfo(*op_info_ptr);
+    } else {
+      MS_LOG(INFO) << "Warning: op pattern is invailed.";
+    }
   }
   // check support
-  FilterInVaildKernelInfo();
-  MS_LOG(INFO) << "End get kernel build info size: " << kernel_info_list_->size() << ", after tbe select.";
+  FilterInVaildKernelInfo(*op_info_ptr);
 }
 
 void TbeKernelSelect::GetCommonPatternKernelInfo(const OpInfo &op_info) {
-  MS_LOG(INFO) << "start.";
-  // get dynamic inputs
-  auto primitive = AnfAlgo::GetCNodePrimitive(cnode_ptr_);
-  MS_EXCEPTION_IF_NULL(primitive);
-  std::vector<int64_t> dyn_input_sizes;
-  if (primitive->HasAttr(kAttrDynInputSizes)) {
-    dyn_input_sizes = GetValue<std::vector<int64_t>>(primitive->GetAttr(kAttrDynInputSizes));
-  }
+  auto dyn_input_sizes = GetNodeDynamicInputs();
   // get real input/output num
   size_t real_input_tensor_num = AnfAlgo::GetInputTensorNum(cnode_ptr_);
   const auto inputs_info = op_info.inputs_ptr();
@@ -112,7 +102,7 @@ void TbeKernelSelect::GetCommonPatternKernelInfo(const OpInfo &op_info) {
     SetTbeBuildCommonInfo(op_info, &builder);
     std::vector<std::string> inputs_format;
     std::vector<TypeId> inputs_device_type;
-    std::vector<std::vector<Axis>> inputs_reshape_type;
+    std::vector<std::string> inputs_reshape_type;
     // input
     if (!GenBuilderItem(true, kernel_build_info_index, real_input_tensor_num, inputs_info, dyn_input_sizes,
                         &inputs_format, &inputs_device_type, &inputs_reshape_type)) {
@@ -124,7 +114,7 @@ void TbeKernelSelect::GetCommonPatternKernelInfo(const OpInfo &op_info) {
     // output
     std::vector<std::string> outputs_format;
     std::vector<TypeId> outputs_device_type;
-    std::vector<std::vector<Axis>> outputs_reshape_type;
+    std::vector<std::string> outputs_reshape_type;
     if (!GenBuilderItem(false, kernel_build_info_index, real_output_tensor_num, outputs_info, dyn_input_sizes,
                         &outputs_format, &outputs_device_type, &outputs_reshape_type)) {
       break;
@@ -134,20 +124,15 @@ void TbeKernelSelect::GetCommonPatternKernelInfo(const OpInfo &op_info) {
     builder.SetOutputsReshapeType(outputs_reshape_type);
     kernel_info_list_->emplace_back(builder.Build());
   }
-  MS_LOG(INFO) << "end.";
 }
 
 void TbeKernelSelect::GetDynamicFormatPatternKernelInfo(const OpInfo &op_info) {
-  MS_LOG(INFO) << "start.";
-  //
   OpInfo op_info_new;
   CreateNewOpInfo(op_info, &op_info_new);
   GetCommonPatternKernelInfo(op_info_new);
-  MS_LOG(INFO) << "end.";
 }
 
 void TbeKernelSelect::GetAgnosticPatternKernelInfo(const OpInfo &op_info) {
-  MS_LOG(INFO) << "start.";
   if (op_info.inputs_ptr().size() != 1) {
     MS_LOG(EXCEPTION) << "AgnosticPattern only support one input.";
   }
@@ -163,93 +148,69 @@ void TbeKernelSelect::GetAgnosticPatternKernelInfo(const OpInfo &op_info) {
   output_item.assign(op_info.outputs_ptr().size(), format);
   support_format.input_format.emplace_back(input_item);
   support_format.output_format.emplace_back(output_item);
-  PrintSupportedFormat(support_format);
   OpInfo op_info_new;
   CreateNewOpInfo(op_info, support_format, &op_info_new);
   GetCommonPatternKernelInfo(op_info_new);
-  MS_LOG(INFO) << "end.";
 }
 
 void TbeKernelSelect::GetBroadcastPatternKernelInfo(const OpInfo &op_info) {
-  MS_LOG(INFO) << "start.";
   auto broadcast_selecter = TbeKernelBroadCastSelecter(cnode_ptr_);
   SupportFormat support_format;
   broadcast_selecter.GetShapeInfo(&support_format);
-  if (!broadcast_selecter.IsBroadCastSupport5HD(&support_format)) {
-    MS_LOG(INFO) << "Node(" << node_name_ << ") does not support 5HD.";
-  }
-  if (!broadcast_selecter.IsBroadCastSupportFracZ(&support_format)) {
-    MS_LOG(INFO) << "Node(" << node_name_ << ") does not support FracZ.";
-  }
-  if (!broadcast_selecter.IsBroadCastSupportC1HWNCoC0(&support_format)) {
-    MS_LOG(INFO) << "Node(" << node_name_ << ") does not support C1HWNCoC0.";
-  }
-  if (!broadcast_selecter.IsBroadCastSupportFracNZ(&support_format)) {
-    MS_LOG(INFO) << "Node(" << node_name_ << ") does not support FracNZ.";
-  }
-  if (!broadcast_selecter.IsBroadCastSupportNDC1HWC0(&support_format)) {
-    MS_LOG(INFO) << "Node(" << node_name_ << ") does not support NDC1HWC0.";
-  }
-  PrintSupportedFormat(support_format);
+  (void)broadcast_selecter.IsBroadCastSupport5HD(&support_format);
+  (void)broadcast_selecter.IsBroadCastSupportFracZ(&support_format);
+  (void)broadcast_selecter.IsBroadCastSupportC1HWNCoC0(&support_format);
+  (void)broadcast_selecter.IsBroadCastSupportFracNZ(&support_format);
+  (void)broadcast_selecter.IsBroadCastSupportNDC1HWC0(&support_format);
   OpInfo op_info_new;
   CreateNewOpInfo(op_info, support_format, &op_info_new);
   GetCommonPatternKernelInfo(op_info_new);
-  MS_LOG(INFO) << "end.";
 }
 
 void TbeKernelSelect::GetReducePatternKernelInfo(const OpInfo &op_info) {
-  MS_LOG(INFO) << "start.";
   auto reduce_selecter = TbeKernelReduceSelecter(cnode_ptr_);
   SupportFormat support_format;
   reduce_selecter.GetShapeInfo(&support_format);
-  if (!reduce_selecter.IsReduceSupport5HD(&support_format)) {
-    MS_LOG(INFO) << "Node (" << node_name_ << ") reduce not support 5HD.";
-  }
-  if (reduce_selecter.IsReduceSupportFracZ(&support_format)) {
-    MS_LOG(INFO) << "Node (" << node_name_ << ") reduce not support FracZ.";
-  }
-  if (reduce_selecter.IsReduceSupportC1HWNCoC0(&support_format)) {
-    MS_LOG(INFO) << "Node (" << node_name_ << ") reduce not support C1HWNCoC0.";
-  }
-  if (reduce_selecter.IsReduceSupportFracNZ(&support_format)) {
-    MS_LOG(INFO) << "Node (" << node_name_ << ") reduce not support FracNZ.";
-  }
-  PrintSupportedFormat(support_format);
+  (void)reduce_selecter.IsReduceSupport5HD(&support_format);
+  (void)reduce_selecter.IsReduceSupportFracZ(&support_format);
+  (void)reduce_selecter.IsReduceSupportC1HWNCoC0(&support_format);
+  (void)reduce_selecter.IsReduceSupportFracNZ(&support_format);
   OpInfo op_info_new;
   CreateNewOpInfo(op_info, support_format, &op_info_new);
   GetCommonPatternKernelInfo(op_info_new);
-  MS_LOG(INFO) << "end.";
 }
 
-void TbeKernelSelect::FilterInVaildKernelInfo() {
+void TbeKernelSelect::FilterInVaildKernelInfo(const OpInfo &op_info) {
   if (kernel_info_list_->empty()) {
     MS_LOG(INFO) << "Warning: get kernel build info failed.";
     return;
   }
   std::vector<std::shared_ptr<KernelBuildInfo>> new_kernel_info_list;
+  auto dynamic_inputs = GetNodeDynamicInputs();
   for (auto iter = kernel_info_list_->begin(); iter != kernel_info_list_->end(); ++iter) {
-    if (!FilterInVaildShape(iter)) {
-      MS_LOG(INFO) << "Filter invaild shape, filter item info: " << (*iter)->ToString();
+    if (!FilterInVaildShape(iter, !dynamic_inputs.empty())) {
       continue;
     }
-    if (!TbeCheckSupported(iter)) {
-      MS_LOG(INFO) << "Check support shape, filter item info: " << (*iter)->ToString();
-      continue;
+    if (op_info.need_check_supported()) {
+      if (!TbeCheckSupported(iter)) {
+        continue;
+      }
     }
     new_kernel_info_list.emplace_back(*iter);
   }
   (*kernel_info_list_) = new_kernel_info_list;
 }
 
-bool TbeKernelSelect::FilterInVaildShape(
-  const mindspore::kernel::TbeKernelSelect::KernelBuildInfoIter &kernel_build_info_iter) {
+bool TbeKernelSelect::FilterInVaildShape(const KernelBuildInfoIter &kernel_build_info_iter, bool is_dynamic_input) {
   MS_EXCEPTION_IF_NULL((*kernel_build_info_iter));
   const auto &kernel_build_info_inputs_format = (*kernel_build_info_iter)->GetAllInputFormats();
-  for (size_t i = 0; i < kernel_build_info_inputs_format.size(); ++i) {
+  // dynamic input just need to check first input, because other inputs copy from 1th input;
+  auto iter_num =
+    is_dynamic_input && !kernel_build_info_inputs_format.empty() ? 1 : kernel_build_info_inputs_format.size();
+  for (size_t i = 0; i < iter_num; ++i) {
     auto shape = AnfAlgo::GetPrevNodeOutputInferShape(cnode_ptr_, i);
-    const auto &format = kernel_build_info_inputs_format[i];
+    const auto &format = kernel_build_info_inputs_format.at(i);
     if (!IsShapeMatchFormat(shape, format)) {
-      MS_LOG(INFO) << "The " << i << "th input check failed.";
       return false;
     }
   }
@@ -258,7 +219,6 @@ bool TbeKernelSelect::FilterInVaildShape(
     auto shape = AnfAlgo::GetOutputInferShape(cnode_ptr_, j);
     const auto &format = kernel_build_info_outputs_format[j];
     if (!IsShapeMatchFormat(shape, format)) {
-      MS_LOG(INFO) << "The " << j << "th input check failed.";
       return false;
     }
   }
@@ -284,30 +244,15 @@ bool TbeKernelSelect::IsShapeMatchFormat(const std::vector<size_t> &shape, const
     return true;
   }
   // not support format:
-  // 1 NCDHW with shape size != 5
-  if (format == kOpFormat_NCDHW && shape.size() != kShape5dDims) {
-    MS_LOG(INFO) << "Warning: Shape format check failed, format: " << format << ", size: " << shape.size();
+  // 1 3d formats with shape size > 5
+  if (k3DFormatSet.find(format) != k3DFormatSet.end() && shape.size() > kShape5dDims) {
     return false;
   }
   return true;
 }
 
-bool TbeKernelSelect::TbeCheckSupported(
-  const mindspore::kernel::TbeKernelSelect::KernelBuildInfoIter &kernel_build_info_iter) {
+bool TbeKernelSelect::TbeCheckSupported(const KernelBuildInfoIter &kernel_build_info_iter) {
   MS_EXCEPTION_IF_NULL((*kernel_build_info_iter));
-  static const std::set<std::string> kCheckSupportedOpType = {parallel::MATMUL,
-                                                              parallel::BATCHMATMUL,
-                                                              parallel::TOPK,
-                                                              parallel::IN_TOPK,
-                                                              parallel::PACK,
-                                                              parallel::UNSORTEF_SEGMENT_MIND,
-                                                              parallel::UNSORTEF_SEGMENT_PRODD,
-                                                              parallel::CAST};
-  auto iter = std::find(kCheckSupportedOpType.begin(), kCheckSupportedOpType.end(), node_name_);
-  if (iter == kCheckSupportedOpType.end()) {
-    return true;
-  }
-  MS_LOG(INFO) << "Check support start.";
   // replace kernel_info with current kernel info
   auto kernel_build_info_tmp = AnfAlgo::GetSelectKernelBuildInfo(cnode_ptr_);
   AnfAlgo::SetSelectKernelBuildInfo(*kernel_build_info_iter, cnode_ptr_.get());
@@ -334,10 +279,21 @@ void TbeKernelSelect::SetTbeBuildCommonInfo(const mindspore::kernel::OpInfo &op_
   builder->SetKernelType(TBE_KERNEL);
 }
 
+std::vector<int64_t> TbeKernelSelect::GetNodeDynamicInputs() {
+  // get dynamic inputs
+  auto primitive = AnfAlgo::GetCNodePrimitive(cnode_ptr_);
+  MS_EXCEPTION_IF_NULL(primitive);
+  std::vector<int64_t> dyn_input_sizes;
+  if (primitive->HasAttr(kAttrDynInputSizes)) {
+    dyn_input_sizes = GetValue<std::vector<int64_t>>(primitive->GetAttr(kAttrDynInputSizes));
+  }
+  return dyn_input_sizes;
+}
+
 bool TbeKernelSelect::GenBuilderItem(bool is_input, size_t kernel_build_info_index, size_t real_io_tensor_num,
                                      const std::vector<std::shared_ptr<OpIOInfo>> &ios_info,
                                      const std::vector<int64_t> &dyn_input_sizes, std::vector<std::string> *formats,
-                                     std::vector<TypeId> *device_types, std::vector<std::vector<Axis>> *reshape_types) {
+                                     std::vector<TypeId> *device_types, std::vector<std::string> *reshape_types) {
   MS_EXCEPTION_IF_NULL(formats);
   MS_EXCEPTION_IF_NULL(device_types);
   MS_EXCEPTION_IF_NULL(reshape_types);
@@ -353,8 +309,7 @@ bool TbeKernelSelect::GenBuilderItem(bool is_input, size_t kernel_build_info_ind
       kernel_build_info_format = io_info_item->formats()[kernel_build_info_index];
     }
     const std::string &io_param_type = io_info_item->param_type();
-    std::vector<Axis> reshape_type;
-    StringToAxisVector(io_info_item->reshape_type(), &reshape_type);
+    auto reshape_type = io_info_item->reshape_type();
     if (io_param_type == kParamTypeDynamic) {
       // dynamic io
       if (is_input) {
@@ -382,7 +337,7 @@ bool TbeKernelSelect::GenBuilderItem(bool is_input, size_t kernel_build_info_ind
         real_io_tensor_index += real_io_tensor_num;
       }
     } else if (io_param_type == kParamTypeRequre || io_param_type == kParamTypeOptional) {
-      // requre or optional io
+      // require or optional io
       device_types->emplace_back(tbe::DtypeToTypeId(kernel_build_info_dtype));
       formats->emplace_back(kernel_build_info_format);
       reshape_types->emplace_back(reshape_type);
@@ -391,10 +346,7 @@ bool TbeKernelSelect::GenBuilderItem(bool is_input, size_t kernel_build_info_ind
       MS_LOG(EXCEPTION) << "op info's param type is not match: " << io_param_type;
     }
   }
-  if (io_info_index != io_info_num) {
-    MS_LOG(INFO) << "Warning: io_info_index(" << io_info_index << ") != io_info_num(" << io_info_num
-                 << "), this node may has optional input/output.";
-  }
+
   if (real_io_tensor_index != real_io_tensor_num) {
     std::string io_type = is_input ? "inputs " : "outputs";
     MS_LOG(INFO) << node_name_ << "'s " << io_type << "op io info num: " << io_info_num
@@ -403,28 +355,6 @@ bool TbeKernelSelect::GenBuilderItem(bool is_input, size_t kernel_build_info_ind
     return false;
   }
   return true;
-}
-
-void TbeKernelSelect::StringToAxisVector(const std::string &reshape_type_str, std::vector<Axis> *reshape_type_vec) {
-  MS_EXCEPTION_IF_NULL(reshape_type_vec);
-  for (const auto &c : reshape_type_str) {
-    switch (c) {
-      case 'N':
-        reshape_type_vec->push_back(N);
-        break;
-      case 'C':
-        reshape_type_vec->push_back(C);
-        break;
-      case 'H':
-        reshape_type_vec->push_back(H);
-        break;
-      case 'W':
-        reshape_type_vec->push_back(W);
-        break;
-      default:
-        MS_LOG(EXCEPTION) << "Unknown axis " << c << "in reshape type.";
-    }
-  }
 }
 
 void TbeKernelSelect::CreateNewOpIOInfo(const mindspore::kernel::OpIOInfo &op_io_info,
@@ -457,7 +387,7 @@ void TbeKernelSelect::CreateNewOpIOInfo(const mindspore::kernel::OpIOInfo &op_io
 
 std::vector<std::string> TbeKernelSelect::SplitStrToVec(const std::string &op_select_json_item) {
   const std::map<std::string, std::string> kDynamicFormatMap = {
-    {"NCHW", "DefaultFormat"}, {"ND", "DefaultFormat"}, {"FRACTAL_Z", "FracZ"}};
+    {"NCHW", "DefaultFormat"}, {"ND", "DefaultFormat"}, {"FRACTAL_Z", "FracZ"}, {"NCDHW", "DefaultFormat"}};
   if (op_select_json_item.empty()) {
     MS_LOG(EXCEPTION) << "Op select ret item is null.";
   }
@@ -497,7 +427,6 @@ std::string TbeKernelSelect::OpSelectFormat() {
   if (res_json_str.find("TBEException") != std::string::npos) {
     MS_LOG(EXCEPTION) << "Dynamic op select failed: " << res_json_str << ", input args: " << kernel_json.dump();
   }
-  MS_LOG(INFO) << "Dynamic select foramt response result:" << res_json_str;
   return res_json_str;
 }
 
@@ -560,7 +489,7 @@ void TbeKernelSelect::CreateNewOpInfo(const mindspore::kernel::OpInfo &op_info,
         std::string input_format_item = item.value().at(kFormat);
         select_input.formats = SplitStrToVec(input_format_item);
         inputs.emplace_back(select_input);
-      } else if (is_output) {
+      } else {
         SelectOpIOInfo select_output;
         select_output.name = item.value().at(kName);
         std::string input_dtype_item = item.value().at(kDtype);
@@ -628,5 +557,4 @@ void TbeKernelSelect::PrintSupportedFormat(const SupportFormat &support_format) 
     MS_LOG(INFO) << "Support format: " << print_str;
   }
 }
-}  // namespace kernel
-}  // namespace mindspore
+}  // namespace mindspore::kernel

@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,12 +49,6 @@ class BiasAdd:
 
 
 @op_selector
-class FusedBatchNorm:
-    def __call__(self, *args):
-        pass
-
-
-@op_selector
 class ApplyMomentum:
     def __call__(self, *args):
         pass
@@ -79,13 +73,13 @@ class Tanh:
 
 
 @op_selector
-class Gelu:
+class GeLU:
     def __call__(self, *args):
         pass
 
 
 @op_selector
-class FastGelu:
+class FastGeLU:
     def __call__(self, *args):
         pass
 

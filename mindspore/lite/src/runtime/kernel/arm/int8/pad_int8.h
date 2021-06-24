@@ -16,20 +16,22 @@
 #ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_INT8_PAD_INT8_H_
 #define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_INT8_PAD_INT8_H_
 
+#include <string>
 #include <vector>
 #include "include/errorcode.h"
 #include "src/lite_kernel.h"
 #include "src/runtime/runtime_api.h"
+#include "nnacl/errorcode.h"
 #include "nnacl/pad_parameter.h"
 #include "nnacl/int8/pad_int8.h"
+#include "nnacl/int8/quantize.h"
 
 namespace mindspore::kernel {
 class PadInt8CPUKernel : public LiteKernel {
  public:
   explicit PadInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                            const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     op_parameter_->thread_num_ = ctx->thread_num_;
     pad_param_ = reinterpret_cast<PadParameter *>(op_parameter_);
   }
@@ -56,8 +58,8 @@ class PadInt8CPUKernel : public LiteKernel {
   PadParameter *pad_param_ = nullptr;
   int8_t *in_data_ = nullptr;
   int8_t *out_data_ = nullptr;
-  int in_dims_[DEFAULT_PAD_NDIMS] = {0};
-  int out_dims_[DEFAULT_PAD_NDIMS] = {0};
+  int in_dims_[COMM_SHAPE_SIZE] = {0};
+  int out_dims_[COMM_SHAPE_SIZE] = {0};
 };
 }  // namespace mindspore::kernel
 #endif  // MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_INT8_PAD_INT8_H_

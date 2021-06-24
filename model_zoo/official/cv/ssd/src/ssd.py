@@ -26,7 +26,8 @@ from mindspore.ops import operations as P
 from mindspore.ops import functional as F
 from mindspore.ops import composite as C
 
-from .mobilenet_v1_fpn import mobilenet_v1_fpn
+from .fpn import mobilenet_v1_fpn, resnet50_fpn
+from .vgg16 import vgg16
 
 
 def _make_divisible(v, divisor, min_value=None):
@@ -133,7 +134,7 @@ class InvertedResidual(nn.Cell):
             _bn(oup),
         ])
         self.conv = nn.SequentialCell(layers)
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.cast = P.Cast()
         self.last_relu = last_relu
         self.relu = nn.ReLU6()
@@ -356,19 +357,45 @@ class SsdMobilenetV1Fpn(nn.Cell):
     Examples:backbone
          SsdMobilenetV1Fpn(config, True).
     """
-    def __init__(self, config, is_training=True):
+    def __init__(self, config):
         super(SsdMobilenetV1Fpn, self).__init__()
         self.multi_box = WeightSharedMultiBox(config)
-        self.is_training = is_training
-        if not is_training:
-            self.activation = P.Sigmoid()
-
+        self.activation = P.Sigmoid()
         self.feature_extractor = mobilenet_v1_fpn(config)
 
     def construct(self, x):
         features = self.feature_extractor(x)
         pred_loc, pred_label = self.multi_box(features)
-        if not self.is_training:
+        if not self.training:
+            pred_label = self.activation(pred_label)
+        pred_loc = F.cast(pred_loc, mstype.float32)
+        pred_label = F.cast(pred_label, mstype.float32)
+        return pred_loc, pred_label
+
+class SsdResNet50Fpn(nn.Cell):
+    """
+    SSD Network using ResNet50 with fpn to extract features
+
+    Args:
+        config (dict): The default config of SSD.
+
+    Returns:
+        Tensor, localization predictions.
+        Tensor, class conf scores.
+
+    Examples:backbone
+         SsdResNet50Fpn(config).
+    """
+    def __init__(self, config):
+        super(SsdResNet50Fpn, self).__init__()
+        self.multi_box = WeightSharedMultiBox(config)
+        self.activation = P.Sigmoid()
+        self.feature_extractor = resnet50_fpn()
+
+    def construct(self, x):
+        features = self.feature_extractor(x)
+        pred_loc, pred_label = self.multi_box(features)
+        if not self.training:
             pred_label = self.activation(pred_label)
         pred_loc = F.cast(pred_loc, mstype.float32)
         pred_label = F.cast(pred_label, mstype.float32)
@@ -426,7 +453,6 @@ class SSDWithLossCell(nn.Cell):
         self.less = P.Less()
         self.tile = P.Tile()
         self.reduce_sum = P.ReduceSum()
-        self.reduce_mean = P.ReduceMean()
         self.expand_dims = P.ExpandDims()
         self.class_loss = SigmoidFocalClassificationLoss(config.gamma, config.alpha)
         self.loc_loss = nn.SmoothL1Loss()
@@ -439,7 +465,7 @@ class SSDWithLossCell(nn.Cell):
         # Localization Loss
         mask_loc = self.tile(self.expand_dims(mask, -1), (1, 1, 4))
         smooth_l1 = self.loc_loss(pred_loc, gt_loc) * mask_loc
-        loss_loc = self.reduce_sum(self.reduce_mean(smooth_l1, -1), -1)
+        loss_loc = self.reduce_sum(self.reduce_sum(smooth_l1, -1), -1)
 
         # Classification Loss
         loss_cls = self.class_loss(pred_label, gt_label)
@@ -572,9 +598,122 @@ class SSDWithMobileNetV2(nn.Cell):
         return self.last_channel
 
 
+class SsdInferWithDecoder(nn.Cell):
+    """
+    SSD Infer wrapper to decode the bbox locations.
+
+    Args:
+        network (Cell): the origin ssd infer network without bbox decoder.
+        default_boxes (Tensor): the default_boxes from anchor generator
+        config (dict): ssd config
+    Returns:
+        Tensor, the locations for bbox after decoder representing (y0,x0,y1,x1)
+        Tensor, the prediction labels.
+
+    """
+    def __init__(self, network, default_boxes, config):
+        super(SsdInferWithDecoder, self).__init__()
+        self.network = network
+        self.default_boxes = default_boxes
+        self.prior_scaling_xy = config.prior_scaling[0]
+        self.prior_scaling_wh = config.prior_scaling[1]
+
+    def construct(self, x):
+        pred_loc, pred_label = self.network(x)
+
+        default_bbox_xy = self.default_boxes[..., :2]
+        default_bbox_wh = self.default_boxes[..., 2:]
+        pred_xy = pred_loc[..., :2] * self.prior_scaling_xy * default_bbox_wh + default_bbox_xy
+        pred_wh = P.Exp()(pred_loc[..., 2:] * self.prior_scaling_wh) * default_bbox_wh
+
+        pred_xy_0 = pred_xy - pred_wh / 2.0
+        pred_xy_1 = pred_xy + pred_wh / 2.0
+        pred_xy = P.Concat(-1)((pred_xy_0, pred_xy_1))
+        pred_xy = P.Maximum()(pred_xy, 0)
+        pred_xy = P.Minimum()(pred_xy, 1)
+        return pred_xy, pred_label
+
+
 def ssd_mobilenet_v1_fpn(**kwargs):
     return SsdMobilenetV1Fpn(**kwargs)
 
+def ssd_resnet50_fpn(**kwargs):
+    return SsdResNet50Fpn(**kwargs)
 
 def ssd_mobilenet_v2(**kwargs):
     return SSDWithMobileNetV2(**kwargs)
+
+
+class SSD300VGG16(nn.Cell):
+    def __init__(self, config):
+        super(SSD300VGG16, self).__init__()
+
+        # VGG16 backbone: block1~5
+        self.backbone = vgg16()
+
+        # SSD blocks: block6~7
+        self.b6_1 = nn.Conv2d(in_channels=512, out_channels=1024, kernel_size=3, padding=6, dilation=6, pad_mode='pad')
+        self.b6_2 = nn.Dropout(0.5)
+
+        self.b7_1 = nn.Conv2d(in_channels=1024, out_channels=1024, kernel_size=1)
+        self.b7_2 = nn.Dropout(0.5)
+
+        # Extra Feature Layers: block8~11
+        self.b8_1 = nn.Conv2d(in_channels=1024, out_channels=256, kernel_size=1, padding=1, pad_mode='pad')
+        self.b8_2 = nn.Conv2d(in_channels=256, out_channels=512, kernel_size=3, stride=2, pad_mode='valid')
+
+        self.b9_1 = nn.Conv2d(in_channels=512, out_channels=128, kernel_size=1, padding=1, pad_mode='pad')
+        self.b9_2 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, stride=2, pad_mode='valid')
+
+        self.b10_1 = nn.Conv2d(in_channels=256, out_channels=128, kernel_size=1)
+        self.b10_2 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, pad_mode='valid')
+
+        self.b11_1 = nn.Conv2d(in_channels=256, out_channels=128, kernel_size=1)
+        self.b11_2 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3, pad_mode='valid')
+
+        # boxes
+        self.multi_box = MultiBox(config)
+        if not self.training:
+            self.activation = P.Sigmoid()
+
+    def construct(self, x):
+        # VGG16 backbone: block1~5
+        block4, x = self.backbone(x)
+
+        # SSD blocks: block6~7
+        x = self.b6_1(x)  # 1024
+        x = self.b6_2(x)
+
+        x = self.b7_1(x)  # 1024
+        x = self.b7_2(x)
+        block7 = x
+
+        # Extra Feature Layers: block8~11
+        x = self.b8_1(x)  # 256
+        x = self.b8_2(x)  # 512
+        block8 = x
+
+        x = self.b9_1(x)  # 128
+        x = self.b9_2(x)  # 256
+        block9 = x
+
+        x = self.b10_1(x)  # 128
+        x = self.b10_2(x)  # 256
+        block10 = x
+
+        x = self.b11_1(x)  # 128
+        x = self.b11_2(x)  # 256
+        block11 = x
+
+        # boxes
+        multi_feature = (block4, block7, block8, block9, block10, block11)
+        pred_loc, pred_label = self.multi_box(multi_feature)
+        if not self.training:
+            pred_label = self.activation(pred_label)
+        pred_loc = F.cast(pred_loc, mstype.float32)
+        pred_label = F.cast(pred_label, mstype.float32)
+        return pred_loc, pred_label
+
+
+def ssd_vgg16(**kwargs):
+    return SSD300VGG16(**kwargs)

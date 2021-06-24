@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@
 #include "minddata/dataset/engine/datasetops/source/sampler/sequential_sampler.h"
 #include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
@@ -62,7 +61,7 @@ Status ManifestOp::Builder::SanityCheck() {
   err_msg += builder_num_workers_ <= 0 ? "Invalid parameter, num_parallel_workers must be greater than 0, but got " +
                                            std::to_string(builder_num_workers_) + ".\n"
                                        : "";
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 ManifestOp::ManifestOp(int32_t num_works, int32_t rows_per_buffer, std::string file, int32_t queue_size, bool decode,
@@ -152,7 +151,7 @@ Status ManifestOp::LaunchThreadsAndInitOp() {
   RETURN_IF_NOT_OK(wait_for_workers_post_.Register(tree_->AllTasks()));
 
   RETURN_IF_NOT_OK(
-    tree_->LaunchWorkers(num_workers_, std::bind(&ManifestOp::WorkerEntry, this, std::placeholders::_1)));
+    tree_->LaunchWorkers(num_workers_, std::bind(&ManifestOp::WorkerEntry, this, std::placeholders::_1), "", id()));
   TaskManager::FindMe()->Post();
   RETURN_IF_NOT_OK(ParseManifestFile());
   RETURN_IF_NOT_OK(CountDatasetInfo());
@@ -219,6 +218,7 @@ Status ManifestOp::LoadTensorRow(row_id_type row_id, const std::pair<std::string
     }
   }
   (*trow) = TensorRow(row_id, {std::move(image), std::move(label)});
+  trow->setPath({data.first, file_});
   return Status::OK();
 }
 
@@ -337,7 +337,7 @@ Status ManifestOp::ParseManifestFile() {
       }
     } catch (const std::exception &err) {
       file_handle.close();
-      RETURN_STATUS_UNEXPECTED("Invalid file, failed to parse manifest file: " + line);
+      RETURN_STATUS_UNEXPECTED("Invalid file, failed to parse manifest file: " + file_);
     }
   }
   num_classes_ = classes.size();
@@ -434,12 +434,6 @@ Status ManifestOp::GetClassIndexing(const std::string &file, const py::dict &dic
   return Status::OK();
 }
 #endif
-
-// Visitor accept method for NodePass
-Status ManifestOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<ManifestOp>(), modified);
-}
 
 Status ManifestOp::ComputeColMap() {
   // Set the column name map (base class field)

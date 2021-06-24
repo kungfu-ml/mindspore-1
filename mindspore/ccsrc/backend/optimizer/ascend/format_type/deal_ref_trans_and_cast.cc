@@ -143,12 +143,22 @@ CNodePtr DealRefTransAndCast::AddAdditionalToRefOutput(const FuncGraphPtr &func_
   }
   // insert depend
   if (origin_format != cur_format || origin_type != cur_type) {
-    std::vector<AnfNodePtr> depend_nodes{NewValueNode(prim::kPrimDepend), cnode, final_node};
-    final_node = func_graph->NewCNode(depend_nodes);
+    final_node = MakeDependency(get_item, final_node, cnode, func_graph);
     MS_LOG(INFO) << "DealRefTranshwAndCast add denpend, op debug info is " << final_node->DebugString();
   }
 
   return final_node;
+}
+
+CNodePtr DealRefTransAndCast::MakeDependency(const CNodePtr &get_item, const CNodePtr &final_node,
+                                             const CNodePtr &cnode, const FuncGraphPtr &func_graph) const {
+  std::vector<AnfNodePtr> depend_nodes;
+  if (get_item != nullptr) {
+    depend_nodes = std::vector<AnfNodePtr>{NewValueNode(prim::kPrimDepend), get_item, final_node};
+  } else {
+    depend_nodes = std::vector<AnfNodePtr>{NewValueNode(prim::kPrimDepend), cnode, final_node};
+  }
+  return func_graph->NewCNode(depend_nodes);
 }
 CNodePtr DealRefTransAndCast::DealRefForMultipleOutput(const FuncGraphPtr &func_graph, const CNodePtr &cnode,
                                                        const std::shared_ptr<kernel::OpInfo> &op_info) const {
@@ -157,7 +167,8 @@ CNodePtr DealRefTransAndCast::DealRefForMultipleOutput(const FuncGraphPtr &func_
   std::vector<AnfNodePtr> make_tuple_inputs;
   AbstractBasePtrList abstract_list;
   make_tuple_inputs.push_back(NewValueNode(prim::kPrimMakeTuple));
-  for (size_t output_index = 0; output_index < AnfAlgo::GetOutputTensorNum(cnode); ++output_index) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(cnode);
+  for (size_t output_index = 0; output_index < output_num; ++output_index) {
     CNodePtr final_node = CreatTupleGetItemNode(func_graph, cnode, output_index);
     // deal with ref output
     if (ref_infos.count(output_index) != 0) {

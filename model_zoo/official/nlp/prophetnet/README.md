@@ -340,7 +340,7 @@ GPU:
 sh run_gpu.sh [--options]
 ```
 
-The usage of `run_ascend.sh` is shown as bellow:
+The usage of `run_ascend.sh` is shown as below:
 
 ```text
 Usage: run_ascend.sh [-h, --help] [-t, --task <CHAR>] [-n, --device_num <N>]
@@ -362,7 +362,7 @@ options:
 
 Notes: Be sure to assign the hccl_json file while running a distributed-training.
 
-The usage of `run_gpu.sh` is shown as bellow:
+The usage of `run_gpu.sh` is shown as below:
 
 ```text
 Usage: run_gpu.sh [-h, --help] [-t, --task <CHAR>] [-n, --device_num <N>]
@@ -546,12 +546,12 @@ The comparisons between MASS and other baseline methods in terms of PPL on Corne
 ## Platform
 
 - Hardware(Ascend)
-    - Prepare hardware environment with Ascend processor. If you want to try Ascend, please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you could get the resources for trial.
+    - Prepare hardware environment with Ascend processor.
 - Framework
     - [MindSpore](https://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
-    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/zh-CN/master/index.html)
-    - [MindSpore API](https://www.mindspore.cn/api/zh-CN/master/index.html)
+    - [MindSpore tutorials](https://www.mindspore.cn/tutorial/training/en/master/index.html)
+    - [MindSpore Python API](https://www.mindspore.cn/doc/api_python/en/master/index.html)
 
 ## Requirements
 
@@ -562,7 +562,7 @@ subword-nmt
 rouge
 ```
 
-<https://www.mindspore.cn/tutorial/zh-CN/master/advanced_use/network_migration.html>
+<https://www.mindspore.cn/tutorial/training/en/master/advanced_use/migrate_3rd_scripts.html>
 
 # Get started
 
@@ -624,7 +624,7 @@ Get the log and output files under the path `./train_mass_*/`, and the model fil
 
 ## Inference
 
-If you need to use the trained model to perform inference on multiple hardware platforms, such as GPU, Ascend 910 or Ascend 310, you can refer to this [Link](https://www.mindspore.cn/tutorial/zh-CN/master/advanced_use/network_migration.html).
+If you need to use the trained model to perform inference on multiple hardware platforms, such as GPU, Ascend 910 or Ascend 310, you can refer to this [Link](https://www.mindspore.cn/tutorial/training/en/master/advanced_use/migrate_3rd_scripts.html).
 For inference, config the options in `config.json` firstly:
 
 - Assign the `test_dataset` under `dataset_config` node to the dataset path.
@@ -655,4 +655,4 @@ The model has been validated on Ascend environment, not validated on CPU and GPU
 
 # ModelZoo Homepage  
 
- [Link](https://gitee.com/mindspore/mindspore/tree/master/mindspore/model_zoo)
+ [Link](https://gitee.com/mindspore/mindspore/tree/master/model_zoo)

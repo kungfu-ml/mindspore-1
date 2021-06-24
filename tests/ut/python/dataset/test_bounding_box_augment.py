@@ -243,7 +243,7 @@ def test_bounding_box_augment_invalid_ratio_c():
                                 column_order=["image", "bbox"])  # Add column for "bbox"
     except ValueError as error:
         logger.info("Got an exception in DE: {}".format(str(error)))
-        assert "Input ratio is not within the required interval of (0.0 to 1.0)." in str(error)
+        assert "Input ratio is not within the required interval of [0.0, 1.0]." in str(error)
 
 
 def test_bounding_box_augment_invalid_bounds_c():
@@ -260,7 +260,7 @@ def test_bounding_box_augment_invalid_bounds_c():
     dataVoc2 = ds.VOCDataset(DATA_DIR, task="Detection", usage="train", shuffle=False, decode=True)
     check_bad_bbox(dataVoc2, test_op, InvalidBBoxType.HeightOverflow, "bounding boxes is out of bounds of the image")
     dataVoc2 = ds.VOCDataset(DATA_DIR, task="Detection", usage="train", shuffle=False, decode=True)
-    check_bad_bbox(dataVoc2, test_op, InvalidBBoxType.NegativeXY, "min_x")
+    check_bad_bbox(dataVoc2, test_op, InvalidBBoxType.NegativeXY, "negative value")
     dataVoc2 = ds.VOCDataset(DATA_DIR, task="Detection", usage="train", shuffle=False, decode=True)
     check_bad_bbox(dataVoc2, test_op, InvalidBBoxType.WrongShape, "4 features")
 

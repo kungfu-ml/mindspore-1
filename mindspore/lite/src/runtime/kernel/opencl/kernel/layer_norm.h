@@ -24,9 +24,7 @@ namespace mindspore::kernel {
 
 class LayerNormOpenCLKernel : public OpenCLKernel {
  public:
-  LayerNormOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                        const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
 
   ~LayerNormOpenCLKernel() override = default;
 
@@ -50,8 +48,7 @@ class LayerNormOpenCLKernel : public OpenCLKernel {
   void *var_{nullptr};
   void *beta_{nullptr};
   cl_int4 in_shape_{};
-  int elementwise_affine_;
-  int32_t normalized_dims_{1};
+  int32_t normalized_axis_{3};  // default is C
   int normalized_shape_size_{1};
   float epsilon_{0.0f};
   cl::Kernel kernel_;

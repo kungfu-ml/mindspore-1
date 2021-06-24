@@ -19,6 +19,7 @@
 #include <vector>
 #include "include/errorcode.h"
 #include "nnacl/batch_to_space.h"
+#include "nnacl/base/batch_to_space_base.h"
 #include "nnacl/int8/batch_to_space_int8.h"
 #include "src/lite_kernel.h"
 
@@ -26,9 +27,8 @@ namespace mindspore::kernel {
 class BatchToSpaceInt8CPUKernel : public LiteKernel {
  public:
   BatchToSpaceInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                            const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
 
   ~BatchToSpaceInt8CPUKernel() = default;
 

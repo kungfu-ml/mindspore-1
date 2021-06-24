@@ -30,13 +30,10 @@
 #include <utility>
 #include <tuple>
 
-#include "proto/comm.pb.h"
-#include "proto/ps.pb.h"
-#include "ps/core/cluster_config.h"
+#include "ps/core/cluster_metadata.h"
 #include "ps/core/node_info.h"
 #include "ps/core/tcp_client.h"
 #include "ps/core/tcp_server.h"
-#include "utils/log_adapter.h"
 
 namespace mindspore {
 namespace ps {
@@ -57,7 +54,7 @@ class Node {
   using OnNodeEventMessage = std::function<void(const NodeEvent &event)>;
   using MessageCallback = std::function<void()>;
 
-  virtual bool Start(const uint32_t &timeout = ClusterConfig::cluster_available_timeout()) = 0;
+  virtual bool Start(const uint32_t &timeout = ClusterMetadata::instance()->cluster_available_timeout()) = 0;
   virtual bool Stop() = 0;
   virtual bool Finish(const uint32_t &timeout = kTimeoutInSeconds) = 0;
 

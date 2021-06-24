@@ -18,10 +18,7 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-
 #include "include/context.h"
-
-#define REVERSE_STRIDE_MAX_SIZE 4
 
 using mindspore::lite::InnerContext;
 
@@ -29,10 +26,9 @@ namespace mindspore::kernel {
 class ReverseCPUKernel : public LiteKernel {
  public:
   ReverseCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                   const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive), thread_count_(ctx->thread_num_) {}
-  ~ReverseCPUKernel() {
+                   const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
+  ~ReverseCPUKernel() override {
     if (tmp_ != nullptr) {
       free(tmp_);
       tmp_ = nullptr;
@@ -46,13 +42,13 @@ class ReverseCPUKernel : public LiteKernel {
   int DoReverse(int task_id);
 
  private:
+  void UpdateAxisInfo();
   int thread_sz_count_ = 0;
   int thread_sz_stride_ = 0;
   int data_size_ = 0;
-  int strides_[REVERSE_STRIDE_MAX_SIZE] = {0};
-  int inCount_[REVERSE_STRIDE_MAX_SIZE] = {0};
-  int outCount_[REVERSE_STRIDE_MAX_SIZE] = {0};
-  int thread_count_ = 1;
+  int strides_[COMM_SHAPE_SIZE] = {0};
+  int inCount_[COMM_SHAPE_SIZE] = {0};
+  int outCount_[COMM_SHAPE_SIZE] = {0};
   int *tmp_ = nullptr;
   float *in_ptr_ = nullptr;
   float *out_ptr_ = nullptr;

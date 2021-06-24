@@ -20,7 +20,7 @@
 #include <vector>
 #include "include/context.h"
 #include "include/errorcode.h"
-#include "nnacl/fp16/concat_fp16.h"
+#include "nnacl/base/concat_base.h"
 #include "nnacl/concat_parameter.h"
 #include "nnacl/fp16/cast_fp16.h"
 #include "src/lite_kernel.h"
@@ -31,18 +31,13 @@ namespace mindspore::kernel {
 class ConcatFp16CPUKernel : public LiteKernel {
  public:
   ConcatFp16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                      const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     concat_param_ = reinterpret_cast<ConcatParameter *>(op_parameter_);
   }
-
   ~ConcatFp16CPUKernel() = default;
-
   int Init() override;
-
   int ReSize() override;
-
   int Run() override;
 
  private:

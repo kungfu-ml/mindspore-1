@@ -54,13 +54,15 @@ FuncGraphPtr Grad(const FuncGraphPtr &func_graph, const pipeline::ResourceBasePt
   f->MapObject();
   f->MapMorphism();
   f->Finish();
-  auto ret = f->k_graph();
+  auto res = f->k_graph();
+  auto tape = f->tape();
+  tape->set_flag(mindspore::kFuncGraphFlagBackPropEntry, true);
   if (is_top) {
     DFunctor::Clear();
   }
 
-  multi_graph_sink(ret);
-  return ret;
+  multi_graph_sink(res);
+  return res;
 }
 
 FuncGraphPtr Kprim(const ValueNodePtr &value_node, const pipeline::ResourceBasePtr &resources) {

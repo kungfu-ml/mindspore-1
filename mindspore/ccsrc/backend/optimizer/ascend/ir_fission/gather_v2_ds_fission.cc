@@ -85,8 +85,8 @@ CNodePtr CreateGatherV2Ds(const FuncGraphPtr &graph, const CNodePtr &origin_node
   if (origin_node->size() != 4) {
     MS_LOG(EXCEPTION) << "In dynamic shape scene, gatherv2 should have 3 inputs";
   }
-  std::vector<AnfNodePtr> gatherv2_inputs = {NewValueNode(std::make_shared<Primitive>(prim::kPrimGatherV2->name())),
-                                             pad, origin_node->input(2), origin_node->input(3)};
+  std::vector<AnfNodePtr> gatherv2_inputs = {NewValueNode(std::make_shared<Primitive>(prim::kPrimGather->name())), pad,
+                                             origin_node->input(2), origin_node->input(3)};
   auto gather_v2 = graph->NewCNode(gatherv2_inputs);
   MS_EXCEPTION_IF_NULL(gather_v2);
   gather_v2->set_scope(origin_node->scope());
@@ -96,8 +96,6 @@ CNodePtr CreateGatherV2Ds(const FuncGraphPtr &graph, const CNodePtr &origin_node
   AnfAlgo::SetOutputInferTypeAndShape({AnfAlgo::GetOutputInferDataType(origin_node, 0)}, {shape}, gather_v2.get());
   AnfAlgo::SetNodeAttr(kAttrIsDynamicShape, MakeValue(true), gather_v2);
   AnfAlgo::SetNodeAttr(kAttrInputIsDynamicShape, MakeValue(true), gather_v2);
-  auto depends_list_me = AnfAlgo::GetNodeAttr<std::vector<int64_t>>(origin_node, kAttrDynamicShapeDepends);
-  AnfAlgo::SetNodeAttr(kAttrDynamicShapeDepends, MakeValue(depends_list_me), gather_v2);
   auto input_names = AnfAlgo::GetNodeAttr<std::vector<std::string>>(origin_node, kAttrInputNames);
   AnfAlgo::SetNodeAttr(kAttrInputNames, MakeValue(input_names), gather_v2);
   auto output_names = AnfAlgo::GetNodeAttr<std::vector<std::string>>(origin_node, kAttrOutputNames);
@@ -123,14 +121,13 @@ CNodePtr CreateSlice(const FuncGraphPtr &graph, const CNodePtr &gather_v2, const
 
 bool CheckInputs(const CNodePtr &origin_node) {
   MS_EXCEPTION_IF_NULL(origin_node);
-  if (origin_node->size() != kGatherV2DynInputNum + 1) {
-    MS_LOG(DEBUG) << "GatherV2 in dynamic shape has wrong inputs num, not equal " << kGatherV2DynInputNum
+  if (AnfAlgo::GetInputTensorNum(origin_node) != kGatherV2DynInputTensorNum) {
+    MS_LOG(DEBUG) << "GatherV2 in dynamic shape has wrong inputs num, not equal " << kGatherV2DynInputTensorNum
                   << ". CNode= " << origin_node->DebugString();
     return false;
   }
   auto param_shape = AnfAlgo::GetPrevNodeOutputInferShape(origin_node, 0);
   auto indice_shape = AnfAlgo::GetPrevNodeOutputInferShape(origin_node, 1);
-
   // this optimizer only support embedding_table has dynamic shape
   if (param_shape.empty() || indice_shape.empty() || AnfAlgo::IsDynamicShape(origin_node->input(2))) {
     return false;
@@ -146,7 +143,7 @@ bool CheckInputs(const CNodePtr &origin_node) {
 
 const BaseRef GatherV2DsFission::DefinePattern() const {
   VarPtr Xs = std::make_shared<SeqVar>();
-  VectorRef pattern({prim::kPrimGatherV2, Xs});
+  VectorRef pattern({prim::kPrimGather, Xs});
   return pattern;
 }
 

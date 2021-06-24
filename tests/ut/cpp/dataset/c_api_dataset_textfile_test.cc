@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,6 @@
 using namespace mindspore::dataset;
 
 using mindspore::dataset::ShuffleMode;
-using mindspore::dataset::Tensor;
 
 class MindDataTestPipeline : public UT::DatasetOpTesting {
  protected:
@@ -51,7 +50,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetBasic) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -60,13 +59,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetBasic) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -121,7 +123,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetBasicWithPipeline) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -130,7 +132,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetBasicWithPipeline) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
     i++;
     iter->GetNextRow(&row);
   }
@@ -307,7 +309,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFalse1A) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -317,13 +319,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFalse1A) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -365,7 +370,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFalse1B) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -375,13 +380,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFalse1B) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -423,7 +431,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFalse4Shard) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -432,13 +440,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFalse4Shard) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -481,7 +492,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFiles1A) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -492,13 +503,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFiles1A) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -541,7 +555,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFiles1B) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -552,13 +566,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFiles1B) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -601,7 +618,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFiles4) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -611,13 +628,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleFiles4) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -657,7 +677,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleGlobal1A) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -666,13 +686,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleGlobal1A) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -714,7 +737,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleGlobal1B) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -724,13 +747,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleGlobal1B) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }
@@ -772,7 +798,7 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleGlobal4) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   EXPECT_NE(row.find("text"), row.end());
@@ -782,13 +808,16 @@ TEST_F(MindDataTestPipeline, TestTextFileDatasetShuffleGlobal4) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto text = row["text"];
-    MS_LOG(INFO) << "Tensor text shape: " << text->shape();
+    MS_LOG(INFO) << "Tensor text shape: " << text.Shape();
+    std::shared_ptr<Tensor> de_text;
+    ASSERT_OK(Tensor::CreateFromMSTensor(text, &de_text));
     std::string_view sv;
-    text->GetItemAt(&sv, {0});
+    de_text->GetItemAt(&sv, {0});
     std::string ss(sv);
     MS_LOG(INFO) << "Text length: " << ss.length() << ", Text: " << ss.substr(0, 50);
     // Compare against expected result
     EXPECT_STREQ(ss.c_str(), expected_result[i].c_str());
+
     i++;
     iter->GetNextRow(&row);
   }

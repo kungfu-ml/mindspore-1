@@ -18,14 +18,16 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
+#include "nnacl/op_base.h"
+#include "nnacl/fp16/cast_fp16.h"
+#include "nnacl/base/cast_base.h"
 
 namespace mindspore::kernel {
 class CastFp16CPUKernel : public LiteKernel {
  public:
   CastFp16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                    const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                    const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {}
+                    const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {}
 
   ~CastFp16CPUKernel() = default;
 
@@ -35,8 +37,8 @@ class CastFp16CPUKernel : public LiteKernel {
   int DoCast(int thread_id);
 
  private:
-  uint32_t stride_;
-  uint32_t data_num_;
+  int stride_;
+  int data_num_;
 };
 }  // namespace mindspore::kernel
 

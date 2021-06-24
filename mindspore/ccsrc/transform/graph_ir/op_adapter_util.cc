@@ -21,7 +21,9 @@
 #include <algorithm>
 
 #include "utils/utils.h"
+#include "utils/check_convert_utils.h"
 #include "transform/graph_ir/op_adapter_base.h"
+#include "transform/graph_ir/io_format_map.h"
 
 namespace mindspore {
 namespace transform {
@@ -293,12 +295,27 @@ std::string GetOpIOFormat(const AnfNodePtr &anf) {
     MS_LOG(ERROR) << "The anf is not a Primitive.";
     return ret;
   }
-  ValuePtr format = prim->GetAttr("io_format");
-  if (format == nullptr) {
+  if (prim->HasAttr("io_format")) {
+    return GetValue<std::string>(prim->GetAttr("io_format"));
+  }
+  auto io_format_map = IOFormatMap::get();
+  auto iter = io_format_map.find(prim->name());
+  if (iter == io_format_map.end()) {
     return "NCHW";
   }
-  ret = GetValue<std::string>(format);
-  return ret;
+  if (iter->second == "format") {
+    ValuePtr format = prim->GetAttr("format");
+    MS_EXCEPTION_IF_NULL(format);
+    std::string type_name = prim->name();
+    bool converted = CheckAndConvertUtils::ConvertAttrValueToString(type_name, "format", &format);
+    if (!converted) {
+      MS_LOG(ERROR) << "Fail to convert from attr value to string"
+                    << " for Op: " << type_name;
+      return ret;
+    }
+    return GetValue<std::string>(format);
+  }
+  return iter->second;
 }
 }  // namespace transform
 }  // namespace mindspore

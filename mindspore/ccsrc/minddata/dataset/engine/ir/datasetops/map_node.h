@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,22 +58,43 @@ class MapNode : public DatasetNode {
   /// \return Status Status::OK() if all the parameters are valid
   Status ValidateParams() override;
 
+  /// \brief Base-class override for accepting IRNodePass visitor
+  /// \param[in] p The node to visit
+  /// \param[out] modified Indicator if the node was modified
+  /// \return Status of the node visit
+  Status Accept(IRNodePass *const p, bool *const modified) override;
+
+  /// \brief Base-class override for accepting IRNodePass visitor
+  /// \param[in] p The node to visit
+  /// \param[out] modified Indicator if the node was modified
+  /// \return Status of the node visit
+  Status AcceptAfter(IRNodePass *const p, bool *const modified) override;
+
+  /// \brief clear all callbacks
+  void ClearCallbacks() { callbacks_.clear(); }
+
+  /// \brief getter to get all tensor operations
+  std::vector<std::shared_ptr<TensorOperation>> operations();
+
+  /// \brief setter to set all tensor operations
+  void setOperations(const std::vector<std::shared_ptr<TensorOperation>> &operations);
+
+  /// \brief indicate this Map will be cached
+  void Cached() { under_a_cache_ = true; }
+
+  /// \brief Getter functions
   /// \brief Getter of tensor operations
   /// \return Vector of operations the Map node will process
   const auto &TensorOperations() const { return operations_; }
-  auto &TensorOperations() { return operations_; }
+  const std::vector<std::string> &InputColumns() const { return input_columns_; }
+  const std::vector<std::string> &OutputColumns() const { return output_columns_; }
+  const std::vector<std::string> &ProjectColumns() const { return project_columns_; }
+  const std::vector<std::shared_ptr<DSCallback>> &Callbacks() const { return callbacks_; }
 
-  /// \brief Base-class override for accepting IRNodePass visitor
-  /// \param[in] p The node to visit
-  /// \param[out] modified Indicator if the node was modified
-  /// \return Status of the node visit
-  Status Accept(IRNodePass *p, bool *modified) override;
-
-  /// \brief Base-class override for accepting IRNodePass visitor
-  /// \param[in] p The node to visit
-  /// \param[out] modified Indicator if the node was modified
-  /// \return Status of the node visit
-  Status AcceptAfter(IRNodePass *p, bool *modified) override;
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  Status to_json(nlohmann::json *out_json) override;
 
  private:
   std::vector<std::shared_ptr<TensorOperation>> operations_;
@@ -81,6 +102,7 @@ class MapNode : public DatasetNode {
   std::vector<std::string> output_columns_;
   std::vector<std::string> project_columns_;
   std::vector<std::shared_ptr<DSCallback>> callbacks_;
+  bool under_a_cache_;
 };
 
 }  // namespace dataset

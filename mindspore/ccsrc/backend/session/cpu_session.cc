@@ -28,12 +28,22 @@
 #include "backend/optimizer/common/optimizer.h"
 #include "backend/optimizer/common/pass_manager.h"
 #include "backend/optimizer/pass/replace_node_by_proxy.h"
+#include "debug/anf_ir_dump.h"
+#include "debug/dump_proto.h"
+#include "debug/data_dump/dump_json_parser.h"
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
 #include "ps/util.h"
+#include "ps/ps_context.h"
 #endif
 
 namespace mindspore {
 namespace session {
+void CPUSession::Init(uint32_t device_id) {
+  // Dump json config file if dump is enabled
+  DumpJsonParser::GetInstance().Parse();
+  InitExecutor(kCPUDevice, device_id);
+}
+
 ParameterPtr CPUSession::CreateNewParameterFromParameter(const AnfNodePtr &anf, KernelGraph *graph) {
   MS_EXCEPTION_IF_NULL(anf);
   MS_EXCEPTION_IF_NULL(graph);
@@ -51,6 +61,9 @@ ParameterPtr CPUSession::CreateNewParameterFromParameter(const AnfNodePtr &anf, 
   valid_inputs->push_back(true);
   return new_parameter;
 }
+
+// Remove after PS feature finish adapting push/pull in auto_monad.
+void CPUSession::Reorder(std::vector<CNodePtr> *node_list) { AnfAlgo::ReorderPosteriorExecList(NOT_NULL(node_list)); }
 
 void CPUSession::Optimize(const std::shared_ptr<KernelGraph> &kernel_graph) {
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
@@ -72,25 +85,30 @@ GraphId CPUSession::CompileGraphImpl(const AnfNodePtrList &lst, const AnfNodePtr
   MS_LOG(INFO) << "Set kernel info";
   SetKernelInfo(graph.get());
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  if (ps::Util::IsParamServerMode()) {
+  if (ps::PSContext::instance()->is_ps_mode()) {
     AssignParamKey(graph);
-    if (ps::Util::IsRoleOfWorker()) {
+    if (ps::PSContext::instance()->is_worker()) {
       Optimize(graph);
     }
   }
 #endif
   MS_LOG(INFO) << "Build kernel";
   BuildKernel(graph.get());
-  // Set graph execution order before memory alloc, ensure that memory alloc is according to the reorder graph
+
+  // Remove reorder after PS feature finish adapting push/pull in auto_monad.
   auto execution_order = graph->execution_order();
   Reorder(&execution_order);
   graph->set_execution_order(execution_order);
+
   // runtime init
   if (!runtime_.Init()) {
     MS_LOG(EXCEPTION) << "Kernel runtime init error.";
   }
+
   MS_LOG(INFO) << "Assign kernel address";
   runtime_.AssignKernelAddress(graph.get());
+
+  DumpGraph(graph);
   return graph_id;
 }
 
@@ -102,20 +120,10 @@ void CPUSession::CreateOutputTensors(const GraphId &graph_id, const std::vector<
   runtime_.CreateOutputTensors(kernel_graph.get(), input_tensors, outputs, tensor_to_node);
 }
 
-void CPUSession::SyncValueNodeDeviceAddr(const std::shared_ptr<KernelGraph> &kernel_graph) {
-  auto context_ptr = MsContext::GetInstance();
-  MS_EXCEPTION_IF_NULL(context_ptr);
-  if (context_ptr->get_param<int>(MS_CTX_EXECUTION_MODE) != kPynativeMode) {
-    return;
-  }
-  runtime_.SyncValueNodeDeviceAddr(kernel_graph.get());
-}
-
 void CPUSession::RunGraphImpl(const GraphId &graph_id, const std::vector<tensor::TensorPtr> &inputs,
                               VectorRef *outputs) {
   auto kernel_graph = GetGraph(graph_id);
   MS_EXCEPTION_IF_NULL(kernel_graph);
-  SyncValueNodeDeviceAddr(kernel_graph);
   MS_LOG(INFO) << "Bind input output address";
   runtime_.BindInputOutput(kernel_graph.get(), inputs, outputs);
 
@@ -186,7 +194,7 @@ void CPUSession::RunOpImpl(const GraphInfo &graph_info, OpRunInfo *op_run_info,
   auto kernel_graph = run_op_graphs_[graph_info];
   MS_EXCEPTION_IF_NULL(kernel_graph);
 
-  // Set graph execution order before memory alloc, ensure that memory alloc is according to the reorder graph
+  // Remove reorder after PS feature finish adapting push/pull in auto_monad.
   auto execution_order = kernel_graph->execution_order();
   Reorder(&execution_order);
   kernel_graph->set_execution_order(execution_order);
@@ -209,6 +217,7 @@ void CPUSession::RunOpImpl(const GraphInfo &graph_info, OpRunInfo *op_run_info,
 
   std::vector<tensor::TensorPtr> output_tensors;
   SetOutputFlags(*outputs, &output_tensors);
+  runtime_.RunOpClearMemory(kernel_graph.get());
   MS_LOG(INFO) << "Run Op end";
 }
 

@@ -20,6 +20,8 @@
 #include <set>
 #include "base/core_ops.h"
 #include "ir/param_info.h"
+#include "utils/utils.h"
+#include "utils/check_convert_utils.h"
 #include "backend/session/anf_runtime_algorithm.h"
 #include "runtime/device/kernel_info.h"
 #include "backend/kernel_compiler/kernel_build_info.h"
@@ -34,6 +36,7 @@ constexpr auto kIsFeatureMapInputList = "IsFeatureMapInputList";
 constexpr size_t k5dDims = 5;
 const std::set<std::string> kOpAssignKernelNameList = {prim::kPrimAssign->name(), prim::kPrimAssignAdd->name(),
                                                        prim::kPrimAssignSub->name()};
+
 void PushNoVisitedNode(const AnfNodePtr &node, std::queue<AnfNodePtr> *que,
                        std::unordered_set<AnfNodePtr> *visited_nodes) {
   MS_EXCEPTION_IF_NULL(node);
@@ -127,7 +130,34 @@ void SyncDeviceInfoToValueNode(const ValueNodePtr &value_node, std::vector<std::
     }
   }
 }
+
+std::string GetNodeGroup(const AnfNodePtr &node) {
+  MS_EXCEPTION_IF_NULL(node);
+  auto cnode = node->cast<CNodePtr>();
+  if (AnfAlgo::HasNodeAttr(kAttrGroup, cnode)) {
+    return AnfAlgo::GetNodeAttr<std::string>(cnode, kAttrGroup);
+  }
+  return "";
+}
+
+bool NeedOptimizeCommOp(const AnfNodePtr &node, std::map<std::string, std::string> *optimized_comm_group) {
+  MS_EXCEPTION_IF_NULL(optimized_comm_group);
+  auto node_group = GetNodeGroup(node);
+  if (node_group.find(kSyncBnGroup) != string::npos) {
+    return false;
+  }
+  auto node_name = AnfAlgo::GetCNodeName(node);
+  auto iter = optimized_comm_group->find(node_name);
+  if (iter == optimized_comm_group->end()) {
+    (*optimized_comm_group)[node_name] = node_group;
+    return true;
+  } else if (iter->second == node_group) {
+    return true;
+  }
+  return false;
+}
 }  // namespace
+
 AnfNodePtr KernelGraph::MakeValueNode(const AnfNodePtr &node) {
   auto value_node = node->cast<ValueNodePtr>();
   if (value_node == nullptr) {
@@ -151,7 +181,7 @@ std::vector<AnfNodePtr> KernelGraph::outputs() const {
 }
 
 void KernelGraph::VisitNodeDescendants(const AnfNodePtr &node, std::queue<AnfNodePtr> *visit_queue,
-                                       std::unordered_set<AnfNodePtr> *visited_nodes) {
+                                       std::unordered_set<AnfNodePtr> *visited_nodes, bool comm_first) {
   MS_EXCEPTION_IF_NULL(visit_queue);
   MS_EXCEPTION_IF_NULL(visited_nodes);
   auto it = node_output_edges_.find(node);
@@ -182,7 +212,8 @@ void KernelGraph::VisitNodeDescendants(const AnfNodePtr &node, std::queue<AnfNod
     // allreduce first
     if (node_input_num_[next_node] == 0 && visited_nodes->find(next_node) == visited_nodes->end()) {
       (void)visited_nodes->insert(next_node);
-      if (AnfAlgo::IsCommunicationOp(next_node)) {
+      bool is_comm_node = AnfAlgo::IsCommunicationOp(next_node);
+      if ((is_comm_node && comm_first) || (!is_comm_node && !comm_first)) {
         MS_LOG(DEBUG) << "Visit node:" << next_node->DebugString();
         visit_queue->push(next_node);
       } else {
@@ -204,18 +235,19 @@ void KernelGraph::SetExecOrderByDefault() {
   execution_order_.clear();
   std::unordered_set<AnfNodePtr> visited_nodes;
   std::queue<AnfNodePtr> zero_input_nodes;
-  AnfNodePtr last_communication_node = nullptr;
+  std::stack<AnfNodePtr> delay_comm_stack;
   std::queue<AnfNodePtr> communication_descendants;
-  while (!seed_nodes.empty() || last_communication_node != nullptr) {
-    // seed nodes first, then visit last all reduce node descendant
+  std::map<std::string, std::string> optimized_comm_group;
+  while (!seed_nodes.empty() || !delay_comm_stack.empty()) {
+    // seed nodes first, then delay comm nodes
     if (seed_nodes.empty()) {
-      VisitNodeDescendants(last_communication_node, &communication_descendants, &visited_nodes);
-      last_communication_node = nullptr;
+      VisitNodeDescendants(delay_comm_stack.top(), &communication_descendants, &visited_nodes, false);
+      delay_comm_stack.pop();
     } else {
       zero_input_nodes.push(seed_nodes.front());
       seed_nodes.pop();
     }
-    // all reduce node descendant first, then common queue
+    // comm descendant first, then common queue
     while (!zero_input_nodes.empty() || !communication_descendants.empty()) {
       AnfNodePtr node = nullptr;
       bool is_communication_descendant = false;
@@ -232,12 +264,20 @@ void KernelGraph::SetExecOrderByDefault() {
       if (node->isa<CNode>() && AnfAlgo::IsRealKernel(node)) {
         execution_order_.push_back(node->cast<CNodePtr>());
       }
-      // for all reduce node, visit last all reduce node descendant
-      if (AnfAlgo::IsCommunicationOp(node)) {
-        if (last_communication_node != nullptr) {
-          VisitNodeDescendants(last_communication_node, &communication_descendants, &visited_nodes);
+      // delay execute comm ops that need optimize
+      bool is_fused_comm = AnfAlgo::IsFusedCommunicationOp(node);
+      bool optimize_comm = is_fused_comm;
+      if (optimize_comm) {
+        optimize_comm = NeedOptimizeCommOp(node, &optimized_comm_group);
+      }
+      if (optimize_comm) {
+        while (!delay_comm_stack.empty()) {
+          VisitNodeDescendants(delay_comm_stack.top(), &communication_descendants, &visited_nodes, false);
+          delay_comm_stack.pop();
         }
-        last_communication_node = node;
+        delay_comm_stack.push(node);
+      } else if (is_fused_comm) {
+        delay_comm_stack.push(node);
       } else if (is_communication_descendant) {
         VisitNodeDescendants(node, &communication_descendants, &visited_nodes);
       } else {
@@ -270,6 +310,25 @@ std::vector<CNodePtr> KernelGraph::SortStartLabelAndEndGoto() {
       start_label_ = node;
       MS_LOG(INFO) << "Replace start_label_ in kernel graph:" << graph_id();
       continue;
+    }
+
+    //
+    // Re-order:
+    //   u = LabelGoto(...)
+    //   x = Mul(...)
+    //   LabelSet(u)
+    // To:
+    //   u = LabelGoto(...)
+    //   LabelSet(u)
+    //   x = Mul(...)
+    // This prevent Mul be skipped.
+    //
+    if (IsPrimitiveCNode(node, prim::kPrimLabelSet) && (re_order.back() != node->input(1))) {
+      auto iter = std::find(re_order.rbegin() + 1, re_order.rend(), node->input(1));
+      if (iter != re_order.rend()) {
+        re_order.insert(iter.base(), node);
+        continue;
+      }
     }
 
     re_order.push_back(node);
@@ -370,27 +429,6 @@ void KernelGraph::CheckLoop() {
   }
 }
 
-void ReSetParameterValueNodeFormatAndType(const AnfNodePtr &node, const std::string &format) {
-  MS_EXCEPTION_IF_NULL(node);
-  auto kernel_build_info_builder = std::make_shared<kernel::KernelBuildInfo::KernelBuildInfoBuilder>();
-  MS_EXCEPTION_IF_NULL(kernel_build_info_builder);
-  kernel_build_info_builder->SetOutputsFormat({format});
-  kernel_build_info_builder->SetOutputsDeviceType({AnfAlgo::GetOutputInferDataType(node, 0)});
-  AnfAlgo::SetSelectKernelBuildInfo(kernel_build_info_builder->Build(), node.get());
-}
-
-void KernelGraph::ResetInFormat(const AnfNodePtr &node, const std::string &format) const {
-  MS_EXCEPTION_IF_NULL(node);
-  for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(node); i++) {
-    auto in_node = AnfAlgo::GetInputNode(node->cast<CNodePtr>(), i);
-    MS_EXCEPTION_IF_NULL(in_node);
-    if ((in_node->isa<Parameter>() || in_node->isa<ValueNode>()) &&
-        AnfAlgo::GetOutputInferShape(in_node, 0).size() == k5dDims) {
-      ReSetParameterValueNodeFormatAndType(in_node, format);
-    }
-  }
-}
-
 CNodePtr KernelGraph::NewCNode(const std::vector<AnfNodePtr> &inputs) {
   auto cnode = FuncGraph::NewCNode(inputs);
   MS_EXCEPTION_IF_NULL(cnode);
@@ -400,12 +438,6 @@ CNodePtr KernelGraph::NewCNode(const std::vector<AnfNodePtr> &inputs) {
     AnfAlgo::SetNodeAttr(kIsBackendCast, MakeValue(false), cnode);
   }
   SetKernelInfoForNode(cnode);
-  if (AnfAlgo::HasNodeAttr("io_format", cnode)) {
-    auto attr = AnfAlgo::GetNodeAttr<std::string>(cnode, "io_format");
-    if (attr == kOpFormat_NCDHW) {
-      ResetInFormat(cnode, kOpFormat_NCDHW);
-    }
-  }
   AnfAlgo::SetGraphId(graph_id_, cnode.get());
   return cnode;
 }
@@ -428,7 +460,8 @@ void KernelGraph::CreateKernelInfoFromNewParameter(const CNodePtr &cnode) {
     }
     auto anf_cnode = anf_node->cast<CNodePtr>();
     MS_EXCEPTION_IF_NULL(anf_cnode);
-    for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(anf_cnode); ++i) {
+    size_t input_num = AnfAlgo::GetInputTensorNum(anf_cnode);
+    for (size_t i = 0; i < input_num; ++i) {
       auto input_node = anf_cnode->input(i + 1);
       MS_EXCEPTION_IF_NULL(input_node);
       if (IsValueNode<tensor::Tensor>(input_node)) {
@@ -478,7 +511,8 @@ void KernelGraph::SetKernelInfoForNode(const AnfNodePtr &node) const {
     std::vector<size_t> feature_map_input_indexs;
 #endif
     kernel_info->set_feature_map_flag(false);
-    for (size_t index = 0; index < AnfAlgo::GetInputTensorNum(node); ++index) {
+    size_t input_num = AnfAlgo::GetInputTensorNum(node);
+    for (size_t index = 0; index < input_num; ++index) {
       if (AnfAlgo::IsFeatureMapInput(node, index)) {
         kernel_info->set_feature_map_flag(true);
         feature_map_input_indexs.push_back(index);
@@ -508,7 +542,7 @@ void KernelGraph::SetKernelInfoForNode(const AnfNodePtr &node) const {
   if (node->isa<Parameter>()) {
     auto parameter = node->cast<ParameterPtr>();
     MS_EXCEPTION_IF_NULL(parameter);
-    bool is_weight = AnfAlgo ::IsParameterWeight(parameter);
+    bool is_weight = AnfAlgo::IsParameterWeight(parameter);
     kernel_info->set_feature_map_flag(!is_weight);
     types.push_back(is_weight ? kTypeUnknown : AnfAlgo::GetOutputInferDataType(parameter, 0));
   }
@@ -637,7 +671,8 @@ AnfNodePtr KernelGraph::TransCNodeTuple(const CNodePtr &node) {
   std::vector<TypeId> types;
   std::vector<std::vector<size_t>> shapes;
   std::vector<AnfNodePtr> make_tuple_inputs_list = {mindspore::NewValueNode(prim::kPrimMakeTuple)};
-  for (size_t tuple_out_index = 0; tuple_out_index < AnfAlgo::GetOutputTensorNum(node); ++tuple_out_index) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(node);
+  for (size_t tuple_out_index = 0; tuple_out_index < output_num; ++tuple_out_index) {
     make_tuple_inputs_list.emplace_back(CreatTupleGetItemNode(node, tuple_out_index));
     types.push_back(AnfAlgo::GetOutputInferDataType(node, tuple_out_index));
     shapes.emplace_back(AnfAlgo::GetOutputInferShape(node, tuple_out_index));
@@ -713,6 +748,7 @@ void KernelGraph::FrontBackendlMapUpdate(const AnfNodePtr &old_backend_anf, cons
   // delete old kernel
   (void)backend_front_anf_map_.erase(old_backend_anf);
 }
+
 // get kernel by anf
 AnfNodePtr KernelGraph::GetBackendAnfByFrontAnf(const AnfNodePtr &front_anf) {
   if (front_backend_anf_map_.find(front_anf) == front_backend_anf_map_.end()) {
@@ -876,7 +912,6 @@ void KernelGraph::UpdateNodeEdgeList(std::queue<AnfNodePtr> *seed_nodes) {
   node_output_edges_.clear();
   node_input_num_.clear();
   node_input_edges_.clear();
-  std::vector<AnfNodePtr> control_depends;
   std::unordered_set<AnfNodePtr> visited_nodes;
   std::queue<AnfNodePtr> que;
   que.push(get_return());
@@ -888,24 +923,18 @@ void KernelGraph::UpdateNodeEdgeList(std::queue<AnfNodePtr> *seed_nodes) {
       seed_nodes->push(node);
       continue;
     }
-    if (!node->isa<CNode>()) {
+    auto cnode = dyn_cast<CNode>(node);
+    if (cnode == nullptr) {
       continue;
     }
-    auto cnode = node->cast<CNodePtr>();
-    MS_EXCEPTION_IF_NULL(cnode);
-    // handle data links
-    for (const auto &input : cnode->inputs()) {
-      size_t depend_edge_num = 1;
-      // handle control depend,all inputs of control depend has no depend edge
-      if (HandleControlDependNode(input, &que, &visited_nodes)) {
-        control_depends.push_back(input);
-        depend_edge_num = 0;
-      }
+    auto &inputs = cnode->inputs();
+    // We push inputs from right to left, so that them can be evaluated from left to right.
+    for (auto iter = inputs.rbegin(); iter != inputs.rend(); ++iter) {
+      auto &input = *iter;
       PushNoVisitedNode(input, &que, &visited_nodes);
-      AddDependEdge(node, input, depend_edge_num);
+      AddDependEdge(node, input, 1);
     }
   }
-  UpdateControlDependRelations(control_depends);
 }
 
 void KernelGraph::AddValueNodeToGraph(const ValueNodePtr &value_node) { (void)graph_value_nodes_.insert(value_node); }
@@ -974,7 +1003,6 @@ void KernelGraph::ReplaceNode(NotNull<AnfNodePtr> old_anf_node, NotNull<AnfNodeP
           output_cnode->set_input(i, new_anf_node);
         }
       }
-      ReplaceGraphInput(old_anf_node, new_anf_node);
     }
     // update front to backend map
     FrontBackendlMapUpdate(old_anf_node, new_anf_node);
@@ -1031,6 +1059,9 @@ std::vector<CNodePtr> KernelGraph::FindNodeByPrimitive(const std::vector<Primiti
 }
 
 void KernelGraph::PrintGraphExecuteOrder() const {
+  if (!(IS_OUTPUT_ON(INFO))) {
+    return;
+  }
   MS_LOG(INFO) << "Graph " << graph_id_ << " execution order:";
   for (size_t i = 0; i < execution_order_.size(); i++) {
     CNodePtr cur_cnode_ptr = execution_order_[i];
@@ -1063,10 +1094,15 @@ void KernelGraph::PrintGraphExecuteOrder() const {
       }
     }
 
+    std::string group_str;
+    if (AnfAlgo::GetKernelType(cur_cnode_ptr) == HCCL_KERNEL && AnfAlgo::HasNodeAttr(kAttrGroup, cur_cnode_ptr)) {
+      group_str = ", group[" + AnfAlgo::GetNodeAttr<std::string>(cur_cnode_ptr, kAttrGroup) + "]";
+    }
+
     MS_LOG(INFO) << "Index[" << i << "], node name[" << cur_cnode_ptr->fullname_with_scope() << "], logic id["
                  << AnfAlgo::GetStreamDistinctionLabel(cur_cnode_ptr.get()) << "], stream id["
                  << AnfAlgo::GetStreamId(cur_cnode_ptr) << "], node info[" << cur_cnode_ptr->DebugString() << "]"
-                 << event_str << label_str << active_stream_str;
+                 << event_str << label_str << active_stream_str << group_str;
   }
 }
 
@@ -1186,8 +1222,9 @@ bool KernelGraph::IsUniqueTargetInternalOutput(const AnfNodePtr &node, int outpu
 void KernelGraph::UpdateChildGraphOrder() {
   MS_LOG(INFO) << "Update " << ToString() << " child graph order.";
   SetExecOrderByDefault();
-  auto call_nodes = FindNodeByPrimitive(
-    {std::make_shared<Primitive>(prim::kPrimCall->name()), std::make_shared<Primitive>(prim::kPrimSwitch->name())});
+  auto call_nodes = FindNodeByPrimitive({std::make_shared<Primitive>(prim::kPrimCall->name()),
+                                         std::make_shared<Primitive>(prim::kPrimSwitch->name()),
+                                         std::make_shared<Primitive>(prim::kPrimSwitchLayer->name())});
   std::vector<std::weak_ptr<KernelGraph>> child_graph_order;
   for (auto &call_node : call_nodes) {
     MS_EXCEPTION_IF_NULL(call_node);

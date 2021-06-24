@@ -17,10 +17,10 @@
 #ifndef MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_GATHERND_H_
 #define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_FP32_GATHERND_H_
 
+#include <string.h>
 #include <vector>
 #include "nnacl/fp32/gatherNd_fp32.h"
 #include "src/lite_kernel.h"
-
 #include "include/context.h"
 #include "nnacl/op_base.h"
 
@@ -30,9 +30,8 @@ namespace mindspore::kernel {
 class GatherNdCPUKernel : public LiteKernel {
  public:
   GatherNdCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                    const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx,
-                    const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive), thread_count_(ctx->thread_num_) {}
+                    const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx), thread_count_(ctx->thread_num_) {}
   ~GatherNdCPUKernel() override;
 
   int Init() override;
@@ -41,8 +40,9 @@ class GatherNdCPUKernel : public LiteKernel {
   int DoGatherNd(int task_id);
 
  private:
-  int thread_sz_count_;
-  int thread_sz_stride_;
+  void InitOffset();
+  int thread_sz_count_ = 0;
+  int thread_sz_stride_ = 0;
   int count_;
   int area_;
   int *in_offset_ = nullptr;

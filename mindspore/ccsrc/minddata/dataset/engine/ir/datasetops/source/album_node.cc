@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ AlbumNode::AlbumNode(const std::string &dataset_dir, const std::string &data_sch
       sampler_(sampler) {}
 
 std::shared_ptr<DatasetNode> AlbumNode::Copy() {
-  std::shared_ptr<SamplerObj> sampler = (sampler_ == nullptr) ? nullptr : sampler_->Copy();
+  std::shared_ptr<SamplerObj> sampler = (sampler_ == nullptr) ? nullptr : sampler_->SamplerCopy();
   auto node = std::make_shared<AlbumNode>(dataset_dir_, schema_path_, column_names_, decode_, sampler, cache_);
   return node;
 }
@@ -70,12 +70,15 @@ Status AlbumNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops)
   RETURN_IF_NOT_OK(schema->LoadSchemaFile(schema_path_, column_names_));
 
   // Argument that is not exposed to user in the API.
-  std::set<std::string> extensions = {};
+  std::set<std::string> extensions = {".json", ".JSON"};
+  std::shared_ptr<SamplerRT> sampler_rt = nullptr;
+  RETURN_IF_NOT_OK(sampler_->SamplerBuild(&sampler_rt));
 
-  RETURN_IF_NOT_OK(AddCacheOp(node_ops));
-
-  node_ops->push_back(std::make_shared<AlbumOp>(num_workers_, rows_per_buffer_, dataset_dir_, connector_que_size_,
-                                                decode_, extensions, std::move(schema), std::move(sampler_->Build())));
+  auto album_op = std::make_shared<AlbumOp>(num_workers_, rows_per_buffer_, dataset_dir_, connector_que_size_, decode_,
+                                            extensions, std::move(schema), std::move(sampler_rt));
+  album_op->set_total_repeats(GetTotalRepeats());
+  album_op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
+  node_ops->push_back(album_op);
   return Status::OK();
 }
 
@@ -83,6 +86,42 @@ Status AlbumNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops)
 Status AlbumNode::GetShardId(int32_t *shard_id) {
   *shard_id = sampler_->ShardId();
 
+  return Status::OK();
+}
+
+// Get Dataset size
+Status AlbumNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
+                                 int64_t *dataset_size) {
+  if (dataset_size_ > 0) {
+    *dataset_size = dataset_size_;
+    return Status::OK();
+  }
+  int64_t sample_size = -1;
+  int64_t num_rows = 0;
+  // iterate over the files in the directory and count files to initiate num_rows
+  Path folder(dataset_dir_);
+  std::shared_ptr<Path::DirIterator> dirItr = Path::DirIterator::OpenDirectory(&folder);
+  if (!folder.Exists() || dirItr == nullptr) {
+    RETURN_STATUS_UNEXPECTED("Invalid file, failed to open folder: " + dataset_dir_);
+  }
+  std::set<std::string> extensions = {".json", ".JSON"};
+
+  while (dirItr->hasNext()) {
+    Path file = dirItr->next();
+    if (extensions.empty() || extensions.find(file.Extension()) != extensions.end()) {
+      num_rows += 1;
+    }
+  }
+  // give sampler the total number of files and check if num_samples is smaller
+  std::shared_ptr<SamplerRT> sampler_rt = nullptr;
+  RETURN_IF_NOT_OK(sampler_->SamplerBuild(&sampler_rt));
+  sample_size = sampler_rt->CalculateNumSamples(num_rows);
+  if (sample_size == -1) {
+    RETURN_IF_NOT_OK(size_getter->DryRun(shared_from_this(), &sample_size));
+  }
+  *dataset_size = sample_size;
+  // We cache dataset size so as to not duplicated run
+  dataset_size_ = *dataset_size;
   return Status::OK();
 }
 

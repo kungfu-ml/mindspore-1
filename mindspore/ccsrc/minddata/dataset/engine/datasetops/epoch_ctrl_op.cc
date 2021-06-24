@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,11 +17,8 @@
 #include <iostream>
 #include <utility>
 
-#include "minddata/dataset/engine/execution_tree.h"
 #include "minddata/dataset/engine/datasetops/epoch_ctrl_op.h"
 #include "minddata/dataset/engine/data_buffer.h"
-#include "minddata/dataset/engine/db_connector.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/log_adapter.h"
 
 namespace mindspore {
@@ -104,17 +101,6 @@ Status EpochCtrlOp::EoeReceived(int32_t worker_id) {
   return Status::OK();
 }
 
-// Pre-Visitor accept method for NodePass
-Status EpochCtrlOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call the pre-visitation
-  return p->PreRunOnNode(shared_from_base<EpochCtrlOp>(), modified);
-}
-
-// Visitor accept method for NodePass
-Status EpochCtrlOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call the pre-visitation
-  return p->RunOnNode(shared_from_base<EpochCtrlOp>(), modified);
-}
 int64_t EpochCtrlOp::GetTreeRepeatCount() { return child_[0]->GetTreeRepeatCount(); }
 }  // namespace dataset
 }  // namespace mindspore

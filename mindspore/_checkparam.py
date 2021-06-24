@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -92,13 +92,18 @@ rel_strs = {
 }
 
 
-def _check_3d_int_or_tuple(arg_name, arg_value, prim_name, allow_five=False,
-                           ret_five=False, greater_zero=True):
+def _check_3d_int_or_tuple(arg_name, arg_value, prim_name, allow_five=False, ret_five=False,
+                           greater_zero=True, third_one=False, three_input=False):
     """
     Checks whether an argument is a positive int or tuple with 3 or 5(when allow_five is True) positive int elements.
     """
 
-    def _raise_message():
+    def _raise_message(third_one_flag=False, three_input_flag=False):
+        if third_one_flag:
+            raise ValueError(f"For '{prim_name}' the depth of attr '{arg_name}' should be 1, but got {ret_value[-3]}")
+        if three_input_flag:
+            raise ValueError(f"For '{prim_name}' attr '{arg_name}' should be an positive int number or a tuple of "
+                             f"three positive int numbers, but got {arg_value}")
         raise ValueError(f"For '{prim_name}' attr '{arg_name}' should be an positive int number or a tuple of three "
                          f"{'or five ' if allow_five else ''}positive int numbers, but got {arg_value}")
 
@@ -116,6 +121,9 @@ def _check_3d_int_or_tuple(arg_name, arg_value, prim_name, allow_five=False,
         return ret
 
     Validator.check_value_type(arg_name, arg_value, (int, tuple), prim_name)
+    if three_input and isinstance(arg_value, tuple):
+        if len(arg_value) != 3:
+            _raise_message(three_input_flag=three_input)
     ret_value = _get_return_value()
     for item in ret_value:
         if isinstance(item, int) and not isinstance(item, bool):
@@ -123,7 +131,12 @@ def _check_3d_int_or_tuple(arg_name, arg_value, prim_name, allow_five=False,
                 continue
             if not greater_zero and item >= 0:
                 continue
-        _raise_message()
+            _raise_message()
+
+    if third_one:
+        if ret_value[-3] != 1:
+            _raise_message(third_one_flag=third_one)
+
     return tuple(ret_value)
 
 
@@ -431,7 +444,7 @@ class Validator:
     def check_file_name_by_regular(target, reg=None, flag=re.ASCII, prim_name=None):
         """Check whether file name is legitimate."""
         if reg is None:
-            reg = r"^[0-9a-zA-Z\_\-\.\/\\]+$"
+            reg = r"^[0-9a-zA-Z\_\-\.\:\/\\]+$"
         if re.match(reg, target, flag) is None:
             prim_name = f'in `{prim_name}`' if prim_name else ""
             raise ValueError("'{}' {} is illegal, it should be match regular'{}' by flags'{}'".format(
@@ -446,7 +459,7 @@ class Validator:
         return padding
 
     @staticmethod
-    def check_subclass(arg_name, type_, template_types, prim_name):
+    def check_subclass(arg_name, type_, template_types, prim_name, addition_error_info=None):
         """Checks whether some type is subclass of another type"""
         if not isinstance(template_types, Iterable):
             template_types = (template_types,)
@@ -460,9 +473,12 @@ class Validator:
                 hit = True
                 break
         if not hit:
+            if addition_error_info is None:
+                addition_error_info = ''
             type_str = (type(type_).__name__ if isinstance(type_, (tuple, list)) else "") + str(type_)
             raise TypeError(f'For \'{prim_name}\', the type of `{arg_name}` should be subclass'
-                            f' of {", ".join((str(x) for x in template_types))}, but got {type_str}.')
+                            f' of {", ".join((str(x) for x in template_types))}, but got {type_str}.'
+                            f' {addition_error_info}')
 
     @staticmethod
     def check_const_input(arg_name, arg_value, prim_name):
@@ -595,6 +611,123 @@ class Validator:
             raise ValueError(f'For {prim_name}, {ori_shape} reduce on {axis} should be '
                              f'{tuple(exp_shape)}, but got {shape}.')
 
+    @staticmethod
+    def check_astype_dtype(dtype):
+        """Check whether dtype is a valid input, and convert to mstype"""
+        all_types = mstype.__dtype__ + ["int", "float", "bool"]
+        if isinstance(dtype, str):
+            if dtype.lower() not in all_types:
+                raise TypeError(f"`{dtype}` not understood.")
+            dtype = mstype.pytype_to_dtype(np.dtype(dtype.lower()))
+        elif isinstance(dtype, type):
+            dtype = mstype.pytype_to_dtype(dtype)
+        elif not dtype in mstype.number_type + (mstype.bool_,):
+            raise TypeError(f"`{dtype}` not understood.")
+        return dtype
+
+    @staticmethod
+    def check_transpose_axis(axes, ndim):
+        """Check the axis argument for tensor.transpose"""
+        if not axes or (len(axes) == 1 and axes[0] is None):
+            return tuple(range(ndim-1, -1, -1))
+
+        if len(axes) == 1:
+            perm = axes[0]
+            # if only one argument provided, it must be tuple or list
+            if isinstance(perm, list):
+                perm = tuple(perm)
+            else:
+                if not isinstance(perm, tuple):
+                    raise TypeError(f"The `axes` should be a tuple/list, or series of int, but got {type(axes[0])}")
+            return perm
+
+        # if multiple arguments provided, it must be `ndim` number of ints
+        if len(axes) != ndim:
+            raise ValueError("The number of axes must equal to the dimension of tensor.")
+        return axes
+
+    @staticmethod
+    def check_reshape_shp(shp):
+        """Check the shape argument for tensor.reshape"""
+
+        if len(shp) == 1:
+            new_shape = shp[0]
+            # if only one argument provided, it must be int, tuple or list
+            if isinstance(new_shape, int):
+                return shp
+            if isinstance(new_shape, list):
+                new_shape = tuple(new_shape)
+            else:
+                if not isinstance(new_shape, tuple):
+                    raise TypeError(
+                        f"The `shape` should be an int, or tuple/list, or series of int, but got {type(shp[0])}")
+            return new_shape
+
+        return shp
+
+    @staticmethod
+    def check_flatten_order(order):
+        """Check flatten function input order"""
+        if not isinstance(order, str):
+            raise TypeError(f"The order variable should be a string, but got {type(order)}")
+        if order not in ('C', 'F'):
+            raise ValueError(f"only `C` and `F` are supported as order, but got {order}")
+        return order
+
+    @staticmethod
+    def check_swapaxes_axis(axes, ndim):
+        """Check all the axes argument for tensor.swapaxes"""
+        if isinstance(axes, int):
+            check_axis_in_range(axes, ndim)
+            return axes % ndim
+        if isinstance(axes, (tuple, list)):
+            for axis in axes:
+                if not isinstance(axis, int):
+                    raise TypeError(f"axis argument should be integer, but got {type(axis)}.")
+                check_axis_in_range(axis, ndim)
+            axes = tuple(map(lambda x: x % ndim, axes))
+            return axes
+        raise TypeError(f"axes should be integer, list or tuple for check, but got {type(axes)}.")
+
+    @staticmethod
+    def prepare_shape_for_squeeze(shape, axes):
+        """
+        Creates the squeezed new shape based on the tensor and given axes.
+
+        Args:
+            shape (tuple): the shape of the tensor
+            axes Union[int, tuple(int), list(int)]: the axes with dimensions need to
+                be squeezed.
+
+        Returns:
+            new_shape(tuple): the shape with dimensions squeezed.
+        """
+        new_shape = []
+        ndim = len(shape)
+
+        # Convert to set
+        if isinstance(axes, int):
+            if axes >= ndim or axes < -ndim:
+                raise ValueError(f"axis {axes} is out of bounds for tensor of dimension {ndim}")
+            axes = {axes}
+
+        elif isinstance(axes, (list, tuple)):
+            for axis in axes:
+                if axis >= ndim or axis < -ndim:
+                    raise ValueError(f"axis {axis} is out of bounds for tensor of dimension {ndim}")
+            axes = set(axes)
+
+        else:
+            raise TypeError(f"only int, tuple and list are allowed for axes, but got {type(axes)}")
+
+        for idx, s in enumerate(shape):
+            if s != 1 or (idx not in axes) and (idx - ndim not in axes):
+                new_shape.append(s)
+            # if an axis is selected with shape entry greater than one, an error is raised.
+            if s != 1 and ((idx in axes) or (idx - ndim in axes)):
+                raise ValueError(f"axis {axes} has shape entry {s} > 1, cannot be squeezed.")
+        return tuple(new_shape)
+
 
 def check_input_format(input_param):
     """Judge input format."""
@@ -621,6 +754,13 @@ def _expand_tuple(n_dimensions):
         return m
 
     return convert
+
+
+def check_axis_in_range(axis, ndim):
+    """Checks axes are with the bounds of ndim"""
+    if -ndim <= axis < ndim:
+        return True
+    raise ValueError(f'axis {axis} is out of bounds for tensor of dimension {ndim}')
 
 
 def _check_data_type_valid(data, valid_type):

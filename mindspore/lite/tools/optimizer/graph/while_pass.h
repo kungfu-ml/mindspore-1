@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,6 @@ class WhilePass : public Pass {
   bool Run(const FuncGraphPtr &graph) override;
 
  private:
-  void ReplaceInput(const std::vector<AnfNodePtr> &node_list, AnfNodePtr new_input_cnode, std::string para_name);
   ValueNodePtr GetSwitchAnfPrim();
 
   const size_t kWhileMinInputSize = 3;

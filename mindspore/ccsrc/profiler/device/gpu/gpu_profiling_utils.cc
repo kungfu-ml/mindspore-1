@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ constexpr auto kInitDatasetQueueOpName = "InitDataSetQueue";
 
 bool ProfilingUtils::have_communication_op = false;
 ProfilingTraceInfo ProfilingUtils::profiling_trace = {"", "", ""};
+std::unordered_map<uint32_t, bool> ProfilingUtils::is_first_step_map_ = {};
 
 ProfilingTraceInfo ProfilingUtils::GetProfilingTraceFromEnv(NotNull<const session::KernelGraph *> graph_ptr) {
   MS_LOG(INFO) << "get current subgraph op name start.";
@@ -39,12 +40,15 @@ ProfilingTraceInfo ProfilingUtils::GetProfilingTraceFromEnv(NotNull<const sessio
     return profiling_trace;
   }
 
+  ProfilingTraceInfo empty_info;
+  profiling_trace = empty_info;
   SetTraceIterEnd(cnode_exec_order);
   SetTraceFpStart(cnode_exec_order);
   SetTraceBpEnd(cnode_exec_order);
   GetTraceHccl(cnode_exec_order);
 
   OutputStepTraceOpNameStatus();
+  is_first_step_map_[graph_ptr->graph_id()] = false;
   return profiling_trace;
 }
 
@@ -72,10 +76,6 @@ void ProfilingUtils::GetTraceHccl(const std::vector<CNodePtr> &cnode_exec_order)
 }
 
 void ProfilingUtils::SetTraceFpStart(const std::vector<CNodePtr> &cnode_exec_order) {
-  if (!profiling_trace.trace_fp_start.empty()) {
-    return;
-  }
-
   const char *trace_fp_start = std::getenv(kFpStartNode);
   if (trace_fp_start != nullptr) {
     profiling_trace.trace_fp_start = std::string(trace_fp_start);
@@ -94,7 +94,7 @@ void ProfilingUtils::SetTraceFpStart(const std::vector<CNodePtr> &cnode_exec_ord
     if (cnode_exec_order.size() > 1) {
       profiling_trace.trace_fp_start = cnode_exec_order.at(1)->fullname_with_scope();
     } else {
-      MS_LOG(ERROR) << "No Op Behind the GetNext Op" << std::endl;
+      MS_LOG(WARNING) << "No Op Behind the GetNext Op" << std::endl;
     }
   } else {
     profiling_trace.trace_fp_start = first_node->fullname_with_scope();
@@ -122,7 +122,8 @@ void ProfilingUtils::SetTraceBpEnd(const std::vector<CNodePtr> &cnode_exec_order
   if (iter != cnode_exec_order.rend()) {
     // store communication op input nodes' name
     std::set<std::string> ar_input_node_names;
-    for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(*iter); ++i) {
+    size_t input_num = AnfAlgo::GetInputTensorNum(*iter);
+    for (size_t i = 0; i < input_num; ++i) {
       auto input_node_with_index = AnfAlgo::GetPrevNodeOutput(*iter, i);
       auto input_node = input_node_with_index.first;
       ar_input_node_names.insert(input_node->fullname_with_scope());
@@ -169,6 +170,15 @@ std::string ProfilingUtils::GetGraphSecondLastKernelName(const std::vector<CNode
   }
 
   return second_last_kernel_name;
+}
+
+bool ProfilingUtils::IsFirstStep(const uint32_t graph_id) {
+  auto iter = is_first_step_map_.find(graph_id);
+  if (iter == is_first_step_map_.end()) {
+    is_first_step_map_[graph_id] = false;
+    return true;
+  }
+  return is_first_step_map_[graph_id];
 }
 }  // namespace gpu
 }  // namespace profiler

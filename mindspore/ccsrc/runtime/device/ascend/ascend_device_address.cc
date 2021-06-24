@@ -93,20 +93,30 @@ namespace device {
 namespace ascend {
 const int FLOAT_LEN = sizeof(float);
 const int FLOAT16_LEN = 2;  // sizeof(float16);
-const std::set<std::string> kOpNeedTransFormat = {kOpFormat_NHWC,        kOpFormat_HWCN,          kOpFormat_NC1HWC0,
-                                                  kOpFormat_FRAC_Z,      kOpFormat_C1HWNCoC0,     kOpFormat_FRAC_NZ,
-                                                  kOpFormat_NC1HWC0_C04, kOpFormat_FRACTAL_Z_C04, kOpFormat_NDC1HWC0};
+const std::set<std::string> kOpNeedTransFormat = {
+  kOpFormat_NHWC,    kOpFormat_HWCN,        kOpFormat_NC1HWC0,       kOpFormat_FRAC_Z,   kOpFormat_C1HWNCoC0,
+  kOpFormat_FRAC_NZ, kOpFormat_NC1HWC0_C04, kOpFormat_FRACTAL_Z_C04, kOpFormat_NDC1HWC0, kOpFormat_FRACTAL_Z_3D};
 
 void SyncMemory(void *dst, const void *src, uint64_t size, rtMemcpyKind_t kind) {
   auto ms_context = MsContext::GetInstance();
   MS_EXCEPTION_IF_NULL(ms_context);
   auto device_id = ms_context->get_param<uint32_t>(MS_CTX_DEVICE_ID);
+  auto execution_mode = ms_context->get_param<int>(MS_CTX_EXECUTION_MODE);
   auto runtime_instance = device::KernelRuntimeManager::Instance().GetKernelRuntime(kAscendDevice, device_id);
   MS_EXCEPTION_IF_NULL(runtime_instance);
   runtime_instance->SetContext();
-  auto ret_rt_memcpy = rtMemcpy(dst, size, src, size, kind);
-  if (ret_rt_memcpy != RT_ERROR_NONE) {
-    MS_EXCEPTION(DeviceProcessError) << "rtMemcpy failed";
+
+  // Only apply asynchronous copy in Pynative && RT_MEMCPY_HOST_TO_DEVICE mode
+  if (execution_mode != kPynativeMode || kind != RT_MEMCPY_HOST_TO_DEVICE) {
+    auto ret_rt_memcpy = rtMemcpy(dst, size, src, size, kind);
+    if (ret_rt_memcpy != RT_ERROR_NONE) {
+      MS_EXCEPTION(DeviceProcessError) << "rtMemcpy failed";
+    }
+  } else {
+    auto ret = runtime_instance->MemcpyAsync(dst, src, size, static_cast<int32_t>(kind));
+    if (!ret) {
+      MS_EXCEPTION(DeviceProcessError) << "MemcpyAsync failed";
+    }
   }
 }
 
@@ -252,6 +262,13 @@ nlohmann::json ConstructTransDataKernelJson(const std::vector<size_t> &host_shap
   op_info[kernel_name_str] = "";
   op_info[name] = trans_data;
   op_info[outputs_str] = ConstructOutputs(host_shape, type);
+  // construct soc_info
+  nlohmann::json soc_info;
+  auto ms_context = MsContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(ms_context);
+  auto tune_mode = ms_context->get_param<std::string>(MS_CTX_TUNE_MODE);
+  soc_info["autoTilingMode"] = tune_mode;
+  kernel_json["SocInfo"] = soc_info;
   kernel_json[op_info_str] = op_info;
   kernel_json[platform_str] = platform_tbe;
   std::string json_str = kernel_json[op_info_str].dump();
@@ -458,7 +475,7 @@ std::vector<size_t> AscendDeviceAddress::GetDeviceShape(std::vector<size_t> *hos
     device_shape = trans::TransShapeToDevice(*host_shape, format_);
   } else {
     if (host_shape_.empty()) {
-      *host_shape = trans::PaddingShapeTo4d(*host_shape);
+      *host_shape = trans::PaddingShape(*host_shape, format_);
     } else {
       host_shape->clear();
       (void)std::transform(host_shape_.begin(), host_shape_.end(), std::back_inserter(*host_shape), LongToSize);
@@ -524,7 +541,10 @@ bool AscendDeviceAddress::SyncHostToDevice(const ShapeVector &shape, size_t size
                                            const void *host_ptr) const {
   MS_LOG(INFO) << "SyncHostToDevice, Device(format:" << format_ << ", type_id:" << TypeIdLabel(type_id_)
                << ", size:" << size_ << "), Host(type_id:" << TypeIdLabel(type) << ", size:" << size << ")";
-  SyncStream();
+  if (type_id_ > kMonadTypeBegin && type_id_ < kMonadTypeEnd) {
+    return true;
+  }
+
   bool sync_ok = false;
   std::vector<size_t> host_shape;
   (void)std::transform(shape.begin(), shape.end(), std::back_inserter(host_shape), LongToSize);
@@ -575,10 +595,10 @@ bool AscendDeviceAddress::ConvertFormatAndSyncHostToDevice(const ShapeVector &sh
     host_shape.emplace_back(1);
   }
   std::vector<size_t> device_shape;
-  if (format_ == kOpFormat_FRAC_NZ || format_ == kOpFormat_NCDHW || format_ == kOpFormat_NDC1HWC0) {
+  if (format_ == kOpFormat_FRAC_NZ) {
     device_shape = trans::TransShapeToDevice(host_shape, format_);
   } else {
-    host_shape = trans::PaddingShapeTo4d(host_shape);
+    host_shape = trans::PaddingShape(host_shape, format_);
     device_shape = trans::TransShapeToDevice(host_shape, format_);
   }
   if (type_id_ != type) {
@@ -612,7 +632,7 @@ bool AscendDeviceAddress::ConvertFormatAndSyncHostToDevice(const ShapeVector &sh
   return sync_ok;
 }
 
-AscendDeviceAddress::~AscendDeviceAddress() {
+void AscendDeviceAddress::ClearDeviceMemory() {
   if (ptr_ == nullptr) {
     return;
   }
@@ -627,8 +647,10 @@ AscendDeviceAddress::~AscendDeviceAddress() {
   }
 }
 
-bool AscendDeviceAddress::DumpMemToFile(bool trans_flag, const std::string &filepath, const std::string &host_fmt,
-                                        const ShapeVector &host_shape, TypeId host_type) const {
+AscendDeviceAddress::~AscendDeviceAddress() { ClearDeviceMemory(); }
+
+bool AscendDeviceAddress::DumpMemToFile(const std::string &filepath, const std::string &host_fmt,
+                                        const ShapeVector &host_shape, TypeId host_type, bool trans_flag) const {
   bool ret = false;
   if (filepath.empty()) {
     MS_LOG(ERROR) << "Dump file path is null!";
@@ -644,7 +666,8 @@ bool AscendDeviceAddress::DumpMemToFile(bool trans_flag, const std::string &file
   }
   std::string file_extension = ".bin";
   if (trans_flag) {
-    std::string path = filepath + '_' + shape + '_' + TypeIdLabel(host_type) + '_' + host_fmt + file_extension;
+    std::string path =
+      filepath + '_' + shape + '_' + TypeIdToType(host_type)->ToString() + '_' + host_fmt + file_extension;
     MS_LOG(INFO) << "E2E Dump path is " << path;
     mindspore::tensor::TensorPtr out_tensor = std::make_shared<tensor::Tensor>(host_type, host_shape);
     size_t host_size = out_tensor->data().nbytes();

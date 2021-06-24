@@ -34,6 +34,11 @@ class StandardNormal(PrimitiveWithInfer):
     Outputs:
         Tensor. The shape is the same as the input `shape`. The dtype is float32.
 
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `shape` is not a tuple.
+        ValueError: If `shape` is not a constant value.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -50,6 +55,7 @@ class StandardNormal(PrimitiveWithInfer):
     def __init__(self, seed=0, seed2=0):
         """Initialize StandardNormal"""
         self.init_prim_io_names(inputs=['shape'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
         Validator.check_non_negative_int(seed, "seed", self.name)
         Validator.check_non_negative_int(seed2, "seed2", self.name)
 
@@ -85,6 +91,11 @@ class StandardLaplace(PrimitiveWithInfer):
     Outputs:
         Tensor. The shape that the input 'shape' denotes. The dtype is float32.
 
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `shape` is not a tuple.
+        ValueError: If `shape` is not a constant value.
+
     Supported Platforms:
         ``Ascend``
 
@@ -101,6 +112,7 @@ class StandardLaplace(PrimitiveWithInfer):
     def __init__(self, seed=0, seed2=0):
         """Initialize StandardLaplace"""
         self.init_prim_io_names(inputs=['shape'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
         Validator.check_value_type('seed', seed, [int], self.name)
         Validator.check_value_type('seed2', seed2, [int], self.name)
 
@@ -140,6 +152,11 @@ class Gamma(PrimitiveWithInfer):
         Tensor. The shape must be the broadcasted shape of Input "shape" and shapes of alpha and beta.
         The dtype is float32.
 
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If neither `alpha` nor `beta` is a Tensor.
+        ValueError: If `shape` is not a constant value.
+
     Supported Platforms:
         ``Ascend``
 
@@ -158,6 +175,7 @@ class Gamma(PrimitiveWithInfer):
     def __init__(self, seed=0, seed2=0):
         """Initialize Gamma"""
         self.init_prim_io_names(inputs=['shape', 'alpha', 'beta'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
         Validator.check_non_negative_int(seed, "seed", self.name)
         Validator.check_non_negative_int(seed2, "seed2", self.name)
 
@@ -199,6 +217,11 @@ class Poisson(PrimitiveWithInfer):
         Tensor. Its shape must be the broadcasted shape of `shape` and the shape of `mean`.
         The dtype is int32.
 
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `shape` is not a tuple.
+        TypeError: If `mean` is not a Tensor whose dtype is not float32.
+
     Supported Platforms:
         ``Ascend``
 
@@ -216,6 +239,7 @@ class Poisson(PrimitiveWithInfer):
     def __init__(self, seed=0, seed2=0):
         """Initialize Poisson"""
         self.init_prim_io_names(inputs=['shape', 'mean'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
         Validator.check_non_negative_int(seed, "seed", self.name)
         Validator.check_non_negative_int(seed2, "seed2", self.name)
 
@@ -257,6 +281,12 @@ class UniformInt(PrimitiveWithInfer):
         - **maxval** (Tensor) - The distribution parameter, b.
           It defines the maximum possibly generated value, with int32 data type. Only one number is supported.
 
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `shape` is not a tuple.
+        TypeError: If neither `minval` nor `maxval` is a Tensor.
+        ValueError: If `shape` is not a constant value.
+
     Outputs:
         Tensor. The shape is the same as the input 'shape', and the data type is int32.
 
@@ -278,6 +308,7 @@ class UniformInt(PrimitiveWithInfer):
     def __init__(self, seed=0, seed2=0):
         """Initialize UniformInt"""
         self.init_prim_io_names(inputs=['shape', 'minval', 'maxval'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
         Validator.check_non_negative_int(seed, "seed", self.name)
         Validator.check_non_negative_int(seed2, "seed2", self.name)
 
@@ -315,6 +346,11 @@ class UniformReal(PrimitiveWithInfer):
     Outputs:
         Tensor. The shape that the input 'shape' denotes. The dtype is float32.
 
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `shape` is not a tuple.
+        ValueError: If `shape` is not a constant value.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -331,6 +367,7 @@ class UniformReal(PrimitiveWithInfer):
     def __init__(self, seed=0, seed2=0):
         """Initialize UniformReal"""
         self.init_prim_io_names(inputs=['shape'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
         Validator.check_non_negative_int(seed, "seed", self.name)
         Validator.check_non_negative_int(seed2, "seed2", self.name)
 
@@ -372,6 +409,11 @@ class RandomChoiceWithMask(PrimitiveWithInfer):
         - **index** (Tensor) - The output shape is 2-D.
         - **mask** (Tensor) - The output shape is 1-D.
 
+    Raises:
+        TypeError: If `count` is not an int.
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `input_x` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -394,6 +436,7 @@ class RandomChoiceWithMask(PrimitiveWithInfer):
         Validator.check_positive_int(count, "count", self.name)
         Validator.check_value_type('seed', seed, [int], self.name)
         Validator.check_value_type('seed2', seed2, [int], self.name)
+        self.add_prim_attr('side_effect_mem', True)
 
     def infer_shape(self, x_shape):
         Validator.check_int(len(x_shape), 1, Rel.GE, "input_x rank", self.name)
@@ -420,6 +463,11 @@ class RandomCategorical(PrimitiveWithInfer):
 
     Outputs:
         - **output** (Tensor) - The output Tensor with shape [batch_size, num_samples].
+
+    Raises:
+        TypeError: If `dtype` is not one of the following: mindspore.int16, mindspore.int32, mindspore.int64.
+        TypeError: If `logits` is not a Tensor.
+        TypeError: If neither `num_sample` nor `seed` is an int.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -450,6 +498,7 @@ class RandomCategorical(PrimitiveWithInfer):
         Validator.check_type_name("dtype", dtype, valid_values, self.name)
         self.init_prim_io_names(inputs=['logits', 'num_samples', 'seed'],
                                 outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
 
     def __infer__(self, logits, num_samples, seed):
         logits_dtype = logits['dtype']
@@ -480,9 +529,11 @@ class Multinomial(PrimitiveWithInfer):
     Note:
         The rows of input do not need to sum to one (in which case we use the values as weights),
         but must be non-negative, finite and have a non-zero sum.
+
     Args:
         seed (int): Random seed, must be non-negative. Default: 0.
         seed2 (int): Random seed2, must be non-negative. Default: 0.
+
     Inputs:
         - **input** (Tensor[float32]) - the input tensor containing the cumsum of probabilities, must be 1 or 2
           dimensions.
@@ -490,6 +541,11 @@ class Multinomial(PrimitiveWithInfer):
 
     Outputs:
         Tensor with the same rows as input, each row has num_samples sampled indices.
+
+    Raises:
+        TypeError: If neither `seed` nor `seed2` is an int.
+        TypeError: If `input` is not a Tensor whose dtype is float32.
+        TypeError: If dtype of `num_samples` is not int32.
 
     Supported Platforms:
         ``GPU``
@@ -508,6 +564,7 @@ class Multinomial(PrimitiveWithInfer):
         Validator.check_non_negative_int(seed, "seed", self.name)
         Validator.check_non_negative_int(seed2, "seed2", self.name)
         self.init_prim_io_names(inputs=['input', 'num_sample'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
 
     def __infer__(self, inputs, num_samples):
         input_shape = inputs["shape"]
@@ -556,6 +613,12 @@ class UniformCandidateSampler(PrimitiveWithInfer):
           of true_classes. Shape: (batch_size, num_true).
         - **sampled_expected_count** (Tensor) - The expected counts under the sampling distribution of
           each of sampled_candidates. Shape: (num_sampled, ).
+
+    Raises:
+        TypeError: If neither `num_true` nor `num_sampled` is an int.
+        TypeError: If neither `unique` nor `remove_accidental_hits` is a bool.
+        TypeError: If neither `range_max` nor `seed` is a int.
+        TypeError: If `true_classes` is not a Tensor.
 
     Supported Platforms:
         ``GPU``
@@ -619,6 +682,12 @@ class LogUniformCandidateSampler(PrimitiveWithInfer):
         - **sampled_candidates** (Tensor) - A Tensor with shape (num_sampled,) and the same type as `true_classes`.
         - **true_expected_count** (Tensor) - A Tensor with the same shape as `true_classes and` type float32.
         - **sampled_expected_count** (Tensor) - A Tensor with the same shape as `sampled_candidates` and type float32.
+
+    Raises:
+        TypeError: If neither `num_true` nor `num_sampled` is an int.
+        TypeError: If `unique` is not a bool.
+        TypeError: If neither `range_max` nor `seed` is an int.
+        TypeError: If `true_classes` is not a Tensor.
 
     Supported Platforms:
         ``Ascend``

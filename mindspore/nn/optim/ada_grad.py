@@ -48,6 +48,10 @@ class Adagrad(Optimizer):
         weight decay is positive. When not separating parameter groups, the `weight_decay` in the API will be applied
         on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
 
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
+
         To improve parameter groups performance, the customized order of parameters can be supported.
 
     Args:
@@ -67,6 +71,10 @@ class Adagrad(Optimizer):
               the order will be followed in optimizer. There are no other keys in the `dict` and the parameters which
               in the value of 'order_params' must be in one of group parameters.
 
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
+
         accum (float): The starting value for accumulators, must be zero or positive values. Default: 0.1.
         learning_rate (Union[float, Tensor, Iterable, LearningRateSchedule]): A value or a graph for the learning rate.
             When the learning_rate is an Iterable or a Tensor in a 1D dimension, use dynamic learning rate, then
@@ -77,8 +85,13 @@ class Adagrad(Optimizer):
             equal to or greater than 0. If the type of `learning_rate` is int, it will be converted to float.
             Default: 0.001.
         update_slots (bool): If true, update accumulation. Default: True.
-        loss_scale (float): Value for the loss scale. It must be greater than 0.0. Default: 1.0.
-        weight_decay (float): Weight decay value to multiply weight, must be zero or positive value. Default: 0.0.
+        loss_scale (float): Value for the loss scale. It must be greater than 0.0. In general, use the default value.
+            Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
+        weight_decay (Union[float, int]): Weight decay value to multiply weight, must be zero or positive value.
+            Default: 0.0.
 
     Inputs:
         - **grads** (tuple[Tensor]) - The gradients of `params` in the optimizer, the shape is the same as the `params`
@@ -86,6 +99,15 @@ class Adagrad(Optimizer):
 
     Outputs:
         Tensor[bool], the value is True.
+
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `accum` or `loss_scale` is not a float.
+        TypeError: If `update_slots` is not a bool.
+        TypeError: If `weight_decay` is neither float nor int.
+        ValueError: If `loss_scale` is less than or equal to 0.
+        ValueError: If `accum` or `weight_decay` is less than 0.
 
     Supported Platforms:
         ``Ascend`` ``CPU`` ``GPU``
@@ -98,12 +120,14 @@ class Adagrad(Optimizer):
         >>> #2) Use parameter groups and set different values
         >>> conv_params = list(filter(lambda x: 'conv' in x.name, net.trainable_params()))
         >>> no_conv_params = list(filter(lambda x: 'conv' not in x.name, net.trainable_params()))
-        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01},
+        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01, 'grad_centralization':True},
         ...                 {'params': no_conv_params, 'lr': 0.01},
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.Adagrad(group_params, learning_rate=0.1, weight_decay=0.0)
-        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0.
+        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01 and grad
+        >>> # centralization of True.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0 and grad
+        >>> # centralization of False.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -124,6 +148,7 @@ class Adagrad(Optimizer):
         accum = self.accum
         grads = self.decay_weight(grads)
         grads = self.scale_grad(grads)
+        grads = self.gradients_centralization(grads)
         lr = self.get_lr()
         if self.is_group_lr:
             success = self.map_(F.partial(_ada_grad_opt, self.opt), lr, params, accum,

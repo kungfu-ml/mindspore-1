@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,9 @@
 #include "debug/common.h"
 
 #include <memory>
+#include <iomanip>
 #include <optional>
+#include "utils/ms_context.h"
 #include "utils/system/env.h"
 #include "utils/system/file_system.h"
 #include "utils/log_adapter.h"
@@ -141,8 +143,147 @@ std::optional<std::string> Common::GetConfigFile(const std::string &env) {
   }
   auto suffix = dump_config_file.substr(point_pos + 1);
   if (suffix != "json") {
-    MS_LOG(EXCEPTION) << "[DataDump] dump config file suffix only support json! But got:." << suffix;
+    MS_LOG(EXCEPTION) << "[DataDump] dump config file suffix only supports json! But got:." << suffix;
   }
   return dump_config_file;
+}
+
+std::optional<std::string> Common::GetEnvConfigFile() {
+  auto context = MsContext::GetInstance();
+  MS_EXCEPTION_IF_NULL(context);
+  std::string env_config_path = context->get_param<std::string>(MS_CTX_ENV_CONFIG_PATH);
+  if (env_config_path.empty()) {
+    MS_LOG(INFO) << "The env_config_path is not set in context.";
+    return {};
+  }
+  MS_LOG(INFO) << "Get env_config_path: " << env_config_path;
+
+  std::string config_file(env_config_path);
+  std::shared_ptr<system::FileSystem> fs = system::Env::GetFileSystem();
+  MS_EXCEPTION_IF_NULL(fs);
+  if (!fs->FileExist(config_file)) {
+    MS_LOG(ERROR) << config_file << " not exist.";
+    return {};
+  }
+  auto point_pos = config_file.find_last_of('.');
+  if (point_pos == std::string::npos) {
+    MS_LOG(EXCEPTION) << "Invalid json file name:" << config_file;
+  }
+  return config_file;
+}
+
+bool Common::IsStrLengthValid(const std::string &str, const int &length_limit, const std::string &error_message) {
+  const int len_str = str.length();
+  if (len_str > length_limit) {
+    MS_LOG(WARNING) << error_message << "The length is " << str.length() << ", exceeding the limit of " << length_limit
+                    << ".";
+    return false;
+  }
+  return true;
+}
+
+bool Common::IsEveryFilenameValid(const std::string &path, const int &length_limit, const std::string &error_message) {
+  int left_pos = 0;
+  if (path.empty()) {
+    MS_LOG(WARNING) << error_message << "The path is empty.";
+    return false;
+  }
+  int len_path = path.length();
+  for (int i = 0; i < len_path; i++) {
+    if (i != 0) {
+      if (path[i] == '\\' || path[i] == '/') {
+        int cur_len = i - left_pos;
+        if (cur_len > length_limit) {
+          MS_LOG(WARNING) << error_message << "The name length of '" << path.substr(left_pos, cur_len) << "' is "
+                          << cur_len << ". It is out of the limit which is " << length_limit << ".";
+          return false;
+        }
+        left_pos = i + 1;
+      }
+    }
+  }
+  if (!(path[len_path - 1] == '\\' || path[len_path - 1] == '/')) {
+    int cur_len = len_path - left_pos;
+    if (cur_len > length_limit) {
+      MS_LOG(WARNING) << error_message << "The name length of '" << path.substr(left_pos, cur_len) << "' is " << cur_len
+                      << ". It is out of the limit which is " << length_limit << ".";
+      return false;
+    }
+  }
+  return true;
+}
+
+bool Common::IsPathValid(const std::string &path, const int &length_limit, const std::string &error_message) {
+  std::string err_msg = "Detail: ";
+  if (!error_message.empty()) {
+    err_msg = error_message + " " + err_msg;
+  }
+
+  if (path.empty()) {
+    MS_LOG(WARNING) << err_msg << "The path is empty.";
+    return false;
+  }
+
+  if (!IsStrLengthValid(path, length_limit, err_msg)) {
+    return false;
+  }
+
+  if (!std::all_of(path.begin(), path.end(),
+                   [](char c) { return ::isalpha(c) || ::isdigit(c) || c == '-' || c == '_' || c == '/'; })) {
+    MS_LOG(WARNING) << err_msg << "The path only supports alphabets, digit or {'-', '_', '/'}, but got:" << path << ".";
+    return false;
+  }
+
+  if (path[0] != '/') {
+    MS_LOG(WARNING) << err_msg << "The path only supports absolute path and should start with '/'.";
+    return false;
+  }
+
+  if (!IsEveryFilenameValid(path, MAX_OS_FILENAME_LENGTH, err_msg)) {
+    return false;
+  }
+  return true;
+}
+
+bool Common::IsFilenameValid(const std::string &filename, const int &length_limit, const std::string &error_message) {
+  std::string err_msg = "Detail: ";
+  if (!error_message.empty()) {
+    err_msg = error_message + " " + err_msg;
+  }
+
+  if (filename.empty()) {
+    MS_LOG(WARNING) << err_msg << "The filename is empty.";
+    return false;
+  }
+
+  if (!IsStrLengthValid(filename, length_limit, err_msg)) {
+    return false;
+  }
+
+  if (!std::all_of(filename.begin(), filename.end(),
+                   [](char c) { return ::isalpha(c) || ::isdigit(c) || c == '-' || c == '_' || c == '.'; })) {
+    MS_LOG(WARNING) << err_msg << "The filename only supports alphabets, digit or {'-', '_', '.'}, but got:" << filename
+                    << ".";
+    return false;
+  }
+  return true;
+}
+
+std::string Common::AddId(const std::string &filename, const std::string &suffix) {
+  static size_t g_id = 0;
+  std::ostringstream s;
+  auto i = filename.rfind(suffix);
+  if (i >= filename.size()) {
+    s << filename;
+    s << "_" << std::setfill('0') << std::setw(4) << g_id;
+  } else {
+    s << filename.substr(0, i);
+    s << "_" << std::setfill('0') << std::setw(4) << g_id;
+    if (i + 1 < filename.size()) {
+      s << filename.substr(i);
+    }
+  }
+  g_id++;
+  return s.str();
 }
 }  // namespace mindspore

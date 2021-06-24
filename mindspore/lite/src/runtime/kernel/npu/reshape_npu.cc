@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "src/runtime/kernel/npu/reshape_npu.h"
+#include <memory>
 #include "src/kernel_registry.h"
 #include "include/graph/op/all_ops.h"
 #include "src/runtime/agent/npu/npu_converter_utils.h"
@@ -25,6 +26,10 @@ using mindspore::schema::PrimitiveType_Reshape;
 namespace mindspore::kernel {
 int ReshapeNPUKernel::IsSupport(const std::vector<lite::Tensor *> &inputs, const std::vector<lite::Tensor *> &outputs,
                                 OpParameter *opParameter) {
+  if (reshape_param_->shape_dim_ == 0) {
+    MS_LOG(ERROR) << "Npu reshape op only supports const shape.";
+    return RET_ERROR;
+  }
   return RET_OK;
 }
 

@@ -15,6 +15,7 @@
  */
 
 #include "backend/optimizer/ascend/ir_fission/batch_norm_grad_infer_fission.h"
+#include "backend/optimizer/ascend/mindir/bn_grad_unify_mindir.h"
 #include "common/backend_common_test.h"
 #include "common/py_func_graph_fetcher.h"
 
@@ -35,13 +36,14 @@ TEST_F(TestHWBatchNormGradInferFission, test_batch_norm_grad_infer_fission) {
   std::vector<int64_t> shp_x{32, 64, 112, 112};
   auto x_abstract = std::make_shared<abstract::AbstractTensor>(kFloat32, shp_x);
   AbstractBasePtrList args_spec_list;
-  for (size_t i = 0; i < 5; ++i) {
+  for (size_t i = 0; i < 6; ++i) {
     args_spec_list.push_back(x_abstract);
   }
   auto kg = GetKernelGraph(g, args_spec_list);
 
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
+  pm->AddPass(std::make_shared<opt::BatchNormGradUnifyMindIR>());
   pm->AddPass(std::make_shared<opt::BatchNormGradInferFission>());
   optimizer->AddPassManager(pm);
   FuncGraphPtr new_graph = optimizer->Optimize(kg);
@@ -56,13 +58,14 @@ TEST_F(TestHWBatchNormGradInferFission, test_batch_norm_grad_infer_no_fission1) 
   std::vector<int64_t> shp_x{32, 64, 112, 112};
   auto x_abstract = std::make_shared<abstract::AbstractTensor>(kFloat32, shp_x);
   AbstractBasePtrList args_spec_list;
-  for (size_t i = 0; i < 5; ++i) {
+  for (size_t i = 0; i < 6; ++i) {
     args_spec_list.push_back(x_abstract);
   }
   auto kg = GetKernelGraph(g, args_spec_list);
 
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
+  pm->AddPass(std::make_shared<opt::BatchNormGradUnifyMindIR>());
   pm->AddPass(std::make_shared<opt::BatchNormGradInferFission>());
   optimizer->AddPassManager(pm);
   FuncGraphPtr new_graph = optimizer->Optimize(kg);
@@ -75,13 +78,14 @@ TEST_F(TestHWBatchNormGradInferFission, test_batch_norm_grad_infer_no_fission2) 
   std::vector<int64_t> shp_x{32, 64, 112, 112};
   auto x_abstract = std::make_shared<abstract::AbstractTensor>(kFloat32, shp_x);
   AbstractBasePtrList args_spec_list;
-  for (size_t i = 0; i < 5; ++i) {
+  for (size_t i = 0; i < 6; ++i) {
     args_spec_list.push_back(x_abstract);
   }
   auto kg = GetKernelGraph(g, args_spec_list);
 
   auto optimizer = std::make_shared<opt::GraphOptimizer>();
   auto pm = std::make_shared<opt::PassManager>();
+  pm->AddPass(std::make_shared<opt::BatchNormGradUnifyMindIR>());
   pm->AddPass(std::make_shared<opt::BatchNormGradInferFission>());
   optimizer->AddPassManager(pm);
   FuncGraphPtr new_graph = optimizer->Optimize(kg);

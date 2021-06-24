@@ -46,13 +46,13 @@ class RMSProp(Optimizer):
 
     The equation is as follows:
 
-    ..  math::
+    .. math::
         s_{t} = \\rho s_{t-1} + (1 - \\rho)(\\nabla Q_{i}(w))^2
 
-    ..  math::
+    .. math::
         m_{t} = \\beta m_{t-1} + \\frac{\\eta} {\\sqrt{s_{t} + \\epsilon}} \\nabla Q_{i}(w)
 
-    ..  math::
+    .. math::
         w = w - m_{t}
 
     The first equation calculates moving average of the squared gradient for
@@ -60,16 +60,16 @@ class RMSProp(Optimizer):
 
     if centered is True:
 
-    ..  math::
+    .. math::
         g_{t} = \\rho g_{t-1} + (1 - \\rho)\\nabla Q_{i}(w)
 
-    ..  math::
+    .. math::
         s_{t} = \\rho s_{t-1} + (1 - \\rho)(\\nabla Q_{i}(w))^2
 
-    ..  math::
+    .. math::
         m_{t} = \\beta m_{t-1} + \\frac{\\eta} {\\sqrt{s_{t} - g_{t}^2 + \\epsilon}} \\nabla Q_{i}(w)
 
-    ..  math::
+    .. math::
         w = w - m_{t}
 
     where :math:`w` represents `params`, which will be updated.
@@ -78,13 +78,17 @@ class RMSProp(Optimizer):
     :math:`m_{t}` is moment, the delta of `w`, :math:`m_{t-1}` is the last moment of :math:`m_{t}`.
     :math:`\\rho` represents `decay`. :math:`\\beta` is the momentum term, represents `momentum`.
     :math:`\\epsilon` is a smoothing term to avoid division by zero, represents `epsilon`.
-    :math:`\\eta` is learning rate, represents `learning_rate`. :math:`\\nabla Q_{i}(w)` is gradientse,
+    :math:`\\eta` is learning rate, represents `learning_rate`. :math:`\\nabla Q_{i}(w)` is gradients,
     represents `gradients`.
 
     Note:
         When separating parameter groups, the weight decay in each group will be applied on the parameters if the
         weight decay is positive. When not separating parameter groups, the `weight_decay` in the API will be applied
         on the parameters without 'beta' or 'gamma' in their names if `weight_decay` is positive.
+
+        When separating parameter groups, if you want to centralize the gradient, set grad_centralization to True,
+        but the gradient centralization can only be applied to the parameters of the convolution layer.
+        If the parameters of the non convolution layer are set to True, an error will be reported.
 
         To improve parameter groups performance, the customized order of parameters can be supported.
 
@@ -105,6 +109,10 @@ class RMSProp(Optimizer):
               the order will be followed in optimizer. There are no other keys in the `dict` and the parameters which
               in the value of 'order_params' must be in one of group parameters.
 
+            - grad_centralization: Optional. The data type of "grad_centralization" is Bool. If "grad_centralization"
+              is in the keys, the set value will be used. If not, the `grad_centralization` is False by default.
+              This parameter only works on the convolution layer.
+
         learning_rate (Union[float, Tensor, Iterable, LearningRateSchedule]): A value or a graph for the learning rate.
             When the learning_rate is an Iterable or a Tensor in a 1D dimension, use dynamic learning rate, then
             the i-th step will take the i-th value as the learning rate. When the learning_rate is LearningRateSchedule,
@@ -121,14 +129,27 @@ class RMSProp(Optimizer):
         use_locking (bool):  Whether to enable a lock to protect the variable and accumlation tensors from being
                              updated. Default: False.
         centered (bool): If true, gradients are normalized by the estimated variance of the gradient. Default: False.
-        loss_scale (float): A floating point value for the loss scale. Should be greater than 0. Default: 1.0.
-        weight_decay (float): Weight decay (L2 penalty). Should be equal to or greater than 0. Default: 0.0.
+        loss_scale (float): A floating point value for the loss scale. Should be greater than 0. In general, use the
+            default value. Only when `FixedLossScaleManager` is used for training and the `drop_overflow_update` in
+            `FixedLossScaleManager` is set to False, then this value needs to be the same as the `loss_scale` in
+            `FixedLossScaleManager`. Refer to class :class:`mindspore.FixedLossScaleManager` for more details.
+            Default: 1.0.
+        weight_decay (Union[float, int]): Weight decay (L2 penalty). Should be equal to or greater than 0. Default: 0.0.
 
     Inputs:
         - **gradients** (tuple[Tensor]) - The gradients of `params`, the shape is the same as `params`.
 
     Outputs:
         Tensor[bool], the value is True.
+
+    Raises:
+        TypeError: If `learning_rate` is not one of int, float, Tensor, Iterable, LearningRateSchedule.
+        TypeError: If `decay`, `momentum`, `epsilon` or `loss_scale` is not a float.
+        TypeError: If element of `parameters` is neither Parameter nor dict.
+        TypeError: If `weight_decay` is neither float nor int.
+        TypeError: If `use_locking` or `centered` is not a bool.
+        ValueError: If `epsilon` is less than or equal to 0.
+        ValueError: If `decay` or `momentum` is less than 0.
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
@@ -141,12 +162,14 @@ class RMSProp(Optimizer):
         >>> #2) Use parameter groups and set different values
         >>> conv_params = list(filter(lambda x: 'conv' in x.name, net.trainable_params()))
         >>> no_conv_params = list(filter(lambda x: 'conv' not in x.name, net.trainable_params()))
-        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01},
+        >>> group_params = [{'params': conv_params, 'weight_decay': 0.01, 'grad_centralization':True},
         ...                 {'params': no_conv_params, 'lr': 0.01},
         ...                 {'order_params': net.trainable_params()}]
         >>> optim = nn.RMSProp(group_params, learning_rate=0.1, weight_decay=0.0)
-        >>> # The conv_params's parameters will use a learning rate of default value 0.1 and a weight decay of 0.01.
-        >>> # The no_conv_params's parameters will use a learning rate of 0.01 and a weight decay of default value 0.0.
+        >>> # The conv_params's parameters will use default learning rate of 0.1 and weight decay of 0.01 and grad
+        >>> # centralization of True.
+        >>> # The no_conv_params's parameters will use learning rate of 0.01 and default weight decay of 0.0 and grad
+        >>> # centralization of False.
         >>> # The final parameters order in which the optimizer will be followed is the value of 'order_params'.
         >>>
         >>> loss = nn.SoftmaxCrossEntropyWithLogits()
@@ -182,6 +205,7 @@ class RMSProp(Optimizer):
         params = self.parameters
         gradients = self.decay_weight(gradients)
         gradients = self.scale_grad(gradients)
+        gradients = self.gradients_centralization(gradients)
         lr = self.get_lr()
         if self.centered:
             if self.is_group_lr:

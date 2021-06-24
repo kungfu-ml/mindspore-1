@@ -23,23 +23,16 @@
 #include <event2/event.h>
 #include <event2/listener.h>
 #include <event2/util.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <csignal>
 #include <utility>
 
-#include "ps/core/comm_util.h"
-
 namespace mindspore {
 namespace ps {
 namespace core {
-void TcpConnection::InitConnection() {
-  tcp_message_handler_.SetCallback([&](const CommMessage &message) {
-    OnServerReceiveMessage on_server_receive = server_->GetServerReceive();
-    if (on_server_receive) {
-      on_server_receive(*server_, *this, message);
-    }
-  });
-}
+void TcpConnection::InitConnection(const messageReceive &callback) { tcp_message_handler_.SetCallback(callback); }
 
 void TcpConnection::OnReadHandler(const void *buffer, size_t num) { tcp_message_handler_.ReceiveMessage(buffer, num); }
 
@@ -49,23 +42,64 @@ void TcpConnection::SendMessage(const void *buffer, size_t num) const {
   }
 }
 
-TcpServer *TcpConnection::GetServer() const { return const_cast<TcpServer *>(server_); }
+const TcpServer *TcpConnection::GetServer() const { return server_; }
 
 const evutil_socket_t &TcpConnection::GetFd() const { return fd_; }
 
-void TcpConnection::SendMessage(const CommMessage &message) const {
+void TcpConnection::set_callback(const Callback &callback) { callback_ = callback; }
+
+bool TcpConnection::SendMessage(std::shared_ptr<CommMessage> message) const {
   MS_EXCEPTION_IF_NULL(buffer_event_);
-  size_t buf_size = message.ByteSizeLong();
-  std::vector<unsigned char> serialized(buf_size);
-  message.SerializeToArray(serialized.data(), SizeToInt(buf_size));
-  if (evbuffer_add(bufferevent_get_output(const_cast<struct bufferevent *>(buffer_event_)), &buf_size,
-                   sizeof(buf_size)) == -1) {
-    MS_LOG(EXCEPTION) << "Event buffer add header failed!";
+  MS_EXCEPTION_IF_NULL(message);
+  bufferevent_lock(buffer_event_);
+  bool res = true;
+  size_t buf_size = message->ByteSizeLong();
+  if (bufferevent_write(buffer_event_, &buf_size, sizeof(buf_size)) == -1) {
+    MS_LOG(ERROR) << "Event buffer add header failed!";
+    res = false;
   }
-  if (evbuffer_add(bufferevent_get_output(const_cast<struct bufferevent *>(buffer_event_)), serialized.data(),
-                   buf_size) == -1) {
-    MS_LOG(EXCEPTION) << "Event buffer add protobuf data failed!";
+  if (bufferevent_write(buffer_event_, message->SerializeAsString().data(), buf_size) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
   }
+  bufferevent_unlock(buffer_event_);
+  return res;
+}
+
+bool TcpConnection::SendMessage(std::shared_ptr<MessageMeta> meta, const Protos &protos, const void *data,
+                                size_t size) const {
+  MS_EXCEPTION_IF_NULL(buffer_event_);
+  MS_EXCEPTION_IF_NULL(meta);
+  MS_EXCEPTION_IF_NULL(data);
+  bufferevent_lock(buffer_event_);
+  bool res = true;
+  MessageHeader header;
+  header.message_proto_ = protos;
+  header.message_meta_length_ = SizeToUint(meta->ByteSizeLong());
+  header.message_length_ = size + header.message_meta_length_;
+
+  if (bufferevent_write(buffer_event_, &header, sizeof(header)) == -1) {
+    MS_LOG(ERROR) << "Event buffer add header failed!";
+    res = false;
+  }
+  if (bufferevent_write(buffer_event_, meta->SerializeAsString().data(), meta->ByteSizeLong()) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
+  }
+  if (bufferevent_write(buffer_event_, data, size) == -1) {
+    MS_LOG(ERROR) << "Event buffer add protobuf data failed!";
+    res = false;
+  }
+  int result = bufferevent_flush(buffer_event_, EV_READ | EV_WRITE, BEV_FLUSH);
+  if (result < 0) {
+    MS_LOG(EXCEPTION) << "Bufferevent flush failed!";
+  }
+  bufferevent_unlock(buffer_event_);
+  MS_LOG(DEBUG) << "SendMessage the request id is:" << meta->request_id() << " the current time is:"
+                << std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::high_resolution_clock::now())
+                     .time_since_epoch()
+                     .count();
+  return res;
 }
 
 TcpServer::TcpServer(const std::string &address, std::uint16_t port)
@@ -110,6 +144,8 @@ void TcpServer::Init() {
     MS_LOG(EXCEPTION) << "Use event pthread failed!";
   }
 
+  event_enable_debug_logging(EVENT_DBG_ALL);
+  event_set_log_callback(CommUtil::LogCallback);
   is_stop_ = false;
   base_ = event_base_new();
   MS_EXCEPTION_IF_NULL(base_);
@@ -158,7 +194,7 @@ void TcpServer::Start() {
   MSLOG_IF(mindspore::ERROR, ret == 1, NoExceptionType)
     << "Event base dispatch failed with no events pending or active!";
   MSLOG_IF(mindspore::ERROR, ret == -1, NoExceptionType) << "Event base dispatch failed with error occurred!";
-  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base dispatch with unexpect error code!";
+  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base dispatch with unexpected error code!";
 }
 
 void TcpServer::StartWithNoBlock() {
@@ -169,7 +205,7 @@ void TcpServer::StartWithNoBlock() {
   MSLOG_IF(INFO, ret == 0, NoExceptionType) << "Event base loop success!";
   MSLOG_IF(mindspore::ERROR, ret == 1, NoExceptionType) << "Event base loop failed with no events pending or active!";
   MSLOG_IF(mindspore::ERROR, ret == -1, NoExceptionType) << "Event base loop failed with error occurred!";
-  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base loop with unexpect error code!";
+  MSLOG_IF(mindspore::EXCEPTION, ret < -1, AbortedError) << "Event base loop with unexpected error code!";
 }
 
 void TcpServer::StartTimerOnlyOnce(const uint32_t &time) {
@@ -225,7 +261,7 @@ void TcpServer::SendToAllClients(const char *data, size_t len) {
   }
 }
 
-void TcpServer::AddConnection(const evutil_socket_t &fd, const TcpConnection *connection) {
+void TcpServer::AddConnection(const evutil_socket_t &fd, std::shared_ptr<TcpConnection> connection) {
   MS_EXCEPTION_IF_NULL(connection);
   std::lock_guard<std::mutex> lock(connection_mutex_);
   connections_.insert(std::make_pair(fd, connection));
@@ -233,10 +269,10 @@ void TcpServer::AddConnection(const evutil_socket_t &fd, const TcpConnection *co
 
 void TcpServer::RemoveConnection(const evutil_socket_t &fd) {
   std::lock_guard<std::mutex> lock(connection_mutex_);
-  TcpConnection *connection = const_cast<TcpConnection *>(connections_.find(fd)->second);
-  delete connection;
   connections_.erase(fd);
 }
+
+std::shared_ptr<TcpConnection> TcpServer::GetConnectionByFd(const evutil_socket_t &fd) { return connections_[fd]; }
 
 void TcpServer::ListenerCallback(struct evconnlistener *, evutil_socket_t fd, struct sockaddr *sockaddr, int,
                                  void *data) {
@@ -246,8 +282,8 @@ void TcpServer::ListenerCallback(struct evconnlistener *, evutil_socket_t fd, st
   MS_EXCEPTION_IF_NULL(base);
   MS_EXCEPTION_IF_NULL(sockaddr);
 
-  struct bufferevent *bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
-  if (!bev) {
+  struct bufferevent *bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_THREADSAFE);
+  if (bev == nullptr) {
     MS_LOG(ERROR) << "Error constructing buffer event!";
     int ret = event_base_loopbreak(base);
     if (ret != 0) {
@@ -256,23 +292,30 @@ void TcpServer::ListenerCallback(struct evconnlistener *, evutil_socket_t fd, st
     return;
   }
 
-  TcpConnection *conn = server->onCreateConnection(bev, fd);
+  std::shared_ptr<TcpConnection> conn = server->onCreateConnection(bev, fd);
   MS_EXCEPTION_IF_NULL(conn);
-
-  conn->InitConnection();
+  SetTcpNoDelay(fd);
   server->AddConnection(fd, conn);
-  bufferevent_setcb(bev, TcpServer::ReadCallback, nullptr, TcpServer::EventCallback, reinterpret_cast<void *>(conn));
+  conn->InitConnection([=](std::shared_ptr<MessageMeta> meta, const Protos &protos, const void *data, size_t size) {
+    OnServerReceiveMessage on_server_receive = server->GetServerReceive();
+    if (on_server_receive) {
+      on_server_receive(conn, meta, protos, data, size);
+    }
+  });
+  bufferevent_setcb(bev, TcpServer::ReadCallback, nullptr, TcpServer::EventCallback,
+                    reinterpret_cast<void *>(conn.get()));
   if (bufferevent_enable(bev, EV_READ | EV_WRITE) == -1) {
     MS_LOG(EXCEPTION) << "Buffer event enable read and write failed!";
   }
 }
 
-TcpConnection *TcpServer::onCreateConnection(struct bufferevent *bev, const evutil_socket_t &fd) {
-  TcpConnection *conn = nullptr;
+std::shared_ptr<TcpConnection> TcpServer::onCreateConnection(struct bufferevent *bev, const evutil_socket_t &fd) {
+  MS_EXCEPTION_IF_NULL(bev);
+  std::shared_ptr<TcpConnection> conn = nullptr;
   if (client_accept_) {
-    conn = const_cast<TcpConnection *>(client_accept_(*this));
+    conn = (client_accept_(*this));
   } else {
-    conn = new TcpConnection(bev, fd, this);
+    conn = std::make_shared<TcpConnection>(bev, fd, this);
   }
 
   return conn;
@@ -297,13 +340,18 @@ void TcpServer::ReadCallback(struct bufferevent *bev, void *connection) {
 
   auto conn = static_cast<class TcpConnection *>(connection);
   struct evbuffer *buf = bufferevent_get_input(bev);
-  char read_buffer[4096];
+  char read_buffer[kMessageChunkLength];
   while (EVBUFFER_LENGTH(buf) > 0) {
     int read = evbuffer_remove(buf, &read_buffer, sizeof(read_buffer));
     if (read == -1) {
       MS_LOG(EXCEPTION) << "Can not drain data from the event buffer!";
     }
     conn->OnReadHandler(read_buffer, IntToSize(read));
+    MS_LOG(DEBUG) << "the current time is:"
+                  << std::chrono::time_point_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now())
+                       .time_since_epoch()
+                       .count()
+                  << " the read size is:" << read;
   }
 }
 
@@ -312,8 +360,8 @@ void TcpServer::EventCallback(struct bufferevent *bev, std::int16_t events, void
   MS_EXCEPTION_IF_NULL(data);
   struct evbuffer *output = bufferevent_get_output(bev);
   size_t remain = evbuffer_get_length(output);
-  auto conn = reinterpret_cast<TcpConnection *>(data);
-  TcpServer *srv = conn->GetServer();
+  auto conn = static_cast<class TcpConnection *>(data);
+  auto srv = const_cast<TcpServer *>(conn->GetServer());
 
   if (events & BEV_EVENT_EOF) {
     MS_LOG(INFO) << "Event buffer end of file!";
@@ -325,7 +373,7 @@ void TcpServer::EventCallback(struct bufferevent *bev, std::int16_t events, void
     srv->RemoveConnection(conn->GetFd());
     bufferevent_free(bev);
   } else if (events & BEV_EVENT_ERROR) {
-    MS_LOG(ERROR) << "Event buffer remain data: " << remain;
+    MS_LOG(WARNING) << "Event buffer remain data: " << remain;
     // Free connection structures
     srv->RemoveConnection(conn->GetFd());
     bufferevent_free(bev);
@@ -335,7 +383,7 @@ void TcpServer::EventCallback(struct bufferevent *bev, std::int16_t events, void
       srv->client_disconnection_(*srv, *conn);
     }
   } else {
-    MS_LOG(ERROR) << "Unhandled event!";
+    MS_LOG(WARNING) << "Unhandled event!";
   }
 }
 
@@ -355,13 +403,34 @@ void TcpServer::TimerOnceCallback(evutil_socket_t, int16_t, void *arg) {
   }
 }
 
-void TcpServer::SendMessage(const TcpConnection &conn, const CommMessage &message) { conn.SendMessage(message); }
+void TcpServer::SetTcpNoDelay(const evutil_socket_t &fd) {
+  const int one = 1;
+  int ret = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(int));
+  if (ret < 0) {
+    MS_LOG(EXCEPTION) << "Set socket no delay failed!";
+  }
+}
 
-void TcpServer::SendMessage(const CommMessage &message) {
+bool TcpServer::SendMessage(std::shared_ptr<TcpConnection> conn, std::shared_ptr<CommMessage> message) {
+  MS_EXCEPTION_IF_NULL(conn);
+  MS_EXCEPTION_IF_NULL(message);
+  return conn->SendMessage(message);
+}
+
+bool TcpServer::SendMessage(std::shared_ptr<TcpConnection> conn, std::shared_ptr<MessageMeta> meta,
+                            const Protos &protos, const void *data, size_t size) {
+  MS_EXCEPTION_IF_NULL(conn);
+  MS_EXCEPTION_IF_NULL(meta);
+  MS_EXCEPTION_IF_NULL(data);
+  return conn->SendMessage(meta, protos, data, size);
+}
+
+void TcpServer::SendMessage(std::shared_ptr<CommMessage> message) {
+  MS_EXCEPTION_IF_NULL(message);
   std::lock_guard<std::mutex> lock(connection_mutex_);
 
   for (auto it = connections_.begin(); it != connections_.end(); ++it) {
-    SendMessage(*it->second, message);
+    SendMessage(it->second, message);
   }
 }
 
@@ -371,10 +440,9 @@ std::string TcpServer::BoundIp() const { return server_address_; }
 
 int TcpServer::ConnectionNum() const { return connections_.size(); }
 
-const std::map<evutil_socket_t, const TcpConnection *> &TcpServer::Connections() const { return connections_; }
+const std::map<evutil_socket_t, std::shared_ptr<TcpConnection>> &TcpServer::Connections() const { return connections_; }
 
 void TcpServer::SetMessageCallback(const OnServerReceiveMessage &cb) { message_callback_ = cb; }
-
 }  // namespace core
 }  // namespace ps
 }  // namespace mindspore

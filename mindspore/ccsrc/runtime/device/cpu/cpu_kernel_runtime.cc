@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "runtime/device/cpu/cpu_kernel_runtime.h"
+#include <unistd.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -29,9 +30,12 @@
 #include "backend/session/anf_runtime_algorithm.h"
 #include "backend/session/session_basic.h"
 #include "frontend/operator/ops.h"
+#include "profiler/device/cpu/cpu_profiling.h"
 #include "utils/shape_utils.h"
 #include "utils/profile.h"
 #include "utils/trace_base.h"
+#include "debug/data_dump/cpu_e2e_dump.h"
+#include "debug/env_config_parser.h"
 #ifdef MEM_REUSE_DEBUG
 #include "backend/optimizer/mem_reuse/mem_reuse_checker.h"
 #endif
@@ -56,7 +60,7 @@ void CPUKernelRuntime::AssignKernelAddress(session::KernelGraph *kernel_graph) {
   AssignInputNodeAddress(kernel_graph);
   auto context_ptr = MsContext::GetInstance();
   MS_EXCEPTION_IF_NULL(context_ptr);
-  bool is_enable_mem_reuse = context_ptr->get_param<bool>(MS_CTX_ENABLE_MEM_REUSE);
+  bool is_enable_mem_reuse = EnvConfigParser::GetInstance().GetSysMemreuse();
   if (context_ptr->get_param<int>(MS_CTX_EXECUTION_MODE) == kPynativeMode) {
     // disable mem reuse for kPynativeMode
     is_enable_mem_reuse = false;
@@ -187,6 +191,12 @@ tensor::TensorPtr CPUKernelRuntime::CreatTensorForOutput(
     auto shape = AnfAlgo::GetOutputInferShape(node, index);
     ShapeVector temp_shape;
     (void)temp_shape.insert(temp_shape.end(), shape.begin(), shape.end());
+    size_t type_size = GetTypeByte(TypeIdToType(device_type_id));
+    size_t tensor_size = std::accumulate(temp_shape.begin(), temp_shape.end(), type_size, std::multiplies<size_t>());
+    if (tensor_size < address->size_) {
+      temp_shape.clear();
+      temp_shape.emplace_back(address->size_);
+    }
     tensor = std::make_shared<tensor::Tensor>(infer_type_id, temp_shape);
     bool is_internal_output = kernel_graph->IsInternalOutput(node, index);
     if (is_internal_output) {
@@ -268,7 +278,7 @@ void CPUKernelRuntime::CreateOutputTensors(session::KernelGraph *kernel_graph,
   bound_addresses_.clear();
   auto output_nodes = kernel_graph->outputs();
   for (const auto &item : output_nodes) {
-    auto item_with_index = AnfAlgo::VisitKernelWithReturnType(item, 0, true);
+    auto item_with_index = AnfAlgo::VisitKernelWithReturnType(item, 0, false);
     auto out = CreatTensorForOutput(kernel_graph, item_with_index, tensor_to_node);
     outputs->push_back(std::move(out));
   }
@@ -284,7 +294,7 @@ void CPUKernelRuntime::BindInputTensorAddressPtr(const session::KernelGraph &ker
   size_t input_idx = 0;
   for (auto &item : input_nodes) {
     MS_EXCEPTION_IF_NULL(item);
-    if (item->isa<Parameter>()) {
+    if (item->isa<Parameter>() && !HasAbstractMonad(item)) {
       auto address = AnfAlgo::GetMutableOutputAddr(item, 0);
       auto tensor = inputs[input_idx];
       auto tensor_address = tensor->device_address();
@@ -371,11 +381,18 @@ void CPUKernelRuntime::DecreaseSummaryRefCount(const session::NamedSummaryOutput
   static_cast<CPUMemoryManager *>(mem_manager_.get())->DecreaseSummaryRefCount(summary_outputs);
 }
 
-bool CPUKernelRuntime::Run(session::KernelGraph *kernel_graph, bool is_task_sink) {
+bool CPUKernelRuntime::Run(session::KernelGraph *const kernel_graph, bool is_task_sink) {
   MS_EXCEPTION_IF_NULL(kernel_graph);
   static_cast<CPUMemoryManager *>(mem_manager_.get())->IncreaseAddressRefCount(kernel_graph);
 
   auto kernels = kernel_graph->execution_order();
+  auto profiler_inst = profiler::cpu::CPUProfiler::GetInstance();
+  MS_EXCEPTION_IF_NULL(profiler_inst);
+
+  auto &dump_json_parser = DumpJsonParser::GetInstance();
+  dump_json_parser.UpdateDumpIter();
+  bool iter_dump_flag = dump_json_parser.GetIterDumpFlag();
+
   for (const auto &kernel : kernels) {
 #ifdef ENABLE_PROFILE
     double start_time = GetTime();
@@ -406,10 +423,20 @@ bool CPUKernelRuntime::Run(session::KernelGraph *kernel_graph, bool is_task_sink
       AddRuntimeAddress(device_address, &kernel_workspaces);
     }
     bool ret = true;
+    if (profiler_inst->GetEnableFlag()) {
+      uint32_t pid = getpid();
+      profiler_inst->OpDataProducerBegin(kernel->fullname_with_scope(), pid);
+    }
     try {
       ret = kernel_mod->Launch(kernel_inputs, kernel_workspaces, kernel_outputs, 0);
     } catch (std::exception &e) {
       MS_LOG(EXCEPTION) << e.what() << "\nTrace:" << trace::DumpSourceLines(kernel);
+    }
+    if (iter_dump_flag) {
+      CPUE2eDump::DumpCNodeData(kernel);
+    }
+    if (profiler_inst->GetEnableFlag()) {
+      profiler_inst->OpDataProducerEnd();
     }
     if (!ret) {
       MS_LOG(EXCEPTION) << "Launch kernel failed. Trace:" << trace::DumpSourceLines(kernel);
@@ -419,6 +446,9 @@ bool CPUKernelRuntime::Run(session::KernelGraph *kernel_graph, bool is_task_sink
     double cost_time = GetTime() - start_time;
     MS_LOG(INFO) << "cpu kernel: " << kernel->fullname_with_scope() << "  costs " << cost_time * 1e6 << " us";
 #endif
+  }
+  if (iter_dump_flag) {
+    CPUE2eDump::DumpParametersAndConst(kernel_graph);
   }
   return true;
 }

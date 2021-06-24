@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ namespace parallel {
 void GenerateStrategy(const std::shared_ptr<Graph> &graph, const std::vector<std::shared_ptr<OperatorInfo>> &ops,
                       const std::shared_ptr<std::vector<std::vector<size_t>>> &eli_list,
                       const std::vector<std::vector<std::string>> &input_tensor_names,
-                      const std::shared_ptr<std::vector<size_t>> &index_list) {
+                      const std::shared_ptr<std::vector<size_t>> &index_list, bool is_training) {
   MS_EXCEPTION_IF_NULL(graph);
   MS_EXCEPTION_IF_NULL(eli_list);
   MS_EXCEPTION_IF_NULL(index_list);
@@ -46,10 +46,17 @@ void GenerateStrategy(const std::shared_ptr<Graph> &graph, const std::vector<std
   GenerateRemainingOperatorStrategy(graph, ops, input_tensor_names, index_list, no_stra_op_list);
 
   for (auto &op : ops) {
+    // Set user-defined strategy
     auto attrs = op->attrs();
     if (StrategyFound(attrs)) {
       StrategyPtr user_defined_stra = parallel::ExtractStrategy(attrs);
       op->SetSelectedStrategyAndCost(user_defined_stra, op->selected_cost());
+    }
+    // Set back to raw strategy for special node in predict/eval
+    if (!is_training) {
+      if ((op->is_last_node()) || (op->type() == "_VirtualDataset")) {
+        SetBackToRawStrategy(op);
+      }
     }
   }
 }
@@ -289,8 +296,8 @@ Strategys PrepareL2Normalize(const std::vector<std::shared_ptr<OperatorInfo>> &o
   auto iter = ops[iter_ops]->attrs().find(AXIS);
   if (iter != ops[iter_ops]->attrs().end()) {
     MS_EXCEPTION_IF_NULL(iter->second);
-    if (iter->second->isa<Int64Imm>()) {
-      axis = iter->second->cast<Int64ImmPtr>()->value();
+    if (iter->second->isa<ValueSequeue>()) {
+      axis = GetValue<std::vector<int64_t>>(iter->second)[0];
     } else {
       MS_LOG(EXCEPTION) << ops[iter_ops]->name() << " : The value of axis is not int64_t.";
     }
@@ -443,12 +450,7 @@ Strategys MakeDataParallelStrategy(const std::shared_ptr<Graph> &graph,
       // Experimental support for 3D data (input_size == 3).
       if (input_size >= 1 && input_size <= 4) {
         if (dim == 0) {
-          // Currently GPU version does not support partitioning ‘FusedBatchNormEx’ in its param tensors.
-          if (ops[iter_ops]->type() == "FusedBatchNormEx" && iter_op_inputs != 0) {
-            s.push_back(1);
-          } else {
-            s.push_back(std::min(max_device_num, target_tensor_batch));
-          }
+          s.push_back(std::min(max_device_num, target_tensor_batch));
         } else {
           s.push_back(1);
         }
@@ -480,10 +482,33 @@ Strategys MakeDataParallelStrategy(const std::shared_ptr<Graph> &graph,
   } else if (ops[iter_ops]->outputs_tensor_info()[0].shape().size() == 4) {
     graph->nodes[iter_graph].tensor_parm.tensor_str.str_n = 1.0 / std::min(max_device_num, target_tensor_batch);
   } else {
-    MS_LOG(EXCEPTION) << ops[iter_ops]->name() << " output tensor shape is unexpected.";
+    MS_LOG(INFO) << ops[iter_ops]->name() << " output tensor shape is unexpected, using default value instead.";
   }
 
   return strategies;
+}
+
+void SetBackToRawStrategy(const std::shared_ptr<OperatorInfo> &op) {
+  StrategyPtr origin_strategy = op->strategy();
+  Strategys strategies;
+
+  for (size_t iter_strategy = 0; iter_strategy < origin_strategy->GetInputDim().size(); iter_strategy++) {
+    Dimensions s;
+    size_t strategy_size = origin_strategy->GetInputDim()[iter_strategy].size();
+    for (size_t dim = 0; dim < strategy_size; dim++) {
+      if (strategy_size >= 1 && strategy_size <= 4) {
+        s.push_back(1);
+      } else if (strategy_size == 0) {
+        s = {};
+      } else {
+        MS_LOG(EXCEPTION) << op->name() << ": Strategy size " << strategy_size << " is unmatched.";
+      }
+    }
+    strategies.push_back(s);
+  }
+
+  StrategyPtr sp = std::make_shared<Strategy>(0, strategies);
+  op->SetSelectedStrategyAndCost(sp, op->selected_cost());
 }
 
 Strategys PrepareStrategy(const std::shared_ptr<Graph> &graph, const std::vector<std::shared_ptr<OperatorInfo>> &ops,
@@ -503,8 +528,8 @@ Strategys PrepareStrategy(const std::shared_ptr<Graph> &graph, const std::vector
     return PrepareOneHot(graph, ops, iter_graph, iter_ops);
   } else if ((type == SOFTMAX) || (type == LAYER_NORM)) {
     return PrepareAxisRelatedStrategy(graph, ops, iter_graph, iter_ops);
-  } else if ((type == SPARSE_SOFTMAX_CROSS_ENTROPY_WITH_LOGITS) || (type == "_VirtualDataset") ||
-             (type == "FusedBatchNormEx") || (type == "Dropout") || (type == BATCH_MATMUL)) {
+  } else if ((type == SPARSE_SOFTMAX_CROSS_ENTROPY_WITH_LOGITS) || (type == "_VirtualDataset") || (type == "Dropout") ||
+             (type == BATCH_MATMUL)) {
     return MakeDataParallelStrategy(graph, ops, iter_graph, iter_ops);
   } else {
     return MakeRecSearchStrategy(graph, ops, iter_graph, iter_ops);
@@ -586,9 +611,9 @@ Dimensions PrepareIncomingOperatorInputStrategy(const std::vector<std::shared_pt
       return s;
     }
     auto name = ops[incoming_op_index]->name().substr(0, pos);
-    if (name == "GatherV2") {
+    if (name == "Gather") {
       return s;
-    } else if (name == "GatherV2P") {
+    } else if (name == "GatherP") {
       return PrepareGatherV2POutputStrategy(ops, incoming_op_index);
     } else {
       MS_LOG(EXCEPTION) << "Failure: Unknown type of GatherV2." << std::endl;
@@ -819,9 +844,9 @@ Strategys GenerateStrategiesFromStrategy(const std::vector<std::shared_ptr<Opera
   if (ops[iter_ops]->type() == GATHERV2) {
     auto pos = ops[iter_ops]->name().find("Info");
     auto name = ops[iter_ops]->name().substr(0, pos);
-    if (name == "GatherV2") {
+    if (name == "Gather") {
       return PrepareGatherV2(ops, iter_ops, basic_stra);
-    } else if (name == "GatherV2P") {
+    } else if (name == "GatherP") {
       return PrepareGatherV2P(ops, iter_ops, basic_stra);
     } else {
       MS_LOG(EXCEPTION) << "Failure: Unknown type of GatherV2." << std::endl;
@@ -830,7 +855,7 @@ Strategys GenerateStrategiesFromStrategy(const std::vector<std::shared_ptr<Opera
   if (ops[iter_ops]->type() == L2_NORMALIZE) {
     return PrepareL2Normalize(ops, iter_ops, basic_stra);
   }
-  if (ops[iter_ops]->type() == TENSOR_ADD || ops[iter_ops]->type() == SUB || ops[iter_ops]->type() == MUL ||
+  if (ops[iter_ops]->type() == ADD || ops[iter_ops]->type() == SUB || ops[iter_ops]->type() == MUL ||
       ops[iter_ops]->type() == DIV) {
     return CheckBroadcast(ops, iter_ops, basic_stra);
   }

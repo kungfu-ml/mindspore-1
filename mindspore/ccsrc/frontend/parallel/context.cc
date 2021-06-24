@@ -33,6 +33,9 @@ std::vector<std::string> PARALLEL_MODE_LIST = {STAND_ALONE, DATA_PARALLEL, HYBRI
                                                AUTO_PARALLEL};
 std::vector<std::string> STRATEGY_SEARCH_MODE_LIST = {DYNAMIC_PROGRAMMING, RECURSIVE_PROGRAMMING};
 
+std::vector<std::string> COMMUNI_PARALLEL_MODE_LIST = {ALL_GROUP_PARALLEL, SAME_SERVER_GROUP_PARALLEL,
+                                                       NO_GROUP_PARALLEL};
+
 std::shared_ptr<ParallelContext> ParallelContext::inst_context_ = nullptr;
 
 std::shared_ptr<ParallelContext> ParallelContext::GetInstance() {
@@ -65,6 +68,8 @@ void ParallelContext::Reset() {
   strategy_search_mode_ = DYNAMIC_PROGRAMMING;
   pipeline_stage_split_num_ = 1;
   grad_accumulation_step_ = 1;
+  init_param_shape_ = false;
+  communi_parallel_mode_ = ALL_GROUP_PARALLEL;
 }
 
 void ParallelContext::set_device_num(int64_t device_num) {
@@ -124,6 +129,10 @@ void ParallelContext::set_strategy_ckpt_save_file(const std::string &strategy_ck
   strategy_ckpt_save_file_ = strategy_ckpt_save_file;
 }
 
+void ParallelContext::set_group_ckpt_save_file(const std::string &group_ckpt_save_file) {
+  group_ckpt_save_file_ = group_ckpt_save_file;
+}
+
 void ParallelContext::SetAllReduceFusionSplitIndices(const std::vector<uint32_t> indices, const std::string &group) {
   all_reduce_fusion_split_indices_[group] = indices;
 }
@@ -148,26 +157,53 @@ const std::vector<uint32_t> ParallelContext::GetAllReduceFusionSplitSizes(const 
   return {};
 }
 
+bool ParallelContext::set_communi_parallel_mode(const std::string &communi_parallel_mode) {
+  auto iter = std::find(COMMUNI_PARALLEL_MODE_LIST.begin(), COMMUNI_PARALLEL_MODE_LIST.end(), communi_parallel_mode);
+  if (iter == COMMUNI_PARALLEL_MODE_LIST.end()) {
+    MS_LOG(INFO) << "Invalid communication parallel mode:" << communi_parallel_mode;
+    return false;
+  }
+
+  communi_parallel_mode_ = communi_parallel_mode;
+  return true;
+}
+
 // Clear param_shapes before training in auto-parallel or semi-auto-parallel mode
-void ParallelParameterContextInit(const FuncGraphPtr &func_graph) {
+void ParallelContext::ParallelParameterContextInitShape(const FuncGraphPtr &func_graph) {
   MS_EXCEPTION_IF_NULL(func_graph);
-  if (!func_graph->has_flag(AUTO_PARALLEL) || !func_graph->has_flag(TRAINING)) {
+  if (!func_graph->has_flag(AUTO_PARALLEL)) {
     return;
   }
-  param_shapes.clear();
+
+  if (!func_graph->has_flag(TRAINING)) {
+    init_param_shape_ = false;
+    MS_LOG(INFO) << "In parallel evaluation or prediction, may be need to restore the parameter shape";
+    return;
+  }
+
+  if ((ParallelContext::GetInstance()->grad_accumulation_step() > 1) && !func_graph->has_flag(ACCUMULATION)) {
+    init_param_shape_ = false;
+    MS_LOG(INFO) << "In parallel grad accumulation second graph, need to restore the parameter shape";
+  } else {
+    param_shapes.clear();
+    init_param_shape_ = true;
+    MS_LOG(INFO) << "Init the parameter shape dict";
+  }
 }
 
 // Restore the parameters' shape for evaluation/prediction in auto-parallel or semi-auto-parallel mode
-void ParallelParameterContextRestoreInNoTraining(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
-                                                 AbstractBasePtr ptr) {
+void ParallelContext::ParallelParameterContextRestoreShape(const FuncGraphPtr &func_graph,
+                                                           const ParameterPtr &param_node, AbstractBasePtr ptr) {
   MS_EXCEPTION_IF_NULL(func_graph);
   MS_EXCEPTION_IF_NULL(param_node);
   MS_EXCEPTION_IF_NULL(ptr);
-  if (!func_graph->has_flag(AUTO_PARALLEL) || (func_graph->attrs().count(TRAINING) == 0) ||
-      func_graph->has_flag(TRAINING)) {
+  if (!func_graph->has_flag(AUTO_PARALLEL)) {
     return;
   }
 
+  if (init_param_shape_) {
+    return;
+  }
   auto iter = param_shapes.find(param_node->name());
   if (iter == param_shapes.end()) {
     MS_LOG(WARNING) << "Can not found the shape for parameter " << param_node->name();
@@ -176,19 +212,23 @@ void ParallelParameterContextRestoreInNoTraining(const FuncGraphPtr &func_graph,
   Shape shape = iter->second;
   std::shared_ptr<abstract::BaseShape> base_shape = std::make_shared<abstract::Shape>(shape);
   ptr->set_shape(base_shape);
-  MS_LOG(DEBUG) << "The parameter name is " << param_node->name() << ", the shape is " << shape;
+  MS_LOG(INFO) << "The parameter name is " << param_node->name() << ", the shape is " << shape;
 }
 
+// Clear param_shapes before training in auto-parallel or semi-auto-parallel mode
 // Checkpoint the parameters' shape for training in auto-parallel or semi-auto-parallel mode
-void ParallelParameterContextCkptInTraining(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
-                                            const AbstractBasePtr &ptr) {
+void ParallelContext::ParallelParameterContextCkptShape(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
+                                                        const AbstractBasePtr &ptr) {
   MS_EXCEPTION_IF_NULL(func_graph);
   MS_EXCEPTION_IF_NULL(param_node);
   MS_EXCEPTION_IF_NULL(ptr);
-  if (!func_graph->has_flag(AUTO_PARALLEL) || !func_graph->has_flag(TRAINING)) {
+  if (!func_graph->has_flag(AUTO_PARALLEL)) {
     return;
   }
 
+  if (!init_param_shape_) {
+    return;
+  }
   std::vector<int64_t> shape = dyn_cast<abstract::Shape>(ptr->GetShapeTrack())->shape();
   auto ret = param_shapes.try_emplace(param_node->name(), shape);
   if (!ret.second) {

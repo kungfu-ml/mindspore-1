@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -196,14 +196,6 @@ __global__ void AtanKernel(const T *input, T *output, const size_t count) {
   return;
 }
 template <typename T>
-__global__ void ZeroslikeKernel(T *output, const size_t count) {
-  T zero = 0.0;
-  for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < (count); i += blockDim.x * gridDim.x) {
-    output[i] = zero;
-  }
-  return;
-}
-template <typename T>
 __global__ void AbsKernel(const T *input, T *output, const size_t count) {
   for (size_t i = blockIdx.x * blockDim.x + threadIdx.x; i < (count); i += blockDim.x * gridDim.x) {
     output[i] = abs(input[i]);
@@ -328,11 +320,6 @@ void Rsqrt(const T *input, T *output, const size_t count, cudaStream_t cuda_stre
   return;
 }
 template <typename T>
-void Zeroslike(T *output, const size_t count, cudaStream_t cuda_stream) {
-  ZeroslikeKernel<<<GET_BLOCKS(count), GET_THREADS, 0, cuda_stream>>>(output, count);
-  return;
-}
-template <typename T>
 void Abs(const T *input, T *output, const size_t count, cudaStream_t cuda_stream) {
   AbsKernel<<<GET_BLOCKS(count), GET_THREADS, 0, cuda_stream>>>(input, output, count);
   return;
@@ -343,6 +330,30 @@ void Floor(const T *input, T *output, const size_t count, cudaStream_t cuda_stre
   return;
 }
 
+// double
+template void Exponential<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Expm1<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Logarithm<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Log1p<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Erf<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Erfc<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Negative<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Reciprocal<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Square<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Sqrt<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Sin<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Cos<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Asin<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void ACos<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Atan<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Asinh<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Acosh<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Rsqrt<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Abs<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+template void Floor<double>(const double *input, double *output, const size_t count, cudaStream_t cuda_stream);
+
+
+// float
 template void Exponential<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
 template void Expm1<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
 template void Logarithm<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
@@ -361,9 +372,10 @@ template void Atan<float>(const float *input, float *output, const size_t count,
 template void Asinh<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
 template void Acosh<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
 template void Rsqrt<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
-template void Zeroslike<float>(float *output, const size_t count, cudaStream_t cuda_stream);
 template void Abs<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
 template void Floor<float>(const float *input, float *output, const size_t count, cudaStream_t cuda_stream);
+
+// half
 template void Exponential<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
 template void Expm1<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
 template void Logarithm<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
@@ -382,6 +394,5 @@ template void Atan<half>(const half *input, half *output, const size_t count, cu
 template void Asinh<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
 template void Acosh<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
 template void Rsqrt<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
-template void Zeroslike<half>(half *output, const size_t count, cudaStream_t cuda_stream);
 template void Abs<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);
 template void Floor<half>(const half *input, half *output, const size_t count, cudaStream_t cuda_stream);

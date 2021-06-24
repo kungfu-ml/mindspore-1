@@ -35,11 +35,6 @@
 namespace mindspore {
 namespace session {
 enum GraphType : int { COMMON_GRAPH = 0, CONDITION_GRAPH = 1, BRANCH_START = 2, BRANCH_END = 3 };
-struct InputTensorInfo {
-  std::vector<tensor::TensorPtr> input_tensors;
-  std::vector<int64_t> input_tensors_mask;
-  std::set<KernelWithIndex> input_kernel;
-};
 
 class AscendSession : public SessionBasic {
  public:
@@ -63,8 +58,10 @@ class AscendSession : public SessionBasic {
                    const std::vector<int64_t> &tensors_mask) override;
   void RunOpImpl(const GraphInfo &graph_info, OpRunInfo *op_run_info, std::vector<tensor::TensorPtr> *input_tensors,
                  VectorRef *outputs, const std::vector<int64_t> &tensors_mask) override;
-  void RunOpsInGraphImpl(const GraphId &graph_id, const std::vector<tensor::TensorPtr> &inputs,
-                         VectorRef *outputs) override;
+  void BuildOpsInGraph(const GraphId &graph_id, const std::map<AnfNodePtr, size_t> &parameter_index,
+                       const std::vector<tensor::TensorPtr> &graph_inputs,
+                       const std::map<KernelWithIndex, size_t> &cnode_refcount) override;
+  std::string GetCommWorldGroup() override { return kHcclWorldGroup; }
 
  private:
   // compile child graph when session have multiple child graphs
@@ -79,6 +76,7 @@ class AscendSession : public SessionBasic {
   void RunOpAdjustKernel(const std::shared_ptr<KernelGraph> &kernel_graph) const;
   void AssignStream(NotNull<KernelGraphPtr> kernel_graph) const;
   void BuildKernel(const std::shared_ptr<KernelGraph> &kernel_graph) const;
+  void BuildKernel(const std::vector<CNodePtr> &kernels) const;
   void BuildDynamicKernel(const std::shared_ptr<KernelGraph> &kernel_graph) const;
   void MemoryAlloc(KernelGraph *kernel_graph) const;
   void RunOpMemoryAlloc(const std::vector<tensor::TensorPtr> &input_tensors, KernelGraph *kernel_graph) const;
@@ -106,7 +104,7 @@ class AscendSession : public SessionBasic {
   const std::vector<GraphType> &GetGraphOrderType(GraphId final_graph_id) const;
   // check if graph cache exist
   bool GraphCacheExist(const GraphInfo &graph_info) const;
-  // sync intial tensors' data to device
+  // sync initial tensors' data to device
   void SyncInitialTenosrToDevice();
   void SetFinalGraphSummaryFlag(const std::shared_ptr<KernelGraph> &kernel_graph);
   // create parameter to receive data from multiple branch output
@@ -119,7 +117,14 @@ class AscendSession : public SessionBasic {
   void LoadGraphsToDbg(const NotNull<KernelGraphPtr> graph, NotNull<std::set<KernelGraphPtr> *> memo) const;
   void AssignStaticMemory(const NotNull<KernelGraphPtr> graph, NotNull<std::set<KernelGraphPtr> *> memo) const;
   void UpdateRefOutputMap(const NotNull<KernelGraphPtr> graph, NotNull<std::set<KernelGraphPtr> *> memo) const;
-
+  KernelGraphPtr PreBuildOp(const OpRunInfo &op_run_info, const GraphInfo &graph_info,
+                            const std::vector<tensor::TensorPtr> &input_tensors,
+                            const std::vector<int64_t> &tensors_mask);
+  void GetOpInputStubTensors(const CNodePtr &cnode, const std::map<AnfNodePtr, size_t> &parameter_index,
+                             const std::vector<tensor::TensorPtr> &graph_inputs,
+                             const std::map<KernelWithIndex, OutputTensorInfo> &node_output_info,
+                             InputTensorInfo *input_tensor_info);
+  std::shared_ptr<device::Bucket> CreateBucket(uint32_t bucket_id, uint32_t bucket_size) override;
   // key is final_graph_id,value is child graph execute order of final graph
   std::unordered_map<GraphId, std::vector<GraphId>> graph_execute_orders_;
   // key is final_graph_id,value is the graph types of child graphs
@@ -128,6 +133,8 @@ class AscendSession : public SessionBasic {
   std::map<std::pair<GraphId, size_t>, tensor::TensorPtr> initial_tenosrs_;
   // final_graph_id is used in every root graph has it's own session situation
   GraphId final_graph_id_;
+  // record graph ids of bp graphs that has been built in PyNative mode
+  std::set<GraphId> built_graph_id_;
 };
 MS_REG_SESSION(kAscendDevice, AscendSession);
 }  // namespace session

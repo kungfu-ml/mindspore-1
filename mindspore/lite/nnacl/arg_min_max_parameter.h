@@ -17,7 +17,12 @@
 #ifndef MINDSPORE_LITE_NNACL_ARG_MIN_MAX_PARAMETER_H_
 #define MINDSPORE_LITE_NNACL_ARG_MIN_MAX_PARAMETER_H_
 
+#ifdef ENABLE_ARM64
+#include <arm_neon.h>
+#endif
 #include "nnacl/op_base.h"
+
+typedef int (*COMPARE_FUNCTION)(const void *a, const void *b);
 
 typedef struct ArgElement {
   uint32_t index_;
@@ -25,6 +30,9 @@ typedef struct ArgElement {
     int8_t i8_data_;
     int32_t i_data_;
     float f_data_;
+#ifdef ENABLE_ARM64
+    float16_t f16_data_;
+#endif
   } data_;
 } ArgElement;
 
@@ -38,8 +46,8 @@ typedef struct ArgMinMaxParameter {
   int32_t axis_type_;
   int32_t dims_size_;
   int32_t data_type_;  // equals to type_id
-  int32_t in_strides_[DIMENSION_4D];
-  int32_t out_strides_[DIMENSION_4D];
+  int32_t in_strides_[COMM_SHAPE_SIZE];
+  int32_t out_strides_[COMM_SHAPE_SIZE];
   ArgElement *arg_elements_;
 } ArgMinMaxParameter;
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +19,8 @@
 #endif
 #include <fstream>
 #include <iomanip>
-#include <map>
 #include <memory>
+#include <unordered_map>
 #include "ir/primitive.h"
 #include "ir/func_graph.h"
 #include "runtime/device/kernel_info.h"
@@ -81,7 +81,7 @@ void PrintNodeInputType(std::ostringstream &buffer, const AnfNodePtr &nd) {
     return;
   }
 
-  std::vector<AnfNodePtr> inputs = SuccIncoming(nd);
+  const auto &inputs = GetInputs(nd);
   size_t len = inputs.size();
   if (len > 1) {
     // skip inputs[0] which is Primitive value node
@@ -137,7 +137,8 @@ void DumpKernelInfo(const CNodePtr &node, const std::shared_ptr<SubGraphIRInfo> 
   }
 
   gsub->buffer << "      : (";
-  for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(node); ++i) {
+  size_t input_num = AnfAlgo::GetInputTensorNum(node);
+  for (size_t i = 0; i < input_num; ++i) {
     if (i != 0) {
       gsub->buffer << ", ";
     }
@@ -147,7 +148,8 @@ void DumpKernelInfo(const CNodePtr &node, const std::shared_ptr<SubGraphIRInfo> 
     PrintKernelFormatAndType(gsub->buffer, format, type, shape);
   }
   gsub->buffer << ") -> (";
-  for (size_t i = 0; i < AnfAlgo::GetOutputTensorNum(node); ++i) {
+  size_t output_num = AnfAlgo::GetOutputTensorNum(node);
+  for (size_t i = 0; i < output_num; ++i) {
     if (i != 0) {
       gsub->buffer << ", ";
     }
@@ -238,7 +240,7 @@ void DumpOperands(const AnfNodePtr &nd, OrderedMap<AnfNodePtr, int32_t> *para_ma
   }
 
   gsub->buffer << "(";
-  std::vector<AnfNodePtr> inputs = SuccIncoming(nd);
+  const auto &inputs = GetInputs(nd);
   size_t len = inputs.size();
   if (len > 1) {
     // skip inputs[0] which is Primitive valuenode
@@ -525,30 +527,29 @@ void DumpSubgraph(const OrderedMap<FuncGraphPtr, std::shared_ptr<SubGraphIRInfo>
   }
 }
 
-std::string AddGlobalId(const std::string &filename) {
-  static size_t g_id = 0;
-  std::ostringstream s;
-  auto i = filename.rfind(".ir");
-  if (i >= filename.size()) {
-    s << filename;
-    s << "_" << std::setfill('0') << std::setw(4) << g_id;
-  } else {
-    s << filename.substr(0, i);
-    s << "_" << std::setfill('0') << std::setw(4) << g_id;
-    if (i + 1 < filename.size()) {
-      s << filename.substr(i);
-    }
+void GetEnvDumpIrLineLevel(LocDumpMode *dump_location) {
+  static std::unordered_map<std::string, enum LocDumpMode> dump_level_map = {
+    {std::to_string(kOff), kOff}, {std::to_string(kTopStack), kTopStack}, {std::to_string(kWholeStack), kWholeStack}};
+  static auto dump_level_in_env = common::GetEnv("ENV_DUMP_IR_LINE_LEVEL");
+  auto it = dump_level_map.find(dump_level_in_env);
+  if (it == dump_level_map.end()) {
+    return;
   }
-  ++g_id;
-  return s.str();
+  // Use the env setting instead parameter setting.
+  *dump_location = it->second;
 }
 
 #ifdef ENABLE_DUMP_IR
-void DumpIR(const std::string &filename, const FuncGraphPtr &graph, bool dump_full_name, LocDumpMode dump_location) {
+void DumpIR(const std::string &filename, const FuncGraphPtr &graph, bool dump_full_name, LocDumpMode dump_location,
+            const std::string &target_file) {
+  GetEnvDumpIrLineLevel(&dump_location);
   if (graph == nullptr) {
     return;
   }
-  auto path = pipeline::GetSaveGraphsPathName(AddGlobalId(filename));
+  auto path = pipeline::GetSaveGraphsPathName(Common::AddId(filename, ".ir"));
+  if (!target_file.empty()) {
+    path = target_file;
+  }
   auto realpath = Common::GetRealPath(path);
   if (!realpath.has_value()) {
     MS_LOG(ERROR) << "Get real path failed. path=" << path;
@@ -583,8 +584,60 @@ void DumpIR(const std::string &filename, const FuncGraphPtr &graph, bool dump_fu
   // set file mode to read only by user
   ChangeFileMode(realpath.value(), S_IRUSR);
 }
+
+void DumpIRForRDR(const std::string &filename, const FuncGraphPtr &graph, bool dump_full_name,
+                  LocDumpMode dump_location) {
+  GetEnvDumpIrLineLevel(&dump_location);
+  if (graph == nullptr) {
+    return;
+  }
+  auto path = Common::AddId(filename, ".ir");
+  auto realpath = Common::GetRealPath(path);
+  if (!realpath.has_value()) {
+    MS_LOG(ERROR) << "Get real path failed. path=" << path;
+    return;
+  }
+
+  ChangeFileMode(realpath.value(), S_IRWXU);
+  std::ofstream fout(realpath.value());
+  std::ostringstream buffer;
+  if (!fout.is_open()) {
+    MS_LOG(ERROR) << "Open dump file '" << realpath.value() << "' failed!";
+    return;
+  }
+
+  auto nodes = TopoSort(graph->get_return(), SuccDeeperSimple, AlwaysInclude);
+  OrderedMap<AnfNodePtr, int32_t> para_map;
+  // dump global info
+  DumpGlobalInfoEntry(graph, buffer);
+  int32_t total_para = DumpParams(graph, buffer, &para_map);
+
+  OrderedMap<FuncGraphPtr, std::shared_ptr<SubGraphIRInfo>> sub_graphs;
+  // dump ir in each sub graph
+  DumpIRInSubgraph(nodes, &para_map, &sub_graphs, total_para, dump_full_name, dump_location);
+
+  // output global info
+  fout << buffer.str() << std::endl;
+
+  // output each sub graph
+  DumpSubgraph(&sub_graphs, graph, &para_map, fout);
+
+  fout.close();
+  // set file mode to read only by user
+  ChangeFileMode(realpath.value(), S_IRUSR);
+}
+
 #else
-void DumpIR(const std::string &, const FuncGraphPtr &, bool, LocDumpMode) {
+void DumpIR(const std::string &, const FuncGraphPtr &, bool, LocDumpMode, const std::string &) {
+  static bool already_printed = false;
+  if (already_printed) {
+    return;
+  }
+  already_printed = true;
+  MS_LOG(WARNING) << "The functionality of dumping function graph IR is disabled, "
+                  << "please recompile source to enable it. See help of building script.";
+}
+void DumpIRForRDR(const std::string &, const FuncGraphPtr &, bool, LocDumpMode) {
   static bool already_printed = false;
   if (already_printed) {
     return;

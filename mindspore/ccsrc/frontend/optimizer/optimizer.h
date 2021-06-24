@@ -43,10 +43,10 @@ using OptimizeGraphFunc = std::function<bool(const FuncGraphPtr &func_graph, con
 class OptPassConfig {
  public:
   explicit OptPassConfig(const OptimizeGraphFunc &func) : func_(func) {}
-  explicit OptPassConfig(const std::vector<SubstitutionPtr> &list, bool is_once = false)
-      : list_(list), is_once_(is_once) {}
-  OptPassConfig(const std::initializer_list<SubstitutionPtr> &list, bool is_once = false)
-      : list_(list), is_once_(is_once) {}
+  explicit OptPassConfig(const std::vector<SubstitutionPtr> &list, bool is_once = false, bool global_sensitive = false)
+      : list_(list), is_once_(is_once), global_sensitive_(global_sensitive) {}
+  OptPassConfig(const std::initializer_list<SubstitutionPtr> &list, bool is_once = false, bool global_sensitive = false)
+      : list_(list), is_once_(is_once), global_sensitive_(global_sensitive) {}
   ~OptPassConfig() = default;
 
   const std::vector<SubstitutionPtr> &list() const { return list_; }
@@ -57,6 +57,8 @@ class OptPassConfig {
 
   const bool is_once() const { return is_once_; }
 
+  const bool global_sensitive() const { return global_sensitive_; }
+
  private:
   OptPassConfig() : is_renormalize_(true) {}
 
@@ -64,6 +66,7 @@ class OptPassConfig {
   std::vector<SubstitutionPtr> list_;
   bool is_renormalize_{false};
   bool is_once_{false};
+  bool global_sensitive_{false};
 };
 
 class OptPass {
@@ -88,13 +91,14 @@ using OptPassGroupMap = std::vector<std::pair<std::string, OptPassConfig>>;
 
 class Optimizer : public std::enable_shared_from_this<Optimizer> {
  public:
-  Optimizer(const std::string &name, const pipeline::ResourceBasePtr &resource_ptr)
+  Optimizer(const std::string &name, const pipeline::ResourceBasePtr &resource_ptr, bool traverse_nodes_first = true)
       : name_(name),
         resource_(resource_ptr),
         run_only_once_(false),
         is_watch_renormalize_(false),
         is_enable_(true),
-        is_untyped_generated_(false) {}
+        is_untyped_generated_(false),
+        traverse_nodes_first_(traverse_nodes_first) {}
   virtual ~Optimizer() = default;
 
   void Init(const OptPassGroupMap &passes, bool run_only_once) {
@@ -114,7 +118,7 @@ class Optimizer : public std::enable_shared_from_this<Optimizer> {
       }
 
       if (config.list().size() > 0) {
-        OptimizeGraphFunc func = SubstitutionList(config.list(), config.is_once());
+        OptimizeGraphFunc func = SubstitutionList(config.list(), config.is_once(), config.global_sensitive());
         passes_.push_back(OptPass(func));
         continue;
       }
@@ -129,8 +133,8 @@ class Optimizer : public std::enable_shared_from_this<Optimizer> {
 
   static std::shared_ptr<Optimizer> MakeOptimizer(const std::string &name, const pipeline::ResourceBasePtr resource_ptr,
                                                   const OptPassGroupMap &passes, bool run_only_once = false,
-                                                  bool watch_renormalize = false) {
-    OptimizerPtr optimizer = std::make_shared<Optimizer>(name, resource_ptr);
+                                                  bool watch_renormalize = false, bool traverse_nodes_first = true) {
+    OptimizerPtr optimizer = std::make_shared<Optimizer>(name, resource_ptr, traverse_nodes_first);
     optimizer->Init(passes, run_only_once);
     if (watch_renormalize) {
       optimizer->enable_watch_renormalize();
@@ -145,15 +149,22 @@ class Optimizer : public std::enable_shared_from_this<Optimizer> {
     // Optimizer step counter;
     int64_t counter = 1;
     bool changes = true;
+    // If no changes since last renormalization, then no need to do the renormalization again.
+    // Set the initial value to true, so the renormalization can be executed once if it's the
+    // only pass.
+    bool changes_since_last_renorm = true;
 
     while (changes) {
       changes = false;
-      auto run_runc = [&counter, &func_graph, &changes, use_profile, this]() {
+      auto run_runc = [&counter, &func_graph, &changes, &changes_since_last_renorm, use_profile, this]() {
         for (size_t i = 0; i < passes_.size(); ++i) {
           const OptPass &opt = passes_[i];
           CurPass_ = {counter, pass_names_[i]};
-          auto opt_func = [&func_graph, &changes, &opt, this]() {
+          auto opt_func = [&func_graph, &changes, &opt, &changes_since_last_renorm, this]() {
             if (opt.is_renormalize()) {
+              if (!changes_since_last_renorm) {
+                return;
+              }
               auto resource_ptr = std::dynamic_pointer_cast<pipeline::Resource>(resource_);
               if (resource_ptr != nullptr) {
                 // StepParallel may replace the AbstractValue of the parameters of func_graph,
@@ -176,15 +187,18 @@ class Optimizer : public std::enable_shared_from_this<Optimizer> {
                   func_graph = pipeline::Renormalize(resource_ptr, func_graph, maybe_new_args_spec);
                 }
               }
+              changes_since_last_renorm = false;
             } else if (opt(func_graph, shared_from_this())) {
               changes = true;
+              changes_since_last_renorm = true;
             }
           };
           use_profile ? (WITH(MsProfile::GetProfile()->Step(pass_names_[i])) opt_func) : opt_func();
-          if (is_on_debug_ && MsContext::GetInstance()->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG)) {
-            MS_LOG(DEBUG) << "The opt " << name_ << " round " << counter << " OptPass " << pass_names_[i] << " end.";
+          static const auto enable_dump_pass_ir = (common::GetEnv("ENV_DUMP_PASS_IR") == "1");
+          if (enable_dump_pass_ir && MsContext::GetInstance()->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG)) {
             auto fg_name =
               "opt_substep_" + name_ + "_r" + std::to_string(counter) + "_" + std::to_string(i) + "_" + pass_names_[i];
+            MS_LOG(DEBUG) << "The opt " << name_ << " round " << counter << " OptPass " << pass_names_[i] << " end.";
             DumpIR(fg_name + ".ir", func_graph);
             if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) != kPynativeMode) {
               func_graph->DumpFuncGraph(fg_name);
@@ -222,6 +236,8 @@ class Optimizer : public std::enable_shared_from_this<Optimizer> {
   bool is_watch_renormalize() { return is_watch_renormalize_; }
   void set_enable(bool enable) { is_enable_ = enable; }
 
+  bool traverse_nodes_first() { return traverse_nodes_first_; }
+
   struct {
     int64_t counter;
     std::string name;
@@ -238,6 +254,7 @@ class Optimizer : public std::enable_shared_from_this<Optimizer> {
   bool is_watch_renormalize_;
   bool is_enable_;
   bool is_untyped_generated_;
+  bool traverse_nodes_first_;
 };
 }  // namespace opt
 }  // namespace mindspore

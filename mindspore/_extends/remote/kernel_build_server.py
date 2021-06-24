@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,23 @@
 # ============================================================================
 """kernel build server"""
 import os
-import time
+from mindspore import log as logger
+from mindspore._extends.parallel_compile.akg_compiler.akg_process import create_akg_parallel_process
+
+class AkgBuilder:
+    """Akg building wrapper"""
+
+    def __init__(self):
+        pass
+
+    def create(self, process_num, waitime, platform=""):
+        self.akg_builder = create_akg_parallel_process(process_num, waitime, platform)
+
+    def accept_json(self, json):
+        return self.akg_builder.accept_json(json)
+
+    def compile(self):
+        return self.akg_builder.compile()
 
 class Messager:
     '''Messager'''
@@ -41,12 +57,12 @@ class Messager:
             # Not read by input() anymore
             res = self.fin.readline()
             if not res:
-                logger.debug('[TRACE]', "read nothing...")
+                logger.debug("[TRACE] read nothing...")
                 self.exit()
             if res[len(res) - 1] == '\n':
                 res = res[0:len(res)-1]
             self.message = res
-            logger.debug('[IN]', self.message)
+            logger.debug(f"[IN] {self.message}")
         except (EOFError, KeyboardInterrupt):
             self.exit()
         finally:
@@ -63,7 +79,7 @@ class Messager:
         Args:
             keep_format: True or False
         """
-        logger.debug('[OUT]', str(res))
+        logger.debug(f"[OUT] {str(res)}")
         if keep_format:
             res_str = str(res).replace('\n', '[LF]').replace('\r', '[CR]').replace(' ', '[SP]')
         else:
@@ -75,7 +91,7 @@ class Messager:
             self.fout.write(tag + res_str + "\n")
             self.fout.flush()
         except BrokenPipeError as err:
-            logger.info('[TRACE]', 'Write, ' + str(err))
+            logger.info(f"[TRACE] Write {str(err)}")
             self.exit()
         finally:
             pass
@@ -119,56 +135,6 @@ class Messager:
             All subclasses should override this interface.
         """
         raise NotImplementedError
-
-class Logger:
-    """
-    Replace dummy 'logger' to output log as below:
-    logger = Logger(0, True, "remote_kernel_build_" + time.strftime("%Y_%m_%d_%H_%M_%S", time.localtime()) + ".log")
-    """
-    def __init__(self, level=1, dumpfile=False, filename='Logger.log'):
-        """
-        Args:
-            level: 0 for debug and info, 1 for info
-            dumpfile: if dump log into file
-        """
-        self.level = level
-        self.dumpfile = dumpfile
-        if self.dumpfile:
-            self.log = open(filename, "a")
-
-    def write(self, msg):
-        self.log.write(msg)
-        self.flush()
-
-    def writeline(self, tag, msg):
-        prefix = tag + ' REMOTE(' + str(os.getpid()) + ',python)'
-        line = prefix + '\t' + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()) + ':\t' + msg
-        print(line, flush=True)
-        if self.dumpfile:
-            self.write(line + '\n')
-
-    def debug(self, tag, msg):
-        if self.level == 0:
-            self.writeline('[DEBUG]' + tag, msg)
-
-    def info(self, tag, msg):
-        self.writeline('[INFO]' + tag, msg)
-
-    def flush(self):
-        self.log.flush()
-
-class DummyLogger:
-    """DummyLogger"""
-    def __init__(self):
-        pass
-
-    def debug(self, tag, msg):
-        pass
-
-    def info(self, tag, msg):
-        pass
-
-logger = DummyLogger()
 
 def get_logger():
     return logger

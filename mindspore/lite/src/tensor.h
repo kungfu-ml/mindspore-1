@@ -27,6 +27,7 @@
 
 #include "src/common/log_adapter.h"
 #include "schema/model_generated.h"
+#include "src/common/utils.h"
 
 namespace mindspore {
 namespace lite {
@@ -50,6 +51,7 @@ class Tensor : public mindspore::tensor::MSTensor {
     CONST_SCALAR,  // weight scalar
     VAR,           // activation tensor
     GRAPH_INPUT,
+    GRAPH_OUTPUT,
   };
   Tensor() = default;
 
@@ -72,9 +74,9 @@ class Tensor : public mindspore::tensor::MSTensor {
 
   virtual bool operator==(const Tensor &tensor);
 
-  void set_tensor_name(std::string name) { tensor_name_ = name; }
+  void set_tensor_name(const std::string &name) override { tensor_name_ = name; }
 
-  std::string tensor_name() const { return tensor_name_; }
+  std::string tensor_name() const override { return tensor_name_; }
 
   TypeId data_type() const override { return data_type_; }
 
@@ -82,9 +84,9 @@ class Tensor : public mindspore::tensor::MSTensor {
 
   std::vector<int> shape() const override { return shape_; }
 
-  void set_shape(const std::vector<int> &shape) { shape_ = shape; }
+  void set_shape(const std::vector<int> &shape) override { shape_ = shape; }
 
-  int DimensionSize(size_t index) const override;
+  int DimensionSize(size_t index) const;
 
   int ElementsNum() const override;
 
@@ -100,15 +102,17 @@ class Tensor : public mindspore::tensor::MSTensor {
 
   size_t Size() const override;
 
-  void set_allocator(mindspore::lite::Allocator *allocator) { allocator_ = allocator; }
+  void set_allocator(mindspore::Allocator *allocator) { allocator_ = allocator; }
 
-  mindspore::lite::Allocator *allocator() const { return this->allocator_; }
+  mindspore::Allocator *allocator() const { return this->allocator_; }
 
-  virtual int MallocData(const mindspore::lite::Allocator *allocator = nullptr);
+  virtual int MallocData(const mindspore::Allocator *allocator = nullptr);
 
   virtual void FreeData();
 
   void *MutableData() override;
+
+  void *data() override { return this->data_; }
 
   virtual void *data_c() const {
     if (this->root_tensor_ != nullptr) {
@@ -117,7 +121,7 @@ class Tensor : public mindspore::tensor::MSTensor {
     return data_;
   }
 
-  virtual void set_data(void *data) { this->data_ = data; }
+  void set_data(void *data) override { this->data_ = data; }
 
   Category category() const { return this->category_; }
 
@@ -149,6 +153,10 @@ class Tensor : public mindspore::tensor::MSTensor {
 
   void set_quant_clusters(const std::vector<float> &clusters);
 
+  bool enable_huffman_code() const;
+
+  void set_enable_huffman_code(bool enable_huffman_code);
+
   virtual bool IsConst() const {
     return (this->category_ == CONST_TENSOR || this->category_ == CONST_SCALAR) && this->data_ != nullptr;
   }
@@ -156,6 +164,8 @@ class Tensor : public mindspore::tensor::MSTensor {
   bool IsScalar() const { return this->category_ == CONST_SCALAR && this->data_ != nullptr; }
 
   bool IsGraphInput() const { return this->category_ == GRAPH_INPUT; }
+
+  bool IsGraphOutput() const { return this->category_ == GRAPH_OUTPUT; }
 
   void Prepare() {
     if (allocator_ != nullptr) {
@@ -196,8 +206,9 @@ class Tensor : public mindspore::tensor::MSTensor {
   size_t init_ref_count_ = 0;
   std::vector<QuantArg> quant_params_;
   std::vector<float> quant_clusters_;
-  mindspore::lite::Allocator *allocator_ = nullptr;
+  mindspore::Allocator *allocator_ = nullptr;
   Tensor *root_tensor_ = nullptr;
+  bool enable_huffman_code_ = false;
 };
 
 inline size_t DataTypeSize(const TypeId type) {
@@ -236,9 +247,9 @@ inline size_t DataTypeSize(const TypeId type) {
   }
 }
 
-inline Tensor::Category TensorCategory(const schema::NodeType node_type, const size_t shape_num, const TypeId data_type,
+inline Tensor::Category TensorCategory(const int node_type, const size_t shape_num, const TypeId data_type,
                                        const size_t data_size) {
-  return (node_type == schema::NodeType::NodeType_ValueNode)
+  return (node_type == NodeType_ValueNode)
            ? (shape_num == 0 && data_size == DataTypeSize(data_type) ? Tensor::Category::CONST_SCALAR
                                                                      : Tensor::Category::CONST_TENSOR)
            : Tensor::Category::VAR;

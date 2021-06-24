@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 Data operations, will be used in train.py and eval.py
 """
 import os
+import cv2
+import numpy as np
 
 import mindspore.dataset as ds
 import mindspore.dataset.vision.c_transforms as C
@@ -23,9 +25,6 @@ from src.dataset_utils import lucky, noise_blur, noise_speckle, noise_gamma, noi
     shift_color, enhance_brightness, enhance_sharpness, enhance_contrast, enhance_color, gaussian_blur, \
     randcrop, resize, rdistort, rgeometry, rotate_about_center, whole_rdistort, warp_perspective, random_contrast, \
     unify_img_label
-
-import cv2
-import numpy as np
 
 cv2.setNumThreads(0)
 
@@ -139,9 +138,17 @@ def rotate_and_set_neg(img, label):
     label = label - 1
     img_rotate = np.rot90(img)
     img_rotate = np.rot90(img_rotate)
-    # return img_rotate, label
     return img_rotate, np.array(label).astype(np.int32)
 
+def crop_image(h_crop, w_crop):
+    def crop_fun(img):
+        return img[h_crop[0]:h_crop[1], w_crop[0]:w_crop[1], :]
+    return crop_fun
+
+def create_label(label=1):
+    def label_fun(img):
+        return img, np.array(label).astype(np.int32)
+    return label_fun
 
 def rotate(img, label):
     img_rotate = np.rot90(img)
@@ -165,13 +172,14 @@ def transform_image(img, label):
     return data.transpose((0, 3, 1, 2))[0], label
 
 
-def create_dataset_train(mindrecord_file_pos, config):
+def create_dataset_train(mindrecord_file_pos, config, dataset_name='ocr'):
     """
     create a train dataset
 
     Args:
         mindrecord_file_pos(string): mindrecord file for positive samples.
         config(dict): config of dataset.
+        dataset_name(string): name of dataset being used, e.g. 'fsns'.
 
     Returns:
         dataset
@@ -179,11 +187,15 @@ def create_dataset_train(mindrecord_file_pos, config):
     rank_size = int(os.getenv("RANK_SIZE", '1'))
     rank_id = int(os.getenv("RANK_ID", '0'))
     decode = C.Decode()
-
-    data_set = ds.MindDataset(mindrecord_file_pos, columns_list=["image", "label"], num_parallel_workers=4,
+    columns_list = ["image", "label"] if dataset_name != 'fsns' else ["image"]
+    data_set = ds.MindDataset(mindrecord_file_pos, columns_list=columns_list, num_parallel_workers=4,
                               num_shards=rank_size, shard_id=rank_id, shuffle=True)
     data_set = data_set.map(operations=decode, input_columns=["image"], num_parallel_workers=8)
-
+    if dataset_name == 'fsns':
+        data_set = data_set.map(operations=crop_image((0, 150), (0, 150)),
+                                input_columns=["image"], num_parallel_workers=8)
+        data_set = data_set.map(operations=create_label(), input_columns=["image"], output_columns=["image", "label"],
+                                column_order=["image", "label"], num_parallel_workers=8)
     augmentor = Augmentor(config.augment_severity, config.augment_prob)
     operation = augmentor.process
     data_set = data_set.map(operations=operation, input_columns=["image"],
@@ -217,7 +229,7 @@ def resize_image(img, label):
     return data.transpose((0, 3, 1, 2))[0], label
 
 
-def create_dataset_eval(mindrecord_file_pos, config):
+def create_dataset_eval(mindrecord_file_pos, config, dataset_name='ocr'):
     """
     create an eval dataset
 
@@ -226,16 +238,21 @@ def create_dataset_eval(mindrecord_file_pos, config):
         config(dict): config of dataset.
 
     Returns:
-        dataset
+        dataset with images upright
+        dataset with images 180-degrees rotated
     """
     rank_size = int(os.getenv("RANK_SIZE", '1'))
     rank_id = int(os.getenv("RANK_ID", '0'))
     decode = C.Decode()
-
-    data_set = ds.MindDataset(mindrecord_file_pos, columns_list=["image", "label"], num_parallel_workers=1,
+    columns_list = ["image", "label"] if dataset_name != 'fsns' else ["image"]
+    data_set = ds.MindDataset(mindrecord_file_pos, columns_list=columns_list, num_parallel_workers=1,
                               num_shards=rank_size, shard_id=rank_id, shuffle=False)
     data_set = data_set.map(operations=decode, input_columns=["image"], num_parallel_workers=8)
-
+    if dataset_name == 'fsns':
+        data_set = data_set.map(operations=crop_image((0, 150), (0, 150)),
+                                input_columns=["image"], num_parallel_workers=8)
+        data_set = data_set.map(operations=create_label(), input_columns=["image"], output_columns=["image", "label"],
+                                column_order=["image", "label"], num_parallel_workers=8)
     global image_height
     global image_width
     image_height = config.im_size_h
@@ -243,7 +260,12 @@ def create_dataset_eval(mindrecord_file_pos, config):
     data_set = data_set.map(operations=resize_image, input_columns=["image", "label"],
                             num_parallel_workers=config.work_nums,
                             python_multiprocessing=False)
+    dataset_lr, dataset_rl = data_set.split([0.5, 0.5])
+    dataset_rl = dataset_rl.map(operations=rotate_and_set_neg, input_columns=["image", "label"],
+                                num_parallel_workers=config.work_nums,
+                                python_multiprocessing=False)
     # apply batch operations
-    data_set = data_set.batch(1, drop_remainder=True)
+    dataset_lr = dataset_lr.batch(1, drop_remainder=True)
+    dataset_rl = dataset_rl.batch(1, drop_remainder=True)
 
-    return data_set
+    return dataset_lr, dataset_rl

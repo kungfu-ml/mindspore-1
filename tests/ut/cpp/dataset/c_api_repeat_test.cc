@@ -28,7 +28,7 @@ TEST_F(MindDataTestPipeline, TestRepeatSetNumWorkers) {
 
   std::string file_path = datasets_root_path_ + "/testTFTestAllTypes/test.data";
   std::shared_ptr<Dataset> ds = TFRecord({file_path});
-  ds = ds->SetNumWorkers(16);
+  ds = ds->SetNumWorkers(8);
   ds = ds->Repeat(32);
 
   // Create an iterator over the result of the above dataset
@@ -37,7 +37,7 @@ TEST_F(MindDataTestPipeline, TestRepeatSetNumWorkers) {
   ASSERT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -51,5 +51,4 @@ TEST_F(MindDataTestPipeline, TestRepeatSetNumWorkers) {
 
   // Manually terminate the pipeline
   iter->Stop();
-
 }

@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
 
 """Other operators."""
 import functools
+from mindspore.common import monad
 from .. import signature as sig
 from ..._checkparam import Validator as validator, Rel
 from ...common import dtype as mstype
@@ -37,6 +38,10 @@ class Assign(PrimitiveWithCheck):
     Outputs:
         Tensor, has the same type as original `variable`.
 
+    Raises:
+        TypeError: If `variable` is not a Parameter.
+        TypeError: If `value` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
 
@@ -54,16 +59,18 @@ class Assign(PrimitiveWithCheck):
         >>> net = Net()
         >>> output = net(x)
         >>> print(output)
-        Parameter (name=y)
+        Parameter (name=y, shape=(1,), dtype=Float32, requires_grad=True)
     """
     __mindspore_signature__ = (
         sig.make_sig('variable', sig.sig_rw.RW_WRITE, dtype=sig.sig_dtype.T),
-        sig.make_sig('value', dtype=sig.sig_dtype.T)
+        sig.make_sig('value', dtype=sig.sig_dtype.T),
+        sig.make_sig('u', default=monad.U, dtype=sig.sig_dtype.T1)
     )
 
     @prim_attr_register
     def __init__(self):
         self.init_prim_io_names(inputs=['ref', 'value'], outputs=['output'])
+        self.add_prim_attr('side_effect_mem', True)
 
     def check_dtype(self, variable, value):
         types = mstype.number_type + (mstype.bool_,)
@@ -76,12 +83,18 @@ class InplaceAssign(PrimitiveWithInfer):
     """
     Inplace assign `Parameter` with a value.
     This primitive can only use in graph kernel.
+
     Inputs:
         - **variable** (Parameter) - The `Parameter`.
         - **value** (Tensor) - The value to be assigned.
         - **depend** (Tensor) - The dependent tensor to keep this op connected in graph.
+
     Outputs:
         Tensor, has the same type as original `variable`.
+
+    Raises:
+        TypeError: If `value` or `depend` is not a Tensor.
+
     Examples:
         >>> class Net(nn.Cell):
         ...     def __init__(self):
@@ -108,6 +121,28 @@ class InplaceAssign(PrimitiveWithInfer):
     def infer_dtype(self, x, y, z):
         return z
 
+class Load(PrimitiveWithCheck):
+    """
+    Load `Parameter` to a value.
+
+    Inputs:
+        - **variable** (Parameter) - The `Parameter`.
+
+    Outputs:
+        Tensor - The loaded parameter tensor value.
+    """
+    __mindspore_signature__ = (
+        sig.make_sig('variable', sig.sig_rw.RW_READ, dtype=sig.sig_dtype.T),
+        sig.make_sig('u', dtype=sig.sig_dtype.T1)
+    )
+
+    @prim_attr_register
+    def __init__(self):
+        self.init_prim_io_names(inputs=['ref', 'u'], outputs=['output'])
+
+    def check_dtype(self, variable):
+        if variable != mstype.type_refkey:
+            validator.check_tensor_type_same({"variable": variable}, mstype.number_type, self.name)
 
 class BoundingBoxEncode(PrimitiveWithInfer):
     """
@@ -124,17 +159,21 @@ class BoundingBoxEncode(PrimitiveWithInfer):
     Outputs:
         Tensor, encoded bounding boxes.
 
+    Raises:
+        TypeError: If `means` or `stds` is not a tuple.
+        TypeError: If `anchor_box` or `groundtruth_box` is not a Tensor.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
     Examples:
-        >>> anchor_box = Tensor([[4, 1, 2, 1], [2, 2, 2, 3]], mindspore.float32)
-        >>> groundtruth_box = Tensor([[3, 1, 2, 2], [1, 2, 1, 4]], mindspore.float32)
+        >>> anchor_box = Tensor([[2, 2, 2, 3], [2, 2, 2, 3]], mindspore.float32)
+        >>> groundtruth_box = Tensor([[1, 2, 1, 4], [1, 2, 1, 4]], mindspore.float32)
         >>> boundingbox_encode = ops.BoundingBoxEncode(means=(0.0, 0.0, 0.0, 0.0), stds=(1.0, 1.0, 1.0, 1.0))
         >>> output = boundingbox_encode(anchor_box, groundtruth_box)
         >>> print(output)
-        [[ 5.0000000e-01  5.0000000e-01 -6.5504000e+04  6.9335938e-01]
-         [-1.0000000e+00  2.5000000e-01  0.0000000e+00  4.0551758e-01]]
+        [[ -1.  0.25  0.  0.40551758]
+         [ -1.  0.25  0.  0.40551758]]
     """
 
     @prim_attr_register
@@ -179,6 +218,11 @@ class BoundingBoxDecode(PrimitiveWithInfer):
 
     Outputs:
         Tensor, decoded boxes.
+
+    Raises:
+        TypeError: If `means`, `stds` or `max_shape` is not a tuple.
+        TypeError: If `wh_ratio_clip` is not a float.
+        TypeError: If `anchor_box` or `deltas` is not a Tensor.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -237,6 +281,10 @@ class CheckValid(PrimitiveWithInfer):
 
     Outputs:
         Tensor, with shape of (N,) and dtype of bool.
+
+    Raises:
+        TypeError: If `bboxes` or `img_metas` is not a Tensor.
+        TypeError: If dtype of `bboxes` or `img_metas` is neither float16 nor float32.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -343,55 +391,6 @@ class IOU(PrimitiveWithInfer):
         return anchor_boxes
 
 
-class MakeRefKey(Primitive):
-    """
-    Makes a RefKey instance by string. RefKey stores the name of Parameter, can be passed through the functions,
-    and used for Assign target.
-
-    Args:
-        tag (str): Parameter name to make the RefKey.
-
-    Inputs:
-        No inputs.
-
-    Outputs:
-        RefKeyType, made from the Parameter name.
-
-    Supported Platforms:
-        ``Ascend`` ``GPU`` ``CPU``
-
-    Examples:
-        >>> import numpy as np
-        >>> from mindspore import Parameter, Tensor
-        >>> from mindspore import dtype as mstype
-        >>> import mindspore.ops as ops
-        >>> class Net(nn.Cell):
-        ...     def __init__(self):
-        ...         super(Net, self).__init__()
-        ...         self.y = Parameter(Tensor(np.ones([2, 3]), mstype.int32), name="y")
-        ...         self.make_ref_key = ops.MakeRefKey("y")
-        ...
-        ...     def construct(self, x):
-        ...         key = self.make_ref_key()
-        ...         ref = ops.make_ref(key, x, self.y)
-        ...         return ref * x
-        ...
-        >>> x = Tensor(np.array([[1, 2, 3], [4, 5, 6]]), mindspore.int32)
-        >>> net = Net()
-        >>> output = net(x)
-        >>> print(output)
-        [[ 1  4  9]
-         [16 25 36]]
-    """
-
-    @prim_attr_register
-    def __init__(self, tag):
-        validator.check_value_type('tag', tag, (str,), self.name)
-
-    def __call__(self):
-        pass
-
-
 class Partial(Primitive):
     """
     Makes a partial function instance, used for pynative mode.
@@ -403,9 +402,12 @@ class Partial(Primitive):
         FunctionType, partial function binded with arguments.
     """
 
+    # Side effect will propagated from the first argument to return value.
+    side_effect_propagate = 1
+
     @prim_attr_register
     def __init__(self):
-        pass
+        self.add_prim_attr('side_effect_propagate', 1)
 
     def __call__(self, *args):
         func = args[0].__call__
@@ -415,10 +417,17 @@ class Partial(Primitive):
 
 class Depend(Primitive):
     """
-    Depend is used for processing side-effect operations.
+    Depend is used for processing dependency operations.
 
-    Note:
-        Internal API, not for public use.
+    In most scenarios, if operators have IO side effects or memory side effects,
+    they will be executed according to the user's semantics. In some scenarios,
+    if the two operators A and B have no order dependency, and A must be executed
+    before B, we recommend using Depend to specify their execution order. The
+    usage method is as follows::
+
+        a = A(x)                --->        a = A(x)
+        b = B(y)                --->        y = Depend(y, a)
+                                --->        b = B(y)
 
     Inputs:
         - **value** (Tensor) - the real value to return for depend operator.
@@ -429,22 +438,68 @@ class Depend(Primitive):
 
     Supported Platforms:
         ``Ascend`` ``GPU`` ``CPU``
+
+    Examples:
+        >>> import numpy as np
+        >>> import mindspore
+        >>> import mindspore.nn as nn
+        >>> import mindspore.ops.operations as P
+        >>> from mindspore import Tensor
+        >>> class Net(nn.Cell):
+        ...     def __init__(self):
+        ...         super(Net, self).__init__()
+        ...         self.softmax = P.Softmax()
+        ...         self.depend = P.Depend()
+        ...
+        ...     def construct(self, x, y):
+        ...         mul = x * y
+        ...         y = self.depend(y, mul)
+        ...         ret = self.softmax(y)
+        ...         return ret
+        ...
+        >>> x = Tensor(np.ones([4, 5]), dtype=mindspore.float32)
+        >>> y = Tensor(np.ones([4, 5]), dtype=mindspore.float32)
+        >>> net = Net()
+        >>> output = net(x, y)
+        >>> print(output)
+        [[0.2 0.2 0.2 0.2 0.2]
+         [0.2 0.2 0.2 0.2 0.2]
+         [0.2 0.2 0.2 0.2 0.2]
+         [0.2 0.2 0.2 0.2 0.2]]
+    """
+
+    # Side effect will propagated from the first argument to return value.
+    side_effect_propagate = 1
+
+    @prim_attr_register
+    def __init__(self):
+        self.add_prim_attr('side_effect_propagate', 1)
+
+    def __call__(self, value, expr):
+        return value
+
+class UpdateState(Primitive):
+    """
+    UpdateState is used for update side-effect state.
+
+    Inputs:
+        - **value** (State) - the state value to be updated.
+        - **expr** (Expression) - the expression to evaluate before state changes.
+
+    Outputs:
+        State, the updated state value.
     """
 
     @prim_attr_register
     def __init__(self):
         pass
 
-    def __call__(self, value, expr):
-        return value
-
+    def __call__(self, state, expr):
+        return state
 
 class CheckBprop(PrimitiveWithInfer):
     """
     Checks whether the data type and the shape of corresponding elements from tuples x and y are the same.
-
-    Raises:
-        TypeError: If tuples x and y are not the same.
 
     Inputs:
         - **input_x** (tuple[Tensor]) - The `input_x` contains the outputs of bprop to be checked.
@@ -453,6 +508,9 @@ class CheckBprop(PrimitiveWithInfer):
     Outputs:
         (tuple[Tensor]), the `input_x`,
         if data type and shape of corresponding elements from `input_x` and `input_y` are the same.
+
+    Raises:
+        TypeError: If `input_x` or `input_y` is not a Tensor.
 
     Examples:
         >>> input_x = (Tensor(np.array([[2, 2], [2, 2]]), mindspore.float32),)
@@ -524,6 +582,11 @@ class ConfusionMatrix(PrimitiveWithInfer):
     Outputs:
         Tensor, the confusion matrix, with shape (`num_classes`, `num_classes`).
 
+    Raises:
+        TypeError: If `num_classes` is not an int.
+        TypeError: If `dtype` is not a str.
+        TypeError: If `labels`, `predictions` or weight` is not a Tensor.
+
     Examples:
         >>> confusion_matrix = ops.ConfusionMatrix(4)
         >>> labels = Tensor([0, 1, 1, 3], mindspore.int32)
@@ -567,7 +630,10 @@ class PopulationCount(PrimitiveWithInfer):
         - **input** (Tensor) -  The data type must be int16 or uint16.
 
     Outputs:
-        Tensor, with the sam  shape as the input.
+        Tensor, with the same shape as the input.
+
+    Raises:
+        TypeError: If `input` is not a Tensor.
 
     Supported Platforms:
         ``Ascend``
@@ -659,9 +725,12 @@ class identity(Primitive):
         The same as input.
     """
 
+    # Side effect will propagated from the first argument to return value.
+    side_effect_propagate = 1
+
     @prim_attr_register
     def __init__(self):
-        pass
+        self.add_prim_attr('side_effect_propagate', 1)
 
     def __call__(self, x):
         return x

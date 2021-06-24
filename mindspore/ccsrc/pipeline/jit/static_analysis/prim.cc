@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,14 +46,14 @@ namespace mindspore {
 namespace abstract {
 using mindspore::parse::PyObjectWrapper;
 
-std::unordered_set<std::string> prims_to_skip_undetermined_infer{"make_tuple", "make_list", "switch", "env_setitem",
-                                                                 "env_getitem"};
+std::unordered_set<std::string> prims_to_skip_undetermined_infer{
+  "MakeTuple", "make_list", "Switch", "env_setitem", "env_getitem", "Load", "UpdateState"};
 
 EvalResultPtr DoSignatureEvaluator::Run(AnalysisEnginePtr engine, const ConfigPtrList &args_conf_list,
                                         AnfNodeConfigPtr out_conf) {
   AbstractBasePtrList args_spec_list;
   (void)std::transform(args_conf_list.begin(), args_conf_list.end(), std::back_inserter(args_spec_list),
-                       [](const ConfigPtr &ref) -> AbstractBasePtr { return ref->GetEvaluatedValue()->abstract(); });
+                       [](const ConfigPtr &ref) -> AbstractBasePtr { return ref->ObtainEvalResult()->abstract(); });
   auto do_signature = prim_->cast<prim::DoSignaturePrimitivePtr>();
   auto &func = do_signature->function();
   if (func->isa<Primitive>()) {
@@ -145,7 +145,7 @@ EvalResultPtr UnpackGraphEvaluator::Run(AnalysisEnginePtr engine, const ConfigPt
   AnfNodePtrList args_inputs{out_node_inputs.begin() + 1, out_node_inputs.end()};
   AbstractBasePtrList args_spec_list;
   (void)std::transform(args_conf_list.begin(), args_conf_list.end(), std::back_inserter(args_spec_list),
-                       [](const ConfigPtr &ref) -> AbstractBasePtr { return ref->GetEvaluatedValue()->abstract(); });
+                       [](const ConfigPtr &ref) -> AbstractBasePtr { return ref->ObtainEvalResult()->abstract(); });
   // get the forward graph
   MS_EXCEPTION_IF_NULL(args_spec_list[0]);
   auto fn = args_spec_list[0]->cast<AbstractFunctionPtr>();
@@ -187,7 +187,7 @@ AnfNodePtr MixedPrecisionCastHelper(const AnfNodePtr &source_node, const Abstrac
     if (x->element()->BuildType()->isa<Float>()) {
       auto cast = prim::GetPythonOps("cast", "mindspore.ops.functional");
       MS_EXCEPTION_IF_NULL(cast);
-      target_node = func_graph->NewCNode({NewValueNode(cast), source_node, target_type});
+      target_node = func_graph->NewCNodeAfter(source_node, {NewValueNode(cast), source_node, target_type});
     }
   } else if (node_type->isa<AbstractTuple>()) {
     auto x = node_type->cast<AbstractTuplePtr>();
@@ -244,7 +244,7 @@ EvalResultPtr MixedPrecisionCastEvaluator::Run(AnalysisEnginePtr engine, const C
                       << ", inputs size " << out_node_inputs.size();
   }
   (void)std::transform(args_conf_list.begin(), args_conf_list.end(), std::back_inserter(args_spec_list),
-                       [](const ConfigPtr &ref) -> AbstractBasePtr { return ref->GetEvaluatedValue()->abstract(); });
+                       [](const ConfigPtr &ref) -> AbstractBasePtr { return ref->ObtainEvalResult()->abstract(); });
 
   ScopePtr scope = kDefaultScope;
   if (out_conf != nullptr) {
@@ -278,7 +278,6 @@ py::dict AbstractTupleToPython(const AbstractBasePtr &abs_base) {
   py::tuple max_value_tuple(len);
   py::tuple min_shape_tuple(len);
   py::tuple max_shape_tuple(len);
-  auto dic = py::dict();
   bool dyn_shape = false;
   bool dyn_value = false;
 
@@ -303,7 +302,7 @@ py::dict AbstractTupleToPython(const AbstractBasePtr &abs_base) {
       dyn_shape = true;
     }
   }
-
+  auto dic = py::dict();
   dic[ATTR_SHAPE] = shape_tuple;
   dic[ATTR_DTYPE] = dtype_tuple;
   if (arg_tuple->BuildValue()->isa<AnyValue>()) {
@@ -332,7 +331,6 @@ py::dict AbstractListToPython(const AbstractBasePtr &abs_base) {
   py::list value_list(len);
   py::list min_shape_list(len);
   py::list max_shape_list(len);
-  auto dic = py::dict();
   bool dyn_shape = false;
 
   for (size_t i = 0; i < len; i++) {
@@ -348,7 +346,7 @@ py::dict AbstractListToPython(const AbstractBasePtr &abs_base) {
       dyn_shape = true;
     }
   }
-
+  auto dic = py::dict();
   dic[ATTR_SHAPE] = shape_list;
   dic[ATTR_DTYPE] = dtype_list;
   if (arg_list->BuildValue()->isa<AnyValue>()) {
@@ -364,32 +362,52 @@ py::dict AbstractListToPython(const AbstractBasePtr &abs_base) {
 
   return dic;
 }
+
+void ConvertAbstractTensorToPython(const AbstractBasePtr &abs_base, py::dict *dic) {
+  auto arg_tensor = dyn_cast<AbstractTensor>(abs_base);
+  (*dic)[ATTR_SHAPE] = arg_tensor->shape()->shape();
+  if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) == kGraphMode) {
+    const auto &min_shape = arg_tensor->shape()->min_shape();
+    const auto &max_shape = arg_tensor->shape()->max_shape();
+    if (!min_shape.empty() && !max_shape.empty()) {
+      (*dic)[ATTR_MIN_SHAPE] = min_shape;
+      (*dic)[ATTR_MAX_SHAPE] = max_shape;
+    }
+  }
+
+  auto min_value = arg_tensor->get_min_value();
+  auto max_value = arg_tensor->get_max_value();
+  if (min_value != nullptr && max_value != nullptr) {
+    (*dic)[ATTR_MIN_VALUE] = BuildValue(min_value);
+    (*dic)[ATTR_MAX_VALUE] = BuildValue(max_value);
+  }
+
+  (*dic)[ATTR_DTYPE] = arg_tensor->BuildType();
+  (*dic)[ATTR_VALUE] = BuildValue(arg_tensor->BuildValue());
+}
+
+void ConvertAbstractFunctionToPython(const AbstractBasePtr &abs_base, py::dict *dic) {
+  (*dic)[ATTR_SHAPE] = py::none();
+  (*dic)[ATTR_DTYPE] = abs_base->BuildType();
+  (*dic)[ATTR_VALUE] = py::none();
+  if (abs_base->isa<PartialAbstractClosure>()) {
+    AbstractBasePtrList args = abs_base->cast<PartialAbstractClosurePtr>()->args();
+    if (!args.empty()) {
+      auto value = args[0]->BuildValue()->cast<parse::ClassTypePtr>();
+      if (value != nullptr) {
+        (*dic)[ATTR_DTYPE] = std::make_shared<TypeType>();
+        (*dic)[ATTR_VALUE] = value->obj();
+      }
+    }
+  }
+}
 }  // end anonymous namespace
 
 py::dict ConvertAbstractToPython(const AbstractBasePtr &abs_base) {
   MS_EXCEPTION_IF_NULL(abs_base);
   auto dic = py::dict();
   if (abs_base->isa<AbstractTensor>()) {
-    auto arg_tensor = dyn_cast<AbstractTensor>(abs_base);
-    dic[ATTR_SHAPE] = arg_tensor->shape()->shape();
-    if (MsContext::GetInstance()->get_param<int>(MS_CTX_EXECUTION_MODE) == kGraphMode) {
-      const auto &min_shape = arg_tensor->shape()->min_shape();
-      const auto &max_shape = arg_tensor->shape()->max_shape();
-      if (!min_shape.empty() && !max_shape.empty()) {
-        dic[ATTR_MIN_SHAPE] = min_shape;
-        dic[ATTR_MAX_SHAPE] = max_shape;
-      }
-    }
-
-    auto min_value = arg_tensor->get_min_value();
-    auto max_value = arg_tensor->get_max_value();
-    if (min_value != nullptr && max_value != nullptr) {
-      dic[ATTR_MIN_VALUE] = BuildValue(min_value);
-      dic[ATTR_MAX_VALUE] = BuildValue(max_value);
-    }
-
-    dic[ATTR_DTYPE] = arg_tensor->BuildType();
-    dic[ATTR_VALUE] = BuildValue(arg_tensor->BuildValue());
+    ConvertAbstractTensorToPython(abs_base, &dic);
   } else if (abs_base->isa<AbstractRowTensor>()) {
     auto arg = dyn_cast<AbstractRowTensor>(abs_base);
     dic[ATTR_SHAPE] = arg->shape()->shape();
@@ -424,23 +442,15 @@ py::dict ConvertAbstractToPython(const AbstractBasePtr &abs_base) {
     dic[ATTR_DTYPE] = py::none();
     dic[ATTR_VALUE] = py::none();
   } else if (abs_base->isa<AbstractFunction>()) {
-    dic[ATTR_SHAPE] = py::none();
-    dic[ATTR_DTYPE] = abs_base->BuildType();
-    dic[ATTR_VALUE] = py::none();
-    if (abs_base->isa<PartialAbstractClosure>()) {
-      AbstractBasePtrList args = abs_base->cast<PartialAbstractClosurePtr>()->args();
-      if (!args.empty()) {
-        auto value = args[0]->BuildValue()->cast<parse::ClassTypePtr>();
-        if (value != nullptr) {
-          dic[ATTR_DTYPE] = std::make_shared<TypeType>();
-          dic[ATTR_VALUE] = value->obj();
-        }
-      }
-    }
+    ConvertAbstractFunctionToPython(abs_base, &dic);
   } else if (abs_base->isa<AbstractUndetermined>()) {
     auto arg = dyn_cast<AbstractUndetermined>(abs_base);
     dic[ATTR_SHAPE] = py::none();
     dic[ATTR_DTYPE] = arg->BuildType();
+    dic[ATTR_VALUE] = py::none();
+  } else if (abs_base->isa<AbstractMonad>()) {
+    dic[ATTR_SHAPE] = py::none();
+    dic[ATTR_DTYPE] = abs_base->BuildType();
     dic[ATTR_VALUE] = py::none();
   } else {
     auto value = abs_base->BuildValue();
@@ -472,8 +482,10 @@ py::tuple PreparePyInputs(const PrimitivePyPtr &prim_py, const AbstractBasePtrLi
     args_ptr = &args;
   }
 
-  py::tuple py_args(args_ptr->size());
-  for (size_t i = 0; i < args_ptr->size(); i++) {
+  // The monad parameter is defined at the end of the parameter and needs to be ignored
+  std::size_t size_args = args_ptr->size() - GetAbstractMonadNum(*args_ptr);
+  py::tuple py_args(size_args);
+  for (size_t i = 0; i < size_args; i++) {
     auto arg_i = (*args_ptr)[i];
     py_args[i] = ConvertAbstractToPython(arg_i);
   }
@@ -582,7 +594,8 @@ EvalResultPtr StandardPrimEvaluator::EvalPrim(const AnalysisEnginePtr &engine, c
   AbstractBasePtr abs_base = eval_impl_(engine, prim_, args);
   prim_->EndRecordAddAttr();
   auto added_attrs = prim_->evaluate_added_attrs();
-  return std::make_shared<EvalResult>(abs_base, std::make_shared<AttrValueMap>(added_attrs));
+  auto eval_result = std::make_shared<EvalResult>(abs_base, std::make_shared<AttrValueMap>(added_attrs));
+  return eval_result;
 }
 
 EvalResultPtr PythonPrimEvaluator::EvalPrim(const AnalysisEnginePtr &, const AbstractBasePtrList &args) {
@@ -593,8 +606,8 @@ EvalResultPtr PythonPrimEvaluator::EvalPrim(const AnalysisEnginePtr &, const Abs
   }
   MS_LOG(DEBUG) << "Eval for:" << prim_py_->ToString();
 
-  const auto &iter = cache_->find(args);
-  if (iter != cache_->end()) {
+  const auto &iter = evaluator_cache_map_->find(args);
+  if (iter != evaluator_cache_map_->end()) {
     return iter->second;
   }
   auto py_args = PreparePyInputs(prim_py_, args);
@@ -607,7 +620,7 @@ EvalResultPtr PythonPrimEvaluator::EvalPrim(const AnalysisEnginePtr &, const Abs
 
   MS_LOG(DEBUG) << "Python InferTensor result spec: " << res_spec->ToString() << ".";
   auto infer_result = std::make_shared<EvalResult>(res_spec, std::make_shared<AttrValueMap>(added_attrs));
-  (*cache_)[args] = infer_result;
+  (*evaluator_cache_map_)[args] = infer_result;
   return infer_result;
 }
 
@@ -800,12 +813,16 @@ EvalResultPtr GetEvaluatedValueForNameSpaceString(const AnalysisEnginePtr &engin
   // item_name to func addr from obj_map
   parse::SymbolPtr symbol = item_v->cast<parse::SymbolPtr>();
   parse::NameSpacePtr name_space = data_v->cast<parse::NameSpacePtr>();
-  FuncGraphPtr func_graph = out_conf->node()->func_graph();
+  auto out_node = out_conf->node();
+  FuncGraphPtr func_graph = out_node->func_graph();
 
-  auto new_node = parse::ResolveSymbol(func_graph->manager(), name_space, symbol, out_conf->node());
+  auto new_node = parse::ResolveSymbol(func_graph->manager(), name_space, symbol, out_node);
   if (new_node == nullptr) {
     MS_LOG(EXCEPTION) << "Resolve node failed";
   }
+
+  // Replace old node with the resolved new node in order list.
+  func_graph->ReplaceInOrder(out_node, new_node);
 
   AnalysisEnginePtr eng = out_conf->engine();
   AnfNodeConfigPtr fn_conf = eng->MakeConfig(new_node, out_conf->context());
@@ -925,7 +942,7 @@ class EmbedEvaluator : public SymbolicPrimEvaluator {
     AnfNodeConfigPtr node_conf = dyn_cast<AnfNodeConfig>(args_conf_list[0]);
     MS_EXCEPTION_IF_NULL(node_conf);
 
-    AbstractBasePtr x = node_conf->GetEvaluatedValue()->abstract();
+    AbstractBasePtr x = node_conf->ObtainEvalResult()->abstract();
     x = SensitivityTransform(x);
     SymbolicKeyInstancePtr key = std::make_shared<SymbolicKeyInstance>(node_conf->node(), x);
     AbstractScalarPtr abs_scalar = std::make_shared<AbstractScalar>(key, std::make_shared<SymbolicKeyType>());
@@ -965,7 +982,7 @@ class RefToEmbedEvaluator : public SymbolicPrimEvaluator {
       MS_LOG(ERROR) << "Conf should be AnfNodeConfig";
       return nullptr;
     }
-    AbstractBasePtr abs = node_conf->GetEvaluatedValue()->abstract();
+    AbstractBasePtr abs = node_conf->ObtainEvalResult()->abstract();
     AbstractRefPtr ref_abs = abs->cast<AbstractRefPtr>();
     if (ref_abs == nullptr) {
       MS_LOG(ERROR) << "The first parameter of RefToEmbed should be Ref, but " << abs->ToString();
@@ -1029,7 +1046,7 @@ class GetAttrEvaluator : public TransitionPrimEvaluator {
     }
     // don't lookup from cache, as different out_conf with same node but different context
     // may add different entry to anfnode_config_map, like getattr primitive;
-    (*cache_)[args_spec_list] = ret;
+    (*evaluator_cache_map_)[args_spec_list] = ret;
     return ret;
   }
 };
@@ -1114,8 +1131,8 @@ class CreateInstanceEvaluator : public TransitionPrimEvaluator {
     }
 
     AbstractBasePtr ret = ToAbstract(converted_ret, AnalysisContext::DummyContext(), out_conf);
-    auto infer_result = std::make_shared<EvalResult>(ret, nullptr);
-    (*cache_)[args_spec_list] = infer_result;
+    auto infer_result = std::make_shared<EvalResult>(ret, std::make_shared<AttrValueMap>());
+    (*evaluator_cache_map_)[args_spec_list] = infer_result;
     return infer_result;
   }
 
@@ -1150,7 +1167,7 @@ class PartialEvaluator : public Evaluator {
 
     MS_EXCEPTION_IF_NULL(out_conf);
     MS_EXCEPTION_IF_NULL(out_conf->node());
-    auto arg0_value = args_conf_list[0]->GetEvaluatedValue()->abstract();
+    auto arg0_value = args_conf_list[0]->ObtainEvalResult()->abstract();
     AbstractBasePtrList args_spec_list{arg0_value};
     // Func in hypermap(partial(Func, arg0), arg1, arg2) may become Poly Node.
     if (arg0_value->isa<AbstractError>()) {
@@ -1158,7 +1175,7 @@ class PartialEvaluator : public Evaluator {
       MS_LOG(DEBUG) << "AbstractError for node: " << out_conf->node()->DebugString()
                     << " as func is: " << arg0_value->ToString();
       auto eval_result = std::make_shared<EvalResult>(ret, std::make_shared<AttrValueMap>());
-      (*cache_)[args_spec_list] = eval_result;
+      (*evaluator_cache_map_)[args_spec_list] = eval_result;
       return eval_result;
     }
     auto func = CheckArg<AbstractFunction>("partial", args_spec_list, 0);
@@ -1173,7 +1190,7 @@ class PartialEvaluator : public Evaluator {
 
     (void)std::transform(
       args_conf_list.begin() + 1, args_conf_list.end(), std::back_inserter(args_spec_list),
-      [](const ConfigPtr &config) -> AbstractBasePtr { return config->GetEvaluatedValue()->abstract(); });
+      [](const ConfigPtr &config) -> AbstractBasePtr { return config->ObtainEvalResult()->abstract(); });
     AbstractBasePtrList args(args_spec_list.begin() + 1, args_spec_list.end());
 
     auto cnode = out_conf->node()->cast<CNodePtr>();
@@ -1182,7 +1199,6 @@ class PartialEvaluator : public Evaluator {
       MS_LOG(EXCEPTION) << "Out_conf node: " << cnode->DebugString()
                         << ", args_conf_list: " << mindspore::ToString(args_conf_list);
     }
-
     AbstractFuncAtomPtrList partial_funcs_list;
     auto build_partial = [args, cnode, &partial_funcs_list](const AbstractFuncAtomPtr &atom_func) {
       auto new_func = std::make_shared<PartialAbstractClosure>(atom_func, args, cnode);
@@ -1191,9 +1207,9 @@ class PartialEvaluator : public Evaluator {
     func->Visit(build_partial);
 
     auto ret = AbstractFunction::MakeAbstractFunction(partial_funcs_list);
-    auto infer_result = std::make_shared<EvalResult>(ret, std::make_shared<AttrValueMap>());
-    (*cache_)[args_spec_list] = infer_result;
-    return infer_result;
+    auto eval_result = std::make_shared<EvalResult>(ret, std::make_shared<AttrValueMap>());
+    (*evaluator_cache_map_)[args_spec_list] = eval_result;
+    return eval_result;
   }
 
   EvalResultPtr Eval(AnalysisEnginePtr, const AbstractBasePtrList &) override {
@@ -1299,15 +1315,6 @@ bool IsInWhiteList(const PrimitivePtr &primitive) {
   }
 
   return false;
-}
-
-StandardPrimitiveEvalImpl GetPrimitiveInferImpl(const PrimitivePtr &primitive) {
-  MS_EXCEPTION_IF_NULL(primitive);
-  auto iter = GetPrimitiveToEvalImplMap().find(primitive);
-  if (iter == GetPrimitiveToEvalImplMap().end()) {
-    return nullptr;
-  }
-  return iter->second.impl_;
 }
 
 PrimEvaluatorMap &GetPrimEvaluatorConstructors() {

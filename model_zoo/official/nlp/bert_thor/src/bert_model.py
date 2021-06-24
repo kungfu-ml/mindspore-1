@@ -28,7 +28,6 @@ from mindspore.common.tensor import Tensor
 from mindspore.ops import composite as C
 from mindspore.ops import operations as P
 from .config import cfg
-from .fused_layer_norm import FusedLayerNorm
 from .lr_generator import get_bert_damping
 from .thor_layer import Dense_Thor, Embedding_Thor
 
@@ -139,7 +138,7 @@ class EmbeddingLookup(nn.Cell):
                                           [vocab_size, embedding_size]))
         self.expand = P.ExpandDims()
         self.shape_flat = (-1,)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.one_hot = P.OneHot()
         self.on_value = Tensor(1.0, mstype.float32)
         self.off_value = Tensor(0.0, mstype.float32)
@@ -211,7 +210,7 @@ class EmbeddingPostprocessor(nn.Cell):
         self.reshape = P.Reshape()
         self.shape = tuple(embedding_shape)
         self.dropout = nn.Dropout(1 - dropout_prob)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.use_relative_positions = use_relative_positions
         self.slice = P.StridedSlice()
         _, seq, width = self.shape
@@ -228,7 +227,7 @@ class EmbeddingPostprocessor(nn.Cell):
             frequency=frequency)
         self.position_ids = Tensor(np.arange(seq).reshape(-1, seq).astype(np.int32))
         self.layernorm = nn.LayerNorm((embedding_size,))
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, token_type_ids, word_embeddings):
         """construct of EmbeddingPostprocessor"""
@@ -276,12 +275,8 @@ class BertOutput(nn.Cell):
                                 batch_size=batch_size).to_float(compute_type)
         self.dropout = nn.Dropout(1 - dropout_prob)
         self.dropout_prob = dropout_prob
-        self.add = P.TensorAdd()
-        if compute_type == mstype.float16:
-            self.layernorm = FusedLayerNorm((out_channels,),
-                                            use_batch_norm=enable_fused_layernorm).to_float(compute_type)
-        else:
-            self.layernorm = nn.LayerNorm((out_channels,)).to_float(compute_type)
+        self.add = P.Add()
+        self.layernorm = nn.LayerNorm((out_channels,)).to_float(compute_type)
         self.cast = P.Cast()
 
     def construct(self, hidden_status, input_tensor):
@@ -367,7 +362,7 @@ class RelaPosEmbeddingsGenerator(nn.Cell):
         self.reshape = P.Reshape()
         self.one_hot = nn.OneHot(depth=self.vocab_size)
         self.shape = P.Shape()
-        self.gather = P.GatherV2()  # index_select
+        self.gather = P.Gather()  # index_select
         self.matmul = P.BatchMatMul()
 
     def construct(self):
@@ -527,7 +522,7 @@ class BertAttention(nn.Cell):
         if self.has_attention_mask:
             self.expand_dims = P.ExpandDims()
             self.sub = P.Sub()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.cast = P.Cast()
             self.get_dtype = P.DType()
         if do_return_2d_tensor:

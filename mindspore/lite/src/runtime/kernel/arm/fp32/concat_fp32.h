@@ -18,7 +18,7 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-#include "nnacl/fp32/concat_fp32.h"
+#include "nnacl/base/concat_base.h"
 #include "nnacl/concat_parameter.h"
 #include "include/errorcode.h"
 #include "src/runtime/runtime_api.h"
@@ -31,9 +31,8 @@ namespace mindspore::kernel {
 class ConcatCPUKernel : public LiteKernel {
  public:
   ConcatCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                  const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                  const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                  const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     concat_param_ = reinterpret_cast<ConcatParameter *>(op_parameter_);
   }
 

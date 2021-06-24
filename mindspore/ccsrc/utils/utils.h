@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,10 +30,15 @@
 
 namespace mindspore {
 // op name. Op which not exists in operator/ops.h, so define it's name here
+constexpr auto kConcatOpName = "Concat";
 constexpr auto kUniqueOpName = "Unique";
 constexpr auto kComputeAccidentalHitsOpName = "ComputeAccidentalHits";
+constexpr auto kCTCGreedyDecoderOpName = "CTCGreedyDecoder";
 constexpr auto kFour2FiveOpName = "Four2Five";
 constexpr auto kFive2FourOpName = "Five2Four";
+constexpr auto kConv3DOpName = "Conv3D";
+constexpr auto kConv3DBackpropFilterOpName = "Conv3DBackpropFilter";
+constexpr auto kConv3DBackpropInputOpName = "Conv3DBackpropInput";
 constexpr auto kConv2DOpName = "Conv2D";
 constexpr auto kConvBN1OpName = "ConvBN1";
 constexpr auto kBN2AddReluOpName = "BN2AddRelu";
@@ -45,15 +50,16 @@ constexpr auto kFusedBN3OpName = "FusedBN3";
 constexpr auto kBNGrad1OpName = "BNGrad1";
 constexpr auto kBNGrad2OpName = "BNGrad2";
 constexpr auto kBNGrad3OpName = "BNGrad3";
-constexpr auto kFusedBatchNormEx = "FusedBatchNormEx";
-constexpr auto kFusedBatchNormExWithActivation = "FusedBatchNormExWithActivation";
-constexpr auto kFusedBatchNormExWithAddAndActivation = "FusedBatchNormExWithAddAndActivation";
-constexpr auto kFusedBatchNormGradEx = "FusedBatchNormGradEx";
-constexpr auto kFusedBatchNormGradExWithActivation = "FusedBatchNormGradExWithActivation";
-constexpr auto kFusedBatchNormGradExWithAddAndActivation = "FusedBatchNormGradExWithAddAndActivation";
+constexpr auto kBatchNorm = "BatchNorm";
+constexpr auto kInstanceNorm = "InstanceNorm";
+constexpr auto kBatchNormWithActivation = "BatchNormWithActivation";
+constexpr auto kBatchNormWithAddAndActivation = "BatchNormWithAddAndActivation";
+constexpr auto kBatchNormGradWithActivation = "BatchNormGradWithActivation";
+constexpr auto kBatchNormGradWithAddAndActivation = "BatchNormGradWithAddAndActivation";
 constexpr auto kClearZeroOpName = "ClearZero";
 constexpr auto kAtomicAddrCleanOpName = "AtomicAddrClean";
 constexpr auto kGetNextOpName = "GetNext";
+constexpr auto kInitDatasetQueueOpName = "InitDataSetQueue";
 constexpr auto kEndOfSequence = "EndOfSequence";
 constexpr auto kAllReduceOpName = "AllReduce";
 constexpr auto kAllGatherOpName = "AllGather";
@@ -80,7 +86,7 @@ constexpr auto kScatterNdOpName = "ScatterNd";
 constexpr auto kStridedSliceAssignOpName = "StridedSliceAssign";
 constexpr auto kStridedSliceOpName = "StridedSlice";
 constexpr auto kStridedSliceGradOpName = "StridedSliceGrad";
-constexpr auto kSparseGatherV2 = "SparseGatherV2";
+constexpr auto kSparseGatherV2OpName = "SparseGatherV2";
 constexpr auto kUnsortedSegmentProdOpName = "UnsortedSegmentProd";
 constexpr auto kUnsortedSegmentMinOpName = "UnsortedSegmentMin";
 constexpr auto kFlattenGradOpName = "FlattenGrad";
@@ -177,8 +183,8 @@ constexpr auto kLabelGotoOpName = "LabelGoto";
 constexpr auto kBNInferGradOpName = "BNInferGrad";
 constexpr auto kCallOpName = "call";
 constexpr auto kPartialOpName = "partial";
-constexpr auto kSwitchOpName = "switch";
-constexpr auto kReturnOpName = "return";
+constexpr auto kSwitchOpName = "Switch";
+constexpr auto kReturnOpName = "Return";
 constexpr auto kLarsV2OpName = "LarsV2";
 constexpr auto kLarsV2UpdateOpName = "LarsV2Update";
 constexpr auto kSquareSumAllOpName = "SquareSumAll";
@@ -203,16 +209,20 @@ constexpr auto kTensorScatterUpdateOpName = "TensorScatterUpdate";
 constexpr auto kScatterNdUpdateOpName = "ScatterNdUpdate";
 constexpr auto kPushOpName = "Push";
 constexpr auto kPullOpName = "Pull";
+constexpr auto kUpdateCacheOpName = "UpdateCache";
+constexpr auto kCacheSwapTableOpName = "CacheSwapTable";
 constexpr auto kEmbeddingLookupOpName = "EmbeddingLookup";
 constexpr auto kEmbeddingLookupProxyOpName = "EmbeddingLookupProxy";
-constexpr auto kGatherV2OpName = "GatherV2";
+constexpr auto kGatherV2OpName = "Gather";
 constexpr auto kPaddingOpName = "Padding";
 constexpr auto kAvgPoolOpName = "AvgPool";
-constexpr auto kAvgPoolGradGpuOpName = "AvgPoolGradGpu";
+constexpr auto kAvgPoolGradOpName = "AvgPoolGrad";
+constexpr auto kAvgPoolGradVmOpName = "AvgPoolGradVm";
 constexpr auto kmaxPoolGradOpName = "MaxPoolGrad";
 constexpr auto kMaxPoolWithArgmaxOpName = "MaxPoolWithArgmax";
 constexpr auto kMaxPoolGradWithArgmaxOpName = "MaxPoolGradWithArgmax";
-constexpr auto kTensorAddOpName = "TensorAdd";
+constexpr auto kTensorAddOpName = "Add";
+constexpr auto kMaxPool3DGradGradOpName = "MaxPool3DGradGrad";
 constexpr auto kCastOpName = "Cast";
 constexpr auto kGreaterEqualOpName = "GreaterEqual";
 constexpr auto kAbsOpName = "Abs";
@@ -256,6 +266,8 @@ constexpr auto kLARSUpdateName = "LARSUpdate";
 constexpr auto kBasicLSTMCellCStateGradOpName = "BasicLSTMCellCStateGrad";
 constexpr auto kBasicLSTMCellCStateGradV2OpName = "BasicLSTMCellCStateGradV2";
 constexpr auto kMatMulV2OpName = "MatMulV2";
+constexpr auto kMatMulOpName = "MatMul";
+constexpr auto kBatchMatMulOpName = "BatchMatMul";
 constexpr auto kBroadcastToOpName = "BroadcastTo";
 constexpr auto kFusedAddReluV2Name = "FusedAddReluV2";
 constexpr auto kFusedAddReluGradV2Name = "FusedAddReluGradV2";
@@ -268,6 +280,12 @@ constexpr auto kPadAndShiftOpName = "PadAndShift";
 constexpr auto kSparseSoftmaxCrossEntropyWithLogitsOpName = "SparseSoftmaxCrossEntropyWithLogits";
 constexpr auto kOneHotOpName = "OneHot";
 constexpr auto kSoftmaxCrossEntropyWithLogitsOpName = "SoftmaxCrossEntropyWithLogits";
+constexpr auto kUniformCandidateSamplerOpName = "UniformCandidateSampler";
+
+// Communication world group
+constexpr auto kNcclWorldGroup = "nccl_world_group";
+constexpr auto kHcclWorldGroup = "hccl_world_group";
+constexpr auto kSyncBnGroup = "sync_bn_group";
 
 // Hcom Op Type
 constexpr auto kHcomOpTypeAllReduce = "HcomAllReduce";
@@ -290,7 +308,8 @@ constexpr auto kAttrEpsilon = "epsilon";
 constexpr auto kAttrFactor = "factor";
 constexpr auto kAttrIsRef = "isRef";
 constexpr auto kAttrDataShape = "data_shape";
-constexpr auto kAttrDataFormat = "data_format";
+constexpr auto kAttrFormat = "format";
+constexpr auto kAttrReshapeType = "reshape_type";
 constexpr auto kAttrAxis = "axis";
 constexpr auto kAttrKeepDims = "keep_dims";
 constexpr auto kAttrShapeGamma = "shape_gamma";
@@ -302,10 +321,15 @@ constexpr auto kAttrAtomicWorkspaceIndexs = "atomic_workspace_clean_indexs";
 constexpr auto kAttrSwitchCondition = "switch_condition";
 constexpr auto kAttrDataType = "data_type";
 constexpr auto kAttrActiveTarget = "active_target";
+constexpr auto kAttrActiveStreamId = "active_stream_id";
 constexpr auto kAttrActiveStreamList = "active_stream_list";
 constexpr auto kAttrTrueBranchStream = "true_branch_stream";
 constexpr auto kAttrStreamSwitchKind = "stream_switch_kind";
 constexpr auto kAttrEventId = "event_id";
+constexpr auto kAttrLabelId = "label_id";
+constexpr auto kAttrLogicId = "logic_id";
+constexpr auto kAttrNodeInfo = "node_info";
+constexpr auto kAttrNodeName = "node_name";
 constexpr auto kAttrDynInput = "dynamic";
 constexpr auto kAttrDynInputSizes = "dyn_input_sizes";
 constexpr auto kAttrSrcFormat = "src_format";
@@ -327,12 +351,15 @@ constexpr auto kAttrSrTag = "sr_tag";
 constexpr auto kAttrRootRank = "root_rank";
 constexpr auto kAttrIsTraining = "is_training";
 constexpr auto kAttrFusionId = "fusion_id";
+constexpr auto kAttrBucketId = "bucket_id";
+constexpr auto kAttrGradOutputIndex = "grad_output_index";
 constexpr auto kAttrLabelIndex = "label_index";
 constexpr auto kAttrLabelSwitchList = "label_switch_list";
 constexpr auto kAttrNewAxisMask = "new_axis_mask";
 constexpr auto kAttrShrinkAxisMask = "shrink_axis_mask";
 constexpr auto kAttrDatadumpOriginalNames = "_datadump_original_names";
 constexpr auto kAttrDatadumpIsMultiop = "_datadump_is_multiop";
+constexpr auto kAttrNeedRecordEvent = "need_record_event";
 constexpr auto kAttrStreamId = "stream_id";
 constexpr auto kAttrRecordEvent = "record_event";
 constexpr auto kAttrWaitEvent = "wait_event";
@@ -341,6 +368,7 @@ constexpr auto kAttrWaitEventStream = "wait_event_stream";
 constexpr auto kAttrIndex = "index";
 constexpr auto kAttrSplitDim = "split_dim";
 constexpr auto kAttrNumSplit = "num_split";
+constexpr auto kAttrReduction = "reduction";
 constexpr auto kAttrOutputNum = "output_num";
 constexpr auto kAttrSizeSplits = "size_splits";
 constexpr auto kAttrOutputDefault = "output_default";
@@ -348,6 +376,7 @@ constexpr auto kAttrPrimitiveTarget = "primitive_target";
 constexpr auto kAttrUseLocking = "use_locking";
 constexpr auto kAttrReduceScatterFlag = "reduce_scatter_flag";
 constexpr auto kAttrOffset = "offset";
+constexpr auto kAttrCacheEnable = "cache_enable";
 constexpr auto kAttrPsKey = "ps_key";
 constexpr auto kAttrOptimizerType = "optim_type";
 constexpr auto kAttrChildGraph = "child_graph";
@@ -363,20 +392,30 @@ constexpr auto kAttrSize = "size";
 constexpr auto kAttrIsDynamicShape = "is_dynamic_shape";
 constexpr auto kAttrInputIsDynamicShape = "input_is_dynamic_shape";
 constexpr auto kAttrOutputIsDynamicShape = "output_is_dynamic_shape";
-constexpr auto kAttrDynamicShapeDepends = "dynamic_shape_depends";
 constexpr auto kAttrPynativeNextOpName = "next_op";
 constexpr auto kAttrPynativeNextIndex = "next_index";
 constexpr auto kAttrCompileInfo = "compile_info";
 constexpr auto kAttrFusionType = "fusion_type";
 constexpr auto kAttrStride = "stride";
 constexpr auto kAttrStrides = "strides";
-constexpr auto kAttrKsize = "ksize";
 constexpr auto kAttrKernelSize = "kernel_size";
 constexpr auto kAttrDilation = "dilation";
 constexpr auto kAttrPadMode = "pad_mode";
 constexpr auto kAttrPad = "pad";
 constexpr auto kAttrPadding = "padding";
+constexpr auto kAttrNonTask = "non_task";
 constexpr auto kAttrIsGrad = "is_grad";
+constexpr auto kAttrRecompute = "recompute";
+constexpr auto kAttrNeedCseAfterRecompute = "need_cse_after_recompute";
+constexpr auto kAttrParallelDimInfo = "parallel_dim_info";
+constexpr auto kAttrParallelFusionType = "parallel_fusion_type";
+constexpr auto kAttrParallelTypeInfo = "parallel_type_info";
+constexpr auto kAttrCompositeType = "composite_type";
+constexpr auto kAttrStitch = "stitch";
+constexpr auto kAttrTopoSortRhsFirst = "topo_sort_rhs_first";
+constexpr auto kAttrIgnoreSideEffect = "ignore_side_effect";
+constexpr auto kAttrSwitchLayer = "switch_layer";
+constexpr auto kAttrReturn = "return";
 
 // attr value
 constexpr auto kValueTargetSwitch = "target_switch";
@@ -405,6 +444,7 @@ constexpr auto kFirstBranchInSwitch = 2;
 constexpr auto kCallKernelGraphIndex = 1;
 constexpr auto kSwitchTrueKernelGraphIndex = 2;
 constexpr auto kSwitchFalseKernelGraphIndex = 3;
+constexpr auto kMakeTupleInSwitchLayerIndex = 2;
 // index define of control depend
 constexpr auto kControlDependPriorIndex = 1;
 constexpr auto kControlDependBehindIndex = 2;
@@ -413,6 +453,9 @@ constexpr auto kControlDependMode = "depend_mode";
 constexpr auto kRealInputIndexInDepend = 1;
 constexpr auto kDependAttachNodeIndex = 2;
 constexpr auto kDependInputSize = 3;
+// index define of UpdateState
+constexpr auto kUpdateStateStateInput = 1;
+constexpr auto kUpdateStateRealInput = 2;
 // format
 constexpr auto kOpFormat_DEFAULT = "DefaultFormat";
 constexpr auto kOpFormat_NC1KHKWHWC0 = "NC1KHKWHWC0";
@@ -444,7 +487,8 @@ const std::set<std::string> kOpFormatList = {kOpFormat_DEFAULT,      kOpFormat_N
                                              kOpFormat_NDC1HWC0,     kOpFormat_NCDHW,
                                              kOpFormat_FRACTAL_Z_3D, kOpFormat_DHWNC,
                                              kOpFormat_DHWCN};
-const std::set<std::string> kDefaultCompatibleFormat = {kOpFormat_ND, kOpFormat_NCHW, kOpFormat_NHWC, kOpFormat_HWCN};
+const std::set<std::string> kDefaultCompatibleFormat = {kOpFormat_ND, kOpFormat_NCHW, kOpFormat_NHWC, kOpFormat_HWCN,
+                                                        kOpFormat_NCDHW};
 const std::set<std::string> kOptOperatorSet = {kMomentumOpName,
                                                kApplyMomentumOpName,
                                                kApplyAdadeltaOpName,
@@ -474,10 +518,14 @@ const std::set<std::string> kOptOperatorSet = {kMomentumOpName,
                                                kSparseApplyFtrlV2Name,
                                                kSGDName,
                                                kLARSUpdateName,
-                                               kPullOpName,
                                                kCombineMomentumWeightOpName,
                                                kCombineMomentumOpName,
                                                kSparseApplyProximalAdagradOpName};
+
+const std::set<std::string> kPosteriorOperatorSet = {kPullOpName};
+
+const std::set<std::string> kOpCacheAllowList = {kUniformCandidateSamplerOpName, kInitDatasetQueueOpName,
+                                                 kGetNextOpName};
 
 const std::set<std::string> kHWSpecialFormatSet = {
   kOpFormat_FRACTAL_Z_3D, kOpFormat_NC1KHKWHWC0,   kOpFormat_NC1HWC0,         kOpFormat_FRAC_NZ,  kOpFormat_C1HWNCoC0,
@@ -486,9 +534,14 @@ const std::set<std::string> kHWSpecialFormatSet = {
 const std::set<TypeId> kFloatDataTypeSet = {kNumberTypeFloat16, kNumberTypeFloat32};
 
 const std::set<std::string> kComputeDepend = {kUniqueOpName, kComputeAccidentalHitsOpName, kSubAndFilterOpName,
-                                              kPadAndShiftOpName};
+                                              kPadAndShiftOpName, kCTCGreedyDecoderOpName};
 
-const std::set<std::string> k3DFormatSet = {kOpFormat_NCDHW, kOpFormat_NDC1HWC0, kOpFormat_FRACTAL_Z_3D};
+const std::set<std::string> k3DFormatSet = {kOpFormat_NCDHW, kOpFormat_NDC1HWC0, kOpFormat_FRACTAL_Z_3D,
+                                            kOpFormat_NDHWC, kOpFormat_DHWCN,    kOpFormat_DHWNC};
+
+const std::set<std::string> DynamicShapeConstInputToAttr = {
+  kCastOpName,      kExpandDimsOpName, kReshapeOpName,   kEmbeddingLookupOpName, kTransposeOpName, kReduceSumOpName,
+  kReduceMinOpName, kReduceMeanOpName, kReduceMaxOpName, kReduceAllOpName,       kReduceAnyOpName, kConcatOpName};
 
 static inline void ChangeFileMode(const std::string &file_name, mode_t mode) {
   try {

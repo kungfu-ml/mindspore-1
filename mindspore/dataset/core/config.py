@@ -18,12 +18,15 @@ configuration parameters, and read a configuration file.
 """
 import os
 import random
+import time
 import numpy
 import mindspore._c_dataengine as cde
+from mindspore import log as logger
 
 __all__ = ['set_seed', 'get_seed', 'set_prefetch_size', 'get_prefetch_size', 'set_num_parallel_workers',
-           'get_num_parallel_workers', 'set_monitor_sampling_interval', 'get_monitor_sampling_interval', 'load',
-           'get_callback_timeout', 'set_auto_num_workers', 'get_auto_num_workers']
+           'get_num_parallel_workers', 'set_numa_enable', 'get_numa_enable', 'set_monitor_sampling_interval',
+           'get_monitor_sampling_interval', 'load', 'get_callback_timeout', 'set_auto_num_workers',
+           'get_auto_num_workers', '_init_device_info']
 
 INT32_MAX = 2147483647
 UINT32_MAX = 4294967295
@@ -42,15 +45,17 @@ def _init_device_info():
     from mindspore import context
     from mindspore.parallel._auto_parallel_context import auto_parallel_context
     from mindspore.parallel._utils import _get_global_rank
+    numa_enable = False
+    numa_enable_env = os.getenv("DATASET_ENABLE_NUMA", None)
+    if numa_enable_env and numa_enable_env.strip() == 'True':
+        numa_enable = True
     if context.get_context("device_target") == "GPU":
         rank_id = _get_global_rank()
         parallel_mode = auto_parallel_context().get_parallel_mode()
         if parallel_mode == "stand_alone":
-            cuda_device_info = os.getenv("CUDA_VISIBLE_DEVICES")
-            if cuda_device_info:
-                cuda_id = int(cuda_device_info.split(",")[0].strip())
-                if cuda_id != rank_id:
-                    rank_id = cuda_id
+            rank_id = context.get_context("device_id")
+        if numa_enable:
+            _config.set_numa_enable(True)
         _config.set_rank_id(rank_id)
     elif context.get_context("device_target") == "Ascend":
         # Ascend is a special scenario, we'd better get rank info from env
@@ -61,6 +66,8 @@ def _init_device_info():
             rank_size = int(env_rank_size.strip())
             rank_id = int(env_rank_id.strip())
             if rank_size > 1:
+                if numa_enable:
+                    _config.set_numa_enable(True)
                 _config.set_rank_id(rank_id)
 
 
@@ -98,7 +105,7 @@ def get_seed():
     Get the seed.
 
     Returns:
-        Int, seed.
+        int, seed.
     """
     return _config.get_seed()
 
@@ -108,10 +115,15 @@ def set_prefetch_size(size):
     Set the number of rows to be prefetched.
 
     Args:
-        size (int): Total number of rows to be prefetched.
+        size (int): Total number of rows to be prefetched per operator per parallel worker.
 
     Raises:
         ValueError: If prefetch_size is invalid (<= 0 or > MAX_INT_32).
+
+    Note:
+        Since total memory used for prefetch can grow very large with high number of workers,
+        when number of workers is > 4, the per worker prefetch size will be reduced. The actual
+        prefetch size at runtime per worker will be prefetchsize * (4 / num_parallel_workers).
 
     Examples:
         >>> # Set a new global configuration value for the prefetch size.
@@ -127,7 +139,7 @@ def get_prefetch_size():
     Get the prefetch size in number of rows.
 
     Returns:
-        Size, total number of rows to be prefetched.
+        int, total number of rows to be prefetched.
     """
     return _config.get_op_connector_size()
 
@@ -158,9 +170,40 @@ def get_num_parallel_workers():
     This is the DEFAULT num_parallel_workers value used for each op, it is not related to AutoNumWorker feature.
 
     Returns:
-        Int, number of parallel workers to be used as a default for each operation
+        int, number of parallel workers to be used as a default for each operation.
     """
     return _config.get_num_parallel_workers()
+
+
+def set_numa_enable(numa_enable):
+    """
+    Set the default state of numa enabled. If numa_enable is True, need to ensure numa library is installed.
+
+    Args:
+        numa_enable (bool): Whether to use numa bind feature.
+
+    Raises:
+        TypeError: If numa_enable is not a boolean data type.
+
+    Examples:
+        >>> # Set a new global configuration value for the state of numa enabled.
+        >>> # Now parallel dataset operators will run with numa bind function
+        >>> ds.config.set_numa_enable(True)
+    """
+    if not isinstance(numa_enable, bool):
+        raise TypeError("numa_enable must be a boolean dtype.")
+    _config.set_numa_enable(numa_enable)
+
+
+def get_numa_enable():
+    """
+    Get the default state of numa enabled.
+    This is the DEFAULT numa enabled value used for the all process.
+
+    Returns:
+        bool, the default state of numa enabled.
+    """
+    return _config.get_numa_enable()
 
 
 def set_monitor_sampling_interval(interval):
@@ -187,7 +230,7 @@ def get_monitor_sampling_interval():
     Get the default interval of performance monitor sampling.
 
     Returns:
-        Int, interval (in milliseconds) for performance monitor sampling.
+        int, interval (in milliseconds) for performance monitor sampling.
     """
     return _config.get_monitor_sampling_interval()
 
@@ -198,7 +241,7 @@ def set_auto_num_workers(enable):
     If turned on, the num_parallel_workers in each op will be adjusted automatically, possibly overwriting the
     num_parallel_workers passed in by user or the default value (if user doesn't pass anything) set by
     ds.config.set_num_parallel_workers().
-    For now, this function is only optimized for Yolo3 dataset with per_batch_map (running map in batch).
+    For now, this function is only optimized for YoloV3 dataset with per_batch_map (running map in batch).
     This feature aims to provide a baseline for optimized num_workers assignment for each op.
     Op whose num_parallel_workers is adjusted to a new value will be logged.
 
@@ -245,7 +288,8 @@ def get_auto_num_workers():
     Get the setting (turned on or off) automatic number of workers.
 
     Returns:
-        Bool, whether auto num worker feature is turned on
+        bool, whether auto num worker feature is turned on.
+
     Examples:
         >>> num_workers = ds.config.get_auto_num_workers()
     """
@@ -278,7 +322,7 @@ def get_callback_timeout():
     In case of a deadlock, the wait function will exit after the timeout period.
 
     Returns:
-        Int, the duration in seconds
+        int, the duration in seconds.
     """
     return _config.get_callback_timeout()
 
@@ -288,7 +332,7 @@ def __str__():
     String representation of the configurations.
 
     Returns:
-        Str, configurations.
+        str, configurations.
     """
     return str(_config)
 
@@ -304,8 +348,7 @@ def load(file):
         RuntimeError: If file is invalid and parsing fails.
 
     Examples:
-        >>> # Set new default configuration values according to values in the configuration file.
-        >>> ds.config.load("/path/to/config_directory/config.cfg")
+        >>> # Set new default configuration according to values in the configuration file.
         >>> # example config file:
         >>> # {
         >>> #     "logFilePath": "/tmp",
@@ -313,5 +356,41 @@ def load(file):
         >>> #     "seed": 5489,
         >>> #     "monitorSamplingInterval": 30
         >>> # }
+        >>> config_file = "/path/to/config/file"
+        >>> ds.config.load(config_file)
     """
     _config.load(file)
+
+
+def _stop_dataset_profiler():
+    """
+    Mainly for stop dataset profiler.
+
+    Returns:
+        bool, whether the profiler file has generated.
+    """
+
+    while not _config.get_profiler_file_status():
+        _config.stop_dataset_profiler(True)
+        logger.warning("Profiling: waiting for dataset part profiling stop.")
+        time.sleep(1)
+
+
+def set_sending_batches(batch_num):
+    """
+    Set the default sending batches when training with sink_mode=True in Ascend device.
+
+    Args:
+        batch_num (int): the total sending batches, when meet sending batch num, it will wait unless sending batches
+         increase, default is 0 which means will send all batches in dataset.
+
+    Raises:
+        TypeError: If batch_num is not a int data type.
+
+    Examples:
+        >>> # Set a new global configuration value for the sending batches
+        >>> ds.config.set_sending_batches(10)
+    """
+    if not isinstance(batch_num, int):
+        raise TypeError("batch_num must be a int dtype.")
+    _config.set_sending_batches(batch_num)

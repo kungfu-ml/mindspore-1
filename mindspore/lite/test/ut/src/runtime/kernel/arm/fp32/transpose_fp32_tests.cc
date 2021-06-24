@@ -63,7 +63,7 @@ TEST_F(TestTransposeFp32, TransposeFp32_axes4) {
     param->out_strides_[i] = out_strides[i];
   }
 
-  auto ret = DoTransposeFp32(in, out, output_shape, param, nullptr, nullptr);
+  auto ret = DoTransposeFp32(in, out, output_shape, param);
   ASSERT_EQ(ret, 0);
   delete param;
   ASSERT_EQ(0, CompareOutputData(out, correct, 24, 0.000001));
@@ -102,7 +102,7 @@ TEST_F(TestTransposeFp32, TransposeFp32_axes3) {
     param->out_strides_[i] = out_strides[i];
   }
 
-  auto ret = DoTransposeFp32(in, out, output_shape, param, nullptr, nullptr);
+  auto ret = DoTransposeFp32(in, out, output_shape, param);
   ASSERT_EQ(ret, 0);
   delete param;
   ASSERT_EQ(0, CompareOutputData(out, correct, 24, 0.000001));
@@ -142,7 +142,7 @@ TEST_F(TestTransposeFp32, TransposeFp32_axes2) {
     param->out_strides_[i] = out_strides[i];
   }
 
-  auto ret = DoTransposeFp32(in, out, output_shape, param, nullptr, nullptr);
+  auto ret = DoTransposeFp32(in, out, output_shape, param);
   ASSERT_EQ(ret, 0);
   delete param;
   ASSERT_EQ(0, CompareOutputData(out, correct, 24, 0.000001));
@@ -202,7 +202,7 @@ TEST_F(TestTransposeFp32, TransposeFp32_test5) {
   auto creator = lite::KernelRegistry::GetInstance()->GetCreator(desc);
   ASSERT_NE(creator, nullptr);
   kernel::LiteKernel *kernel =
-    creator(inputs_tensor, outputs_tensor, reinterpret_cast<OpParameter *>(&param), &ctx, desc, nullptr);
+    creator(inputs_tensor, outputs_tensor, reinterpret_cast<OpParameter *>(&param), &ctx, desc);
   ASSERT_NE(kernel, nullptr);
   kernel->Run();
 

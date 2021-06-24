@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <map>
 #include <set>
-#include <stack>
+#include <unordered_set>
 #include "ir/anf.h"
 #include "ir/func_graph.h"
 #include "base/core_ops.h"
@@ -31,7 +31,6 @@
 #include "backend/kernel_compiler/kernel_build_info.h"
 #include "common/trans.h"
 #include "abstract/param_validator.h"
-#include "abstract/primitive_infer_map.h"
 #include "pipeline/jit/static_analysis/static_analysis.h"
 #include "utils/trace_base.h"
 
@@ -48,6 +47,10 @@ namespace {
 constexpr size_t kNopNodeInputSize = 2;
 constexpr size_t kNopNodeRealInputIndex = 1;
 
+using PrimitiveSet = std::unordered_set<PrimitivePtr, PrimitiveHasher, PrimitiveEqual>;
+
+PrimitiveSet follow_first_input_prims = {prim::kPrimDepend, prim::kPrimLoad};
+
 bool IsShapeDynamic(const abstract::ShapePtr &shape) {
   MS_EXCEPTION_IF_NULL(shape);
   return std::any_of(shape->shape().begin(), shape->shape().end(), [](int64_t s) { return s < 0; });
@@ -55,6 +58,33 @@ bool IsShapeDynamic(const abstract::ShapePtr &shape) {
 
 bool IsShapeDynamic(const std::vector<size_t> &shape) {
   return std::any_of(shape.begin(), shape.end(), [](int64_t s) { return s < 0; });
+}
+
+bool IsOneOfPrimitive(const AnfNodePtr &node, const PrimitiveSet &prim_set) {
+  PrimitivePtr prim = GetValueNode<PrimitivePtr>(node);
+  return (prim && prim_set.find(prim) != prim_set.end());
+}
+
+bool IsOneOfPrimitiveCNode(const AnfNodePtr &node, const PrimitiveSet &prim_set) {
+  MS_EXCEPTION_IF_NULL(node);
+  auto cnode = node->cast<CNodePtr>();
+  if (cnode == nullptr || cnode->size() == 0) {
+    return false;
+  }
+  return IsOneOfPrimitive(cnode->inputs().at(kAnfPrimitiveIndex), prim_set);
+}
+
+bool IsRealKernelCNode(const CNodePtr &cnode) {
+  static const PrimitiveSet virtual_prims = {
+    prim::kPrimImageSummary, prim::kPrimScalarSummary, prim::kPrimTensorSummary, prim::kPrimHistogramSummary,
+    prim::kPrimMakeTuple,    prim::kPrimStateSetItem,  prim::kPrimTupleGetItem,  prim::kPrimReturn,
+    prim::kPrimPartial,      prim::kPrimDepend,        prim::kPrimUpdateState,   prim::kPrimLoad};
+  if (cnode->inputs().empty()) {
+    MS_LOG(EXCEPTION) << "Illegal null input of cnode(%s)" << cnode->DebugString();
+  }
+  const auto &input = cnode->inputs().at(0);
+  bool is_virtual_node = IsOneOfPrimitive(input, virtual_prims);
+  return !is_virtual_node;
 }
 
 std::vector<size_t> TransShapeToSizet(const abstract::ShapePtr &shape) {
@@ -121,7 +151,9 @@ KernelWithIndex AnfRuntimeAlgorithm::VisitKernel(const AnfNodePtr &anf_node, siz
       MS_EXCEPTION_IF_NULL(value_node);
       auto item_idx = GetValue<int64_t>(value_node->value());
       return VisitKernel(cnode->input(kRealInputNodeIndexInTupleGetItem), LongToSize(item_idx));
-    } else if (IsPrimitive(input0, prim::kPrimDepend) || IsPrimitive(input0, prim::kPrimControlDepend)) {
+    } else if (AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimUpdateState)) {
+      return VisitKernel(cnode->input(kUpdateStateRealInput), 0);
+    } else if (IsOneOfPrimitive(input0, follow_first_input_prims)) {
       return VisitKernel(cnode->input(kRealInputIndexInDepend), 0);
     } else {
       return std::make_pair(anf_node, index);
@@ -162,7 +194,10 @@ KernelWithIndex AnfRuntimeAlgorithm::VisitKernelWithReturnType(const AnfNodePtr 
     }
     return item_with_index_tmp;
   }
-  if (CheckPrimitiveType(cnode, prim::kPrimDepend) || CheckPrimitiveType(cnode, prim::kPrimControlDepend)) {
+  if (AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimUpdateState)) {
+    return VisitKernelWithReturnType(cnode->input(kUpdateStateStateInput), index, visit_nop_node, return_types);
+  }
+  if (IsOneOfPrimitiveCNode(cnode, follow_first_input_prims)) {
     return VisitKernelWithReturnType(cnode->input(kRealInputIndexInDepend), index, visit_nop_node, return_types);
   }
   if (opt::IsNopNode(cnode) && visit_nop_node) {
@@ -347,21 +382,48 @@ bool AnfRuntimeAlgorithm::HasNodeAttr(const std::string &key, const CNodePtr &no
   return fg->has_attr(key);
 }
 
+size_t AnfRuntimeAlgorithm::GetInputNum(const CNodePtr &cnode) {
+  MS_EXCEPTION_IF_NULL(cnode);
+  size_t input_num = cnode->size();
+  if (input_num == 0) {
+    MS_LOG(EXCEPTION) << "Cnode inputs size can't be zero";
+  }
+  return input_num - 1;
+}
+
 size_t AnfRuntimeAlgorithm::GetInputTensorNum(const AnfNodePtr &node) {
   MS_EXCEPTION_IF_NULL(node);
-  if (!node->isa<CNode>()) {
+  auto cnode = node->cast<CNodePtr>();
+  if (cnode == nullptr) {
     MS_LOG(EXCEPTION) << "Only cnode has real input, but this anf is " << node->DebugString()
                       << " trace: " << trace::DumpSourceLines(node);
   }
-  auto cnode = node->cast<CNodePtr>();
-  MS_EXCEPTION_IF_NULL(cnode);
+  ssize_t input_tensor_num = cnode->input_tensor_num();
+  if (input_tensor_num >= 0) {
+    return static_cast<size_t>(input_tensor_num);
+  }
   size_t input_num = cnode->inputs().size();
   if (input_num == 0) {
     MS_LOG(EXCEPTION) << "Cnode inputs size can't be zero"
                       << " trace: " << trace::DumpSourceLines(node);
   }
-  // exclude intputs[0],which is value_node storing attr,inputs left are real input
-  return input_num - 1;
+  // Exclude inputs[0].
+  --input_num;
+
+  // Exclude monad inputs for real cnodes.
+  if (input_num > 0 && IsRealKernelCNode(cnode)) {
+    auto &inputs = cnode->inputs();
+    // Search monad inputs, backward.
+    for (auto iter = inputs.rbegin(); iter != inputs.rend(); ++iter) {
+      if (!HasAbstractMonad(*iter)) {
+        // Stop count if we encounter a non-monad input.
+        break;
+      }
+      --input_num;
+    }
+  }
+  cnode->set_input_tensor_num(static_cast<ssize_t>(input_num));
+  return input_num;
 }
 
 size_t AnfRuntimeAlgorithm::GetOutputTensorNum(const AnfNodePtr &node) {
@@ -374,13 +436,11 @@ size_t AnfRuntimeAlgorithm::GetOutputTensorNum(const AnfNodePtr &node) {
     auto tuple_type = type->cast<TuplePtr>();
     MS_EXCEPTION_IF_NULL(tuple_type);
     return tuple_type->size();
-  } else if (type->isa<TensorType>() || type->isa<Number>()) {
-    return 1;
-  } else if (type->isa<TypeNone>()) {
-    return 0;
-  } else {
-    return 1;
   }
+  if (type->isa<TypeNone>()) {
+    return 0;
+  }
+  return 1;
 }
 
 std::vector<std::string> AnfRuntimeAlgorithm::GetAllOutputFormats(const AnfNodePtr &node) {
@@ -411,6 +471,36 @@ std::vector<std::string> AnfRuntimeAlgorithm::GetAllInputFormats(const AnfNodePt
   MS_EXCEPTION_IF_NULL(build_info);
   auto format = build_info->GetAllInputFormats();
   return format;
+}
+
+std::vector<TypeId> AnfRuntimeAlgorithm::GetAllInputDeviceTypes(const AnfNodePtr &node) {
+  MS_EXCEPTION_IF_NULL(node);
+  if (!AnfAlgo::IsRealKernel(node)) {
+    MS_LOG(EXCEPTION) << "Not real kernel:"
+                      << "#node [" << node->DebugString() << "]"
+                      << " trace: " << trace::DumpSourceLines(node);
+  }
+  auto kernel_info = static_cast<device::KernelInfo *>(node->kernel_info());
+  MS_EXCEPTION_IF_NULL(kernel_info);
+  auto build_info = kernel_info->select_kernel_build_info();
+  MS_EXCEPTION_IF_NULL(build_info);
+  auto types = build_info->GetAllInputDeviceTypes();
+  return types;
+}
+
+std::vector<TypeId> AnfRuntimeAlgorithm::GetAllOutputDeviceTypes(const AnfNodePtr &node) {
+  MS_EXCEPTION_IF_NULL(node);
+  if (!AnfAlgo::IsRealKernel(node)) {
+    MS_LOG(EXCEPTION) << "Not real kernel:"
+                      << "#node [" << node->DebugString() << "]"
+                      << " trace: " << trace::DumpSourceLines(node);
+  }
+  auto kernel_info = static_cast<device::KernelInfo *>(node->kernel_info());
+  MS_EXCEPTION_IF_NULL(kernel_info);
+  auto build_info = kernel_info->select_kernel_build_info();
+  MS_EXCEPTION_IF_NULL(build_info);
+  auto types = build_info->GetAllOutputDeviceTypes();
+  return types;
 }
 
 std::string AnfRuntimeAlgorithm::GetOriginDataFormat(const AnfNodePtr &node) {
@@ -483,6 +573,9 @@ KernelWithIndex AnfRuntimeAlgorithm::GetPrevNodeOutput(const AnfNodePtr &anf_nod
     MS_LOG(EXCEPTION) << anf_node->DebugString() << "anf_node is not CNode."
                       << " trace: " << trace::DumpSourceLines(anf_node);
   }
+  if (CheckPrimitiveType(anf_node, prim::kPrimTupleGetItem)) {
+    return VisitKernelWithReturnType(anf_node, 0, visit_nop_node);
+  }
   auto input_node = AnfAlgo::GetInputNode(anf_node->cast<CNodePtr>(), input_idx);
   MS_EXCEPTION_IF_NULL(input_node);
   return VisitKernelWithReturnType(input_node, 0, visit_nop_node);
@@ -493,7 +586,7 @@ std::string AnfRuntimeAlgorithm::GetPrevNodeOutputFormat(const AnfNodePtr &anf_n
   return AnfRuntimeAlgorithm::GetOutputFormat(kernel_with_index.first, kernel_with_index.second);
 }
 
-std::vector<Axis> AnfRuntimeAlgorithm::GetPrevNodeOutputReshapeType(const AnfNodePtr &node, size_t input_idx) {
+std::string AnfRuntimeAlgorithm::GetPrevNodeOutputReshapeType(const AnfNodePtr &node, size_t input_idx) {
   KernelWithIndex kernel_with_index = AnfAlgo::GetPrevNodeOutput(node, input_idx);
   return GetOutputReshapeType(kernel_with_index.first, kernel_with_index.second);
 }
@@ -549,7 +642,7 @@ std::vector<size_t> AnfRuntimeAlgorithm::GetOutputDeviceShape(const AnfNodePtr &
   }
   // if format is default_format or NC1KHKWHWC0,device shape = original shape
   if (trans::IsNeedPadding(format, infer_shape.size())) {
-    infer_shape = trans::PaddingShapeTo4d(infer_shape, GetOutputReshapeType(node, output_idx));
+    infer_shape = trans::PaddingShape(infer_shape, format, GetOutputReshapeType(node, output_idx));
   }
   return trans::TransShapeToDevice(infer_shape, format);
 }
@@ -562,12 +655,12 @@ std::vector<size_t> AnfRuntimeAlgorithm::GetInputDeviceShape(const AnfNodePtr &n
   }
   // if format is default_format or NC1KHKWHWC0,device shape = original shape
   if (trans::IsNeedPadding(format, infer_shape.size())) {
-    infer_shape = trans::PaddingShapeTo4d(infer_shape, GetInputReshapeType(node, input_idx));
+    infer_shape = trans::PaddingShape(infer_shape, format, GetInputReshapeType(node, input_idx));
   }
   return trans::TransShapeToDevice(infer_shape, format);
 }
 
-std::vector<Axis> AnfRuntimeAlgorithm::GetInputReshapeType(const AnfNodePtr &node, size_t input_idx) {
+std::string AnfRuntimeAlgorithm::GetInputReshapeType(const AnfNodePtr &node, size_t input_idx) {
   MS_EXCEPTION_IF_NULL(node);
   if (input_idx > GetInputTensorNum(node)) {
     MS_LOG(EXCEPTION) << "The index:" << input_idx
@@ -583,12 +676,12 @@ std::vector<Axis> AnfRuntimeAlgorithm::GetInputReshapeType(const AnfNodePtr &nod
   auto build_info = kernel_info->select_kernel_build_info();
   MS_EXCEPTION_IF_NULL(build_info);
   if (build_info->IsInputDefaultPadding()) {
-    return {};
+    return "";
   }
   return build_info->GetInputReshapeType(input_idx);
 }
 
-std::vector<Axis> AnfRuntimeAlgorithm::GetOutputReshapeType(const AnfNodePtr &node, size_t output_idx) {
+std::string AnfRuntimeAlgorithm::GetOutputReshapeType(const AnfNodePtr &node, size_t output_idx) {
   MS_EXCEPTION_IF_NULL(node);
   if (output_idx > GetOutputTensorNum(node)) {
     MS_LOG(EXCEPTION) << "The index [" << output_idx << "] is out of range of the node's output size [ "
@@ -603,7 +696,7 @@ std::vector<Axis> AnfRuntimeAlgorithm::GetOutputReshapeType(const AnfNodePtr &no
   auto build_info = kernel_info->select_kernel_build_info();
   MS_EXCEPTION_IF_NULL(build_info);
   if (build_info->IsOutputDefaultPadding()) {
-    return {};
+    return "";
   }
   return build_info->GetOutputReshapeType(output_idx);
 }
@@ -953,14 +1046,7 @@ bool AnfRuntimeAlgorithm::IsRealKernel(const AnfNodePtr &node) {
     MS_LOG(EXCEPTION) << "Illegal null input of cnode(%s)" << node->DebugString()
                       << " trace: " << trace::DumpSourceLines(node);
   }
-  auto input = cnode->inputs()[0];
-  bool is_virtual_node = IsPrimitive(input, prim::kPrimImageSummary) || IsPrimitive(input, prim::kPrimScalarSummary) ||
-                         IsPrimitive(input, prim::kPrimTensorSummary) ||
-                         IsPrimitive(input, prim::kPrimHistogramSummary) || IsPrimitive(input, prim::kPrimMakeTuple) ||
-                         IsPrimitive(input, prim::kPrimStateSetItem) || IsPrimitive(input, prim::kPrimDepend) ||
-                         IsPrimitive(input, prim::kPrimTupleGetItem) || IsPrimitive(input, prim::kPrimControlDepend) ||
-                         IsPrimitive(input, prim::kPrimReturn) || IsPrimitive(input, prim::kPrimPartial);
-  return !is_virtual_node;
+  return IsRealKernelCNode(cnode);
 }
 
 bool AnfRuntimeAlgorithm::IsRealCNodeKernel(const AnfNodePtr &node) {
@@ -1070,6 +1156,9 @@ uint32_t AnfRuntimeAlgorithm::GetGraphId(const AnfNode *node) {
 bool AnfRuntimeAlgorithm::IsTupleOutput(const AnfNodePtr &anf) {
   MS_EXCEPTION_IF_NULL(anf);
   TypePtr type = anf->Type();
+  if (type == nullptr) {
+    return false;
+  }
   MS_EXCEPTION_IF_NULL(type);
   return type->isa<Tuple>();
 }
@@ -1089,6 +1178,9 @@ bool AnfRuntimeAlgorithm::IsFeatureMapOutput(const AnfNodePtr &node) {
   MS_EXCEPTION_IF_NULL(node);
   if (node->isa<ValueNode>()) {
     return false;
+  }
+  if (IsPrimitiveCNode(node, prim::kPrimLoad)) {
+    return IsFeatureMapOutput(node->cast<CNodePtr>()->input(1));
   }
   auto kernel_info = static_cast<const device::KernelInfo *>(node->kernel_info());
   MS_EXCEPTION_IF_NULL(kernel_info);
@@ -1167,6 +1259,23 @@ bool AnfRuntimeAlgorithm::IsCommunicationOp(const AnfNodePtr &node) {
   return false;
 }
 
+bool AnfRuntimeAlgorithm::IsFusedCommunicationOp(const AnfNodePtr &node) {
+  if (!IsCommunicationOp(node)) {
+    return false;
+  }
+  auto primitive = AnfAlgo::GetCNodePrimitive(node);
+  MS_EXCEPTION_IF_NULL(primitive);
+  ValuePtr attr_fusion = primitive->GetAttr(kAttrFusion);
+  if (attr_fusion == nullptr) {
+    return false;
+  }
+  auto fusion = GetValue<int64_t>(attr_fusion);
+  if (fusion == 0) {
+    return false;
+  }
+  return true;
+}
+
 bool AnfRuntimeAlgorithm::IsGetNext(const NotNull<AnfNodePtr> &node) {
   auto kernel_name = AnfAlgo::GetCNodeName(node);
   return kernel_name == kGetNextOpName;
@@ -1188,10 +1297,28 @@ FuncGraphPtr AnfRuntimeAlgorithm::GetValueNodeFuncGraph(const AnfNodePtr &node) 
 
 std::vector<KernelGraphPtr> AnfRuntimeAlgorithm::GetCallSwitchKernelGraph(const CNodePtr &cnode) {
   MS_EXCEPTION_IF_NULL(cnode);
-  if (!(AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimCall) || AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimSwitch))) {
-    MS_LOG(EXCEPTION) << "Node: " << cnode->DebugString() << "is not a call or switch node."
+  if (!(AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimCall) || AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimSwitch) ||
+        AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimSwitchLayer))) {
+    MS_LOG(EXCEPTION) << "Node: " << cnode->DebugString() << "is not a call or switch or switch_layer node."
                       << " trace: " << trace::DumpSourceLines(cnode);
   }
+  auto get_switch_kernel_graph = [cnode](size_t input_index) -> KernelGraphPtr {
+    auto partial = cnode->input(input_index);
+    MS_EXCEPTION_IF_NULL(partial);
+    if (IsValueNode<KernelGraph>(partial)) {
+      return GetValueNode<KernelGraphPtr>(partial);
+    }
+    auto partial_cnode = partial->cast<CNodePtr>();
+    MS_EXCEPTION_IF_NULL(partial_cnode);
+    auto graph_node = partial_cnode->input(kCallKernelGraphIndex);
+    MS_EXCEPTION_IF_NULL(graph_node);
+    auto graph_value_node = graph_node->cast<ValueNodePtr>();
+    MS_EXCEPTION_IF_NULL(graph_value_node);
+    auto graph_value = graph_value_node->value();
+    MS_EXCEPTION_IF_NULL(graph_value);
+    auto child_graph = graph_value->cast<KernelGraphPtr>();
+    return child_graph;
+  };
   if (AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimCall)) {
     auto input1 = cnode->input(kCallKernelGraphIndex);
     MS_EXCEPTION_IF_NULL(input1);
@@ -1201,25 +1328,15 @@ std::vector<KernelGraphPtr> AnfRuntimeAlgorithm::GetCallSwitchKernelGraph(const 
     MS_EXCEPTION_IF_NULL(kernel_graph);
     return {kernel_graph->cast<KernelGraphPtr>()};
   } else if (AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimSwitch)) {
-    auto get_switch_kernel_graph = [cnode](size_t input_index) -> KernelGraphPtr {
-      auto partial = cnode->input(input_index);
-      MS_EXCEPTION_IF_NULL(partial);
-      if (IsValueNode<KernelGraph>(partial)) {
-        return GetValueNode<KernelGraphPtr>(partial);
-      }
-      auto partial_cnode = partial->cast<CNodePtr>();
-      MS_EXCEPTION_IF_NULL(partial_cnode);
-      auto graph_node = partial_cnode->input(kCallKernelGraphIndex);
-      MS_EXCEPTION_IF_NULL(graph_node);
-      auto graph_value_node = graph_node->cast<ValueNodePtr>();
-      MS_EXCEPTION_IF_NULL(graph_value_node);
-      auto graph_value = graph_value_node->value();
-      MS_EXCEPTION_IF_NULL(graph_value);
-      auto child_graph = graph_value->cast<KernelGraphPtr>();
-      return child_graph;
-    };
     return {get_switch_kernel_graph(kSwitchTrueKernelGraphIndex),
             get_switch_kernel_graph(kSwitchFalseKernelGraphIndex)};
+  } else if (AnfAlgo::CheckPrimitiveType(cnode, prim::kPrimSwitchLayer)) {
+    std::vector<KernelGraphPtr> child_graphs;
+    for (size_t idx = kMakeTupleInSwitchLayerIndex; idx < cnode->inputs().size(); idx++) {
+      auto child_graph = get_switch_kernel_graph(idx);
+      child_graphs.emplace_back(child_graph);
+    }
+    return child_graphs;
   }
   return {};
 }
@@ -1256,13 +1373,68 @@ bool AnfRuntimeAlgorithm::IsScalarOutput(const CNodePtr &cnode, size_t index) {
   return shape.size() == kShape1dDims && shape[0] == 1;
 }
 
-void AnfRuntimeAlgorithm::ReorderExecList(NotNull<std::vector<CNodePtr> *> node_list) {
+void AnfRuntimeAlgorithm::ReorderOptimizerExecList(NotNull<std::vector<CNodePtr> *> node_list) {
   std::vector<CNodePtr> all_opt_list;
   std::vector<CNodePtr> non_opt_list;
-
+  std::vector<CNodePtr> trans_list;
+  std::vector<CNodePtr> transpose_list;
+  std::vector<CNodePtr> cast_list;
   for (const auto &node : *node_list) {
     MS_EXCEPTION_IF_NULL(node);
-    if (kOptOperatorSet.find(AnfAlgo::GetCNodeName(node)) != kOptOperatorSet.end()) {
+    auto trans_pose_func = [&](const CNodePtr &node) -> bool {
+      MS_EXCEPTION_IF_NULL(node);
+      if (AnfAlgo::GetCNodeName(node) == prim::kPrimTranspose->name()) {
+        auto kernel_index = AnfAlgo::VisitKernelWithReturnType(AnfAlgo::GetInputNode(node, 0), 0);
+        MS_EXCEPTION_IF_NULL(kernel_index.first);
+        if (kernel_index.first->isa<CNode>() && kOptOperatorSet.find(AnfAlgo::GetCNodeName(
+                                                  kernel_index.first->cast<CNodePtr>())) != kOptOperatorSet.end()) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    auto trans_data_func = [&](const CNodePtr &node) -> bool {
+      MS_EXCEPTION_IF_NULL(node);
+      if (AnfAlgo::GetCNodeName(node) == prim::KPrimTransData->name()) {
+        auto kernel_index = AnfAlgo::VisitKernelWithReturnType(AnfAlgo::GetInputNode(node, 0), 0);
+        MS_EXCEPTION_IF_NULL(kernel_index.first);
+        if (kernel_index.first->isa<CNode>() && kOptOperatorSet.find(AnfAlgo::GetCNodeName(
+                                                  kernel_index.first->cast<CNodePtr>())) != kOptOperatorSet.end()) {
+          return true;
+        }
+        if (!kernel_index.first->isa<CNode>()) {
+          return false;
+        }
+        return trans_pose_func(kernel_index.first->cast<CNodePtr>());
+      }
+      return false;
+    };
+
+    auto cast_func = [&](const CNodePtr &node) -> bool {
+      MS_EXCEPTION_IF_NULL(node);
+      if (AnfAlgo::GetCNodeName(node) == prim::kPrimCast->name()) {
+        auto kernel_index = AnfAlgo::VisitKernelWithReturnType(AnfAlgo::GetInputNode(node, 0), 0);
+        MS_EXCEPTION_IF_NULL(kernel_index.first);
+        if (kernel_index.first->isa<CNode>() && kOptOperatorSet.find(AnfAlgo::GetCNodeName(
+                                                  kernel_index.first->cast<CNodePtr>())) != kOptOperatorSet.end()) {
+          return true;
+        }
+        if (!kernel_index.first->isa<CNode>()) {
+          return false;
+        }
+        return trans_data_func(kernel_index.first->cast<CNodePtr>());
+      }
+      return false;
+    };
+
+    if (trans_pose_func(node)) {
+      transpose_list.emplace_back(node);
+    } else if (trans_data_func(node)) {
+      trans_list.emplace_back(node);
+    } else if (cast_func(node)) {
+      cast_list.emplace_back(node);
+    } else if (kOptOperatorSet.find(AnfAlgo::GetCNodeName(node)) != kOptOperatorSet.end()) {
       all_opt_list.emplace_back(node);
     } else {
       non_opt_list.emplace_back(node);
@@ -1271,6 +1443,26 @@ void AnfRuntimeAlgorithm::ReorderExecList(NotNull<std::vector<CNodePtr> *> node_
   node_list->clear();
   std::copy(non_opt_list.begin(), non_opt_list.end(), std::back_inserter(*node_list));
   std::copy(all_opt_list.begin(), all_opt_list.end(), std::back_inserter(*node_list));
+  std::copy(transpose_list.begin(), transpose_list.end(), std::back_inserter(*node_list));
+  std::copy(trans_list.begin(), trans_list.end(), std::back_inserter(*node_list));
+  std::copy(cast_list.begin(), cast_list.end(), std::back_inserter(*node_list));
+}
+
+void AnfRuntimeAlgorithm::ReorderPosteriorExecList(NotNull<std::vector<CNodePtr> *> node_list) {
+  std::vector<CNodePtr> ordinary_node_list;
+  std::vector<CNodePtr> posterior_node_list;
+
+  for (const auto &node : *node_list) {
+    MS_EXCEPTION_IF_NULL(node);
+    if (kPosteriorOperatorSet.find(AnfAlgo::GetCNodeName(node)) != kPosteriorOperatorSet.end()) {
+      posterior_node_list.emplace_back(node);
+    } else {
+      ordinary_node_list.emplace_back(node);
+    }
+  }
+  node_list->clear();
+  std::copy(ordinary_node_list.begin(), ordinary_node_list.end(), std::back_inserter(*node_list));
+  std::copy(posterior_node_list.begin(), posterior_node_list.end(), std::back_inserter(*node_list));
 }
 
 TypeId AnfRuntimeAlgorithm::GetCNodeOutputPrecision(const AnfNodePtr &node) {
@@ -1363,6 +1555,18 @@ bool AnfRuntimeAlgorithm::GetBooleanAttr(const AnfNodePtr &node, const std::stri
     return false;
   }
   return AnfAlgo::GetNodeAttr<bool>(node, attr);
+}
+
+bool AnfRuntimeAlgorithm::HasDynamicShapeFlag(const PrimitivePtr &prim) {
+  auto get_bool_attr = [](const PrimitivePtr &primitive, const std::string &attr_name) -> bool {
+    MS_EXCEPTION_IF_NULL(primitive);
+    if (!primitive->HasAttr(attr_name)) {
+      return false;
+    }
+    return GetValue<bool>(primitive->GetAttr(attr_name));
+  };
+  return get_bool_attr(prim, kAttrInputIsDynamicShape) || get_bool_attr(prim, kAttrOutputIsDynamicShape) ||
+         get_bool_attr(prim, kAttrIsDynamicShape);
 }
 
 bool AnfRuntimeAlgorithm::IsDynamicShape(const AnfNodePtr &node) {
@@ -1566,7 +1770,7 @@ void AnfRuntimeAlgorithm::GetAllFatherRealNode(const AnfNodePtr &anf_node, std::
   MS_EXCEPTION_IF_NULL(result);
   MS_EXCEPTION_IF_NULL(visited);
   if (visited->find(anf_node) != visited->end()) {
-    MS_LOG(INFO) << "Node:" << anf_node->fullname_with_scope() << " has alreday been visited";
+    MS_LOG(INFO) << "Node:" << anf_node->fullname_with_scope() << " has already been visited";
     return;
   }
   visited->insert(anf_node);
@@ -1636,13 +1840,7 @@ void AnfRuntimeAlgorithm::InferShape(const CNodePtr &node) {
       args_spec_list.emplace_back(real_input->abstract());
     }
   }
-  auto &prim_eval_implement_map = abstract::GetPrimitiveToEvalImplMap();
-  auto ret = prim_eval_implement_map.find(primitive);
-  if (ret == prim_eval_implement_map.end()) {
-    MS_LOG(EXCEPTION) << "Get infer shape function failed, primitive name:" << primitive->name()
-                      << " primitive type:" << primitive->type_name();
-  }
-  auto eval_result = ret->second.impl_(nullptr, primitive, args_spec_list);
+  auto eval_result = opt::CppInferShape(primitive, args_spec_list);
   node->set_abstract(eval_result);
 }
 }  // namespace session

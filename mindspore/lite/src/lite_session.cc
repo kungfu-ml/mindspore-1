@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,21 +24,24 @@
 #include "src/runtime/allocator.h"
 #include "src/executor.h"
 #include "src/common/utils.h"
+#include "src/common/prim_util.h"
 #include "src/common/graph_util.h"
 #include "src/kernel_registry.h"
 #include "src/lite_model.h"
-#include "src/runtime/kernel/arm/base/dequant.h"
+#include "src/dequant.h"
+#ifdef ENABLE_MINDRT
+#include "src/mindrt_executor.h"
+#endif
 #if SUPPORT_NPU
 #include "src/runtime/agent/npu/npu_manager.h"
 #include "src/runtime/agent/npu/optimizer/npu_pass_manager.h"
 #endif
+#if GPU_OPENCL
+#include "src/runtime/kernel/opencl/opencl_subgraph.h"
+#endif
 
 namespace mindspore {
 namespace lite {
-static std::vector<schema::PrimitiveType> packed_op = {
-  schema::PrimitiveType_Conv2D, schema::PrimitiveType_DeConv2D, schema::PrimitiveType_DepthwiseConv2D,
-  schema::PrimitiveType_DeDepthwiseConv2D, schema::PrimitiveType_MatMul};
-
 // this method will not check whether tensor_idx is a weight tensor index, caller should ensure this.
 static bool WeightTensorNeedCopy(const lite::Model *model, const uint32_t tensor_idx) {
 #ifdef SUPPORT_TRAIN
@@ -50,7 +53,7 @@ static bool WeightTensorNeedCopy(const lite::Model *model, const uint32_t tensor
   return std::none_of(post_node_idxes.begin(), post_node_idxes.end(), [&](const size_t &post_node_idx) {
     auto node = model->all_nodes_[post_node_idx];
     MS_ASSERT(node != nullptr);
-    return IsContain(packed_op, static_cast<schema::PrimitiveType>(node->primitive_->Type()));
+    return IsPackedOp(GetPrimitiveType(node->primitive_));
   });
 }
 
@@ -75,6 +78,7 @@ void LiteSession::ConvertTensorsQuantParam(const schema::Tensor *src_tensor, lit
       dst_tensor->AddQuantParam(quant_arg);
     }
   }
+  dst_tensor->set_enable_huffman_code(src_tensor->enableHuffmanCode());
   auto quant_clusters = src_tensor->quantClusters();
   if (quant_clusters != nullptr) {
     std::vector<float> clusters;
@@ -89,8 +93,13 @@ int LiteSession::ConvertTensorsData(const lite::Model *model, size_t tensor_inde
                                     lite::Tensor *dst_tensor) {
   MS_ASSERT(src_tensor != nullptr);
   MS_ASSERT(dst_tensor != nullptr);
+  auto NeedUnPack = [&src_tensor, &dst_tensor]() -> bool {
+    auto data_type = src_tensor->dataType();
+    int pack_size = src_tensor->data()->size();
+    int org_size = dst_tensor->Size();
+    return (pack_size != org_size) && (data_type == kNumberTypeInt8 || data_type == kNumberTypeInt16);
+  };
   auto src_category = TensorCategory(src_tensor);
-  auto data_type = src_tensor->dataType();
   if ((src_category == Tensor::Category::CONST_TENSOR || src_category == Tensor::Category::CONST_SCALAR) &&
       src_tensor->data() != nullptr && src_tensor->data()->size() > 0) {
     if (src_tensor->dataType() == kObjectTypeTensorType) {
@@ -109,18 +118,28 @@ int LiteSession::ConvertTensorsData(const lite::Model *model, size_t tensor_inde
           MS_LOG(ERROR) << "Data from tensor is nullptr";
           return RET_NULL_PTR;
         }
-        memcpy(dst_data, src_tensor->data()->data(), dst_tensor->Size());
+        if (NeedUnPack()) {
+          auto ret = DequantUtil::UnPackToInt(src_tensor, dst_data);
+          if (ret != RET_OK) {
+            MS_LOG(ERROR) << "unpack to int failed.";
+            return RET_NULL_PTR;
+          }
+        } else {
+          memcpy(dst_data, src_tensor->data()->data(), dst_tensor->Size());
+        }
         copyed_tensor_idxes_.emplace_back(tensor_index);
       } else {
-        int pack_size = src_tensor->data()->size();
-        int org_size = dst_tensor->Size();
-        if (pack_size != org_size && (data_type == kNumberTypeInt8 || data_type == kNumberTypeInt16)) {
-          auto ret = dst_tensor->MallocData();
-          if (ret != RET_OK) {
-            MS_LOG(ERROR) << "Malloc data for tensor failed ";
+        if (NeedUnPack()) {
+          auto dst_data = dst_tensor->MutableData();
+          if (dst_data == nullptr) {
+            MS_LOG(ERROR) << "Data from tensor is nullptr";
             return RET_ERROR;
           }
-          kernel::DequantUtil::UnPackToInt(src_tensor, dst_tensor->MutableData());
+          auto ret = DequantUtil::UnPackToInt(src_tensor, dst_data);
+          if (ret != RET_OK) {
+            MS_LOG(ERROR) << "unpack to int failed.";
+            return RET_ERROR;
+          }
           copyed_tensor_idxes_.emplace_back(tensor_index);
         } else {
           dst_tensor->set_data(const_cast<unsigned char *>(src_tensor->data()->data()));
@@ -161,6 +180,7 @@ int LiteSession::ConvertTensors(const lite::Model *model) {
   uint32_t tensor_count = model->all_tensors_.size();
   MS_ASSERT(!model->sub_graphs_.empty());
   auto model_input_indices = model->sub_graphs_.front()->input_indices_;
+  auto model_output_indices = model->sub_graphs_.front()->output_indices_;
   for (uint32_t i = 0; i < tensor_count; ++i) {
     auto *src_tensor = model->all_tensors_[i];
     if (src_tensor == nullptr) {
@@ -181,6 +201,9 @@ int LiteSession::ConvertTensors(const lite::Model *model) {
     ConvertTensorsQuantParam(src_tensor, dst_tensor);
     if (IsContain(model_input_indices, i)) {
       dst_tensor->set_category(Tensor::GRAPH_INPUT);
+    }
+    if (IsContain(model_output_indices, i)) {
+      dst_tensor->set_category(Tensor::GRAPH_OUTPUT);
     }
     if (src_tensor->name() != nullptr) {
       dst_tensor->set_tensor_name(src_tensor->name()->str());
@@ -372,7 +395,11 @@ int LiteSession::CompileGraph(Model *model) {
     return ret;
   }
   // scheduler kernels
+#if SUPPORT_NPU
+  Scheduler scheduler(context_, model, &tensors_, npu_manager_, npu_pass_manager_);
+#else
   Scheduler scheduler(context_, model, &tensors_);
+#endif
   ret = scheduler.Schedule(&kernels_);
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "Schedule kernels failed: " << ret;
@@ -381,13 +408,30 @@ int LiteSession::CompileGraph(Model *model) {
   }
 #if SUPPORT_NPU
   if (this->context_->IsNpuEnabled()) {
-    if (mindspore::lite::NPUManager::GetInstance()->LoadOMModel() != RET_OK) {
+    MS_ASSERT(npu_manager_ != nullptr);
+    if (npu_manager_->LoadOMModel() != RET_OK) {
       MS_LOG(ERROR) << "NPU client load model failed.";
       return RET_ERROR;
     }
   }
 #endif
   InitGraphInOutTensors(model);
+
+#ifdef ENABLE_MINDRT
+  if (context_->IsCpuEnabled() && !context_->IsGpuEnabled() && !context_->IsNpuEnabled() && kernels_.size() == 1) {
+    executor_ = new (std::nothrow) MindrtExecutor();
+  } else {
+    executor_ = new (std::nothrow) Executor();
+  }
+#else
+  executor_ = new (std::nothrow) Executor();
+#endif
+  if (nullptr == executor_) {
+    MS_LOG(ERROR) << "New Executor failed";
+    is_running_.store(false);
+    return RET_ERROR;
+  }
+
   ret = executor_->Prepare(this->kernels_);
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "Prepare executor failed: " << ret;
@@ -400,6 +444,7 @@ int LiteSession::CompileGraph(Model *model) {
     is_running_.store(false);
     return ret;
   }
+
   is_running_.store(false);
   return RET_OK;
 }
@@ -461,14 +506,30 @@ int LiteSession::Init(const Context *context) {
     MS_LOG(ERROR) << "Not support multi-threading";
     return RET_ERROR;
   }
-
+#if SUPPORT_NPU
+  npu_manager_ = new (std::nothrow) NPUManager();
+  if (npu_manager_ == nullptr) {
+    MS_LOG(ERROR) << "New npu_manager_ failed";
+    is_running_.store(false);
+    return RET_ERROR;
+  }
+  npu_pass_manager_ = new (std::nothrow) NPUPassManager();
+  if (npu_pass_manager_ == nullptr) {
+    MS_LOG(ERROR) << "New npu_pass_manager_ failed";
+    is_running_.store(false);
+    return RET_ERROR;
+  }
+#endif
   if (context == nullptr) {
     MS_LOG(ERROR) << "context is nullptr";
     is_running_.store(false);
     return RET_NULL_PTR;
   }
-
+#if SUPPORT_NPU
+  this->context_ = new (std::nothrow) InnerContext(context, npu_manager_);
+#else
   this->context_ = new (std::nothrow) InnerContext(context);
+#endif
   if (this->context_ == nullptr) {
     MS_LOG(ERROR) << "New Context failed";
     is_running_.store(false);
@@ -492,12 +553,7 @@ int LiteSession::Init(const Context *context) {
     is_running_.store(false);
     return ret;
   }
-  executor_ = new (std::nothrow) Executor();
-  if (nullptr == executor_) {
-    MS_LOG(ERROR) << "New Executor failed";
-    is_running_.store(false);
-    return RET_ERROR;
-  }
+
   is_running_.store(false);
   return RET_OK;
 }
@@ -523,6 +579,9 @@ LiteSession::~LiteSession() {
     MS_LOG(ERROR) << "Not support multi-threading";
     return;
   }
+  for (auto *kernel : kernels_) {
+    delete kernel;
+  }
   for (size_t i = 0; i < tensors_.size(); i++) {
     auto *tensor = tensors_.at(i);
     MS_ASSERT(tensor != nullptr);
@@ -537,15 +596,19 @@ LiteSession::~LiteSession() {
   output_node_map_.clear();
   output_tensor_map_.clear();
   input_vec_.clear();
-  for (auto *kernel : kernels_) {
-    delete kernel;
-  }
   delete this->context_;
   delete this->executor_;
   this->executor_ = nullptr;
 #if SUPPORT_NPU
-  mindspore::lite::NPUPassManager::GetInstance()->Clear();
-  mindspore::lite::NPUManager::GetInstance()->Reset();
+  MS_ASSERT(npu_manager_ != nullptr);
+  MS_ASSERT(npu_pass_manager_ != nullptr);
+  npu_pass_manager_->Clear();
+  delete npu_pass_manager_;
+  npu_manager_->Reset();
+  delete npu_manager_;
+#endif
+#if GPU_OPENCL && !SUPPORT_TRAIN
+  delete opencl_runtime_wrapper_;
 #endif
   delete (model_);
   is_running_.store(false);
@@ -626,8 +689,16 @@ int LiteSession::ReSizeKernels(const std::vector<kernel::LiteKernel *> &kernels)
       MS_LOG(ERROR) << "All node in graph should be sub_graph";
       return RET_ERROR;
     }
-    auto sub_graph = reinterpret_cast<kernel::SubGraphKernel *>(kernel);
-    auto ret = sub_graph->ReSize(infer_shape_interrupt);
+    auto ret = RET_OK;
+    if (kernel->subgraph_type() == kernel::kGpuSubGraph) {
+#if GPU_OPENCL
+      auto sub_graph = reinterpret_cast<kernel::OpenCLSubGraph *>(kernel);
+      ret = sub_graph->ReSize(false);
+#endif
+    } else {
+      auto sub_graph = reinterpret_cast<kernel::SubGraphKernel *>(kernel);
+      ret = sub_graph->ReSize(infer_shape_interrupt);
+    }
     if (ret == RET_INFER_INVALID) {
       MS_LOG(INFO) << "InferShape is interrupted";
       infer_shape_interrupt = true;
@@ -674,16 +745,38 @@ int LiteSession::Resize(const std::vector<mindspore::tensor::MSTensor *> &inputs
 }
 
 int LiteSession::InitGPURuntime() {
-#if SUPPORT_GPU && !SUPPORT_TRAIN
+#if GPU_OPENCL && !SUPPORT_TRAIN
   if (this->context_->IsGpuEnabled()) {
+    opencl_runtime_wrapper_ = new (std::nothrow) opencl::OpenCLRuntimeWrapper();
+    if (opencl_runtime_wrapper_ == nullptr) {
+      MS_LOG(ERROR) << "create OpenCLRuntimeWrapper failed";
+      return RET_ERROR;
+    }
     auto gpu_device_info = this->context_->GetGpuInfo();
-    auto opencl_runtime = ocl_runtime_wrap_.GetInstance();
+    auto opencl_runtime = opencl_runtime_wrapper_->GetInstance();
     opencl_runtime->SetFp16Enable(gpu_device_info.enable_float16_);
     if (opencl_runtime->Init() != RET_OK) {
       this->context_->device_list_ = {{DT_CPU, {gpu_device_info.enable_float16_, MID_CPU}}};
       MS_LOG(WARNING) << "Init OpenCL runtime failed, change to CPU mode.";
     } else {
       MS_LOG(INFO) << "Init OpenCL runtime success.";
+    }
+  }
+#elif GPU_VULKAN && !SUPPORT_TRAIN
+  if (this->context_->IsGpuEnabled()) {
+    auto gpu_device_info = this->context_->GetGpuInfo();
+    vk_runtime_wrap_ = new (std::nothrow) gpu::GpuRuntimeWrapper<vulkan::VulkanRuntime>;
+    if (vk_runtime_wrap_ == nullptr) {
+      MS_LOG(ERROR) << "create vk_runtime failed";
+      return RET_ERROR;
+    }
+    auto vk_runtime = vk_runtime_wrap_->GetInstance();
+    vk_runtime->SetFp16Enable(gpu_device_info.enable_float16_);
+    if (vk_runtime->Init() != RET_OK) {
+      this->context_->device_list_ = {{DT_CPU, {gpu_device_info.enable_float16_, MID_CPU}}};
+      MS_LOG(WARNING) << "Init Vulkan runtime failed, change to CPU mode.";
+    } else {
+      MS_LOG(INFO) << "Init Vulkan runtime success.";
     }
   }
 #endif
@@ -694,12 +787,12 @@ int LiteSession::InitGPURuntime() {
 session::LiteSession *session::LiteSession::CreateSession(const lite::Context *context) {
   auto session = new (std::nothrow) lite::LiteSession();
   if (session == nullptr) {
-    MS_LOG(ERROR) << "create sesssion failed";
+    MS_LOG(ERROR) << "create session failed";
     return nullptr;
   }
   auto ret = session->Init(context);
   if (ret != mindspore::lite::RET_OK) {
-    MS_LOG(ERROR) << "init sesssion failed";
+    MS_LOG(ERROR) << "init session failed";
     delete session;
     return nullptr;
   }
@@ -710,7 +803,7 @@ session::LiteSession *session::LiteSession::CreateSession(const char *model_buf,
                                                           const lite::Context *context) {
   auto *session = LiteSession::CreateSession(context);
   if (session == nullptr) {
-    MS_LOG(ERROR) << "Create sesssion failed";
+    MS_LOG(ERROR) << "Create session failed";
     return nullptr;
   }
   auto *model = lite::ImportFromBuffer(model_buf, size, true);

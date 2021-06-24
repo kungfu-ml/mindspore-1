@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,8 +15,10 @@
 
 """array_ops"""
 
+import numpy as np
 import mindspore as ms
 from mindspore.ops import composite as C
+from mindspore.common.tensor import Tensor
 from .. import operations as P
 from ..operations import _grad_ops as G
 from ..operations import _inner_ops as inner
@@ -82,6 +84,8 @@ def get_bprop_dtype(self):
 
 
 dout_cast = C.MultitypeFuncGraph("dout_cast")
+
+
 @dout_cast.register("Tensor", "Tensor")
 def dout_cast_tensor(dout, x):
     cast = P.Cast()
@@ -89,12 +93,14 @@ def dout_cast_tensor(dout, x):
     dx = cast(dout, get_dtype(x))
     return dx
 
+
 @dout_cast.register("Number", "Number")
 def dout_cast_number(dout, x):
     cast = P.Cast()
     get_dtype = P.DType()
     dx = cast(dout, get_dtype(x))
     return dx
+
 
 @dout_cast.register("RowTensor", "Tensor")
 def dout_cast_row_tensor(dout, x):
@@ -251,6 +257,7 @@ def get_bprop_embedding_lookup(self):
     """Generate bprop for EmbeddingLookup"""
     sub_op = P.Sub()
     reshape_op = P.Reshape()
+
     def bprop_sparse(x, indices, offset, out, dout):
         x_shp = shape_op(x)
         new_indices = sub_op(indices, offset)
@@ -262,12 +269,15 @@ def get_bprop_embedding_lookup(self):
         # Reshape the 'actual_dout' on device
         actual_dout = reshape_op(dout, actual_dout_shape_changed)
         return RowTensor(new_indices, actual_dout, x_shp), zeros_like(indices), zeros_like(offset)
+
     return bprop_sparse
+
 
 @constexpr
 def make_begin(shp):
     begin = tuple([0 for _ in shp])
     return begin
+
 
 @bprop_getters.register(P.Padding)
 def get_bprop_padding(self):
@@ -297,16 +307,16 @@ def _concat_grad_uniform(input_shapes, input_nums):
     """Helper function for bprop of Concat"""
     is_uniform = True
     for i in range(1, input_nums):
-        if input_shapes[i-1] != input_shapes[i]:
+        if input_shapes[i - 1] != input_shapes[i]:
             is_uniform = False
             break
     return is_uniform
+
 
 @bprop_getters.register(P.Concat)
 def get_bprop_concat(self):
     """Generate bprop for Concat"""
     axis = self.axis
-    is_ascend = context.get_context('device_target') == "Ascend"
 
     def bprop(x, out, dout):
         dx = ()
@@ -316,13 +326,14 @@ def get_bprop_concat(self):
         for i in range(input_nums):
             input_shapes = input_shapes + (shape_op(x[i]),)
         is_uniform = _concat_grad_uniform(input_shapes, input_nums)
-        if is_uniform and is_ascend:
+        if is_uniform:
             dx = P.Split(axis, input_nums)(dout)
         else:
             for i in range(input_nums):
                 slice_out = P.Slice()(dout, out_offset[i], input_shapes[i])
                 dx = dx + (slice_out,)
         return (dx,)
+
     return bprop
 
 
@@ -337,15 +348,9 @@ def get_bprop_slice(self):
     """Generate bprop for Slice"""
 
     def bprop(x, begin, size, out, dout):
-        dx = P.Pad(_slice_grad_pad(begin, size, shape_op(x)))(dout)
+        dx = G.SliceGrad()(dout, x, begin, size)
         return (dx, zeros_like(begin), zeros_like(size))
 
-    def bprop_grad(x, begin, size, out, dout):
-        dx = dx = G.SliceGrad()(dout, x, begin, size)
-        return (dx, zeros_like(begin), zeros_like(size))
-
-    if context.get_context('device_target') == "GPU" or context.get_context('device_target') == "CPU":
-        return bprop_grad
     return bprop
 
 
@@ -380,6 +385,7 @@ def _regenerate_output_shape(x_shp, ind_shp, axis):
     return out_shape
 
 
+@bprop_getters.register(P.Gather)
 @bprop_getters.register(P.GatherV2)
 def get_bprop_gather_v2(self):
     """Generate bprop for GatherV2"""
@@ -459,6 +465,90 @@ def get_bprop_sparse_gather_v2(self):
     return bprop
 
 
+@constexpr
+def _range_op(start, limit, delta, dtype):
+    """helper function for grad of Sort"""
+    output_tensor = Tensor(list(range(start, limit, delta)), dtype)
+    return output_tensor
+
+
+@constexpr
+def _get_1d_shape(in_shape):
+    """helper function for grad of Sort"""
+    out_shape = 1
+    for i in in_shape:
+        out_shape *= i
+    return (out_shape,)
+
+
+@constexpr
+def _get_transposition(axis, rank):
+    """helper function for grad of Sort"""
+    if axis < 0:
+        axis += rank
+    transposition = np.r_[np.arange(axis), [rank - 1], np.arange(axis + 1, rank - 1), [axis]]
+    trans = tuple(transposition.tolist())
+    return trans
+
+
+@bprop_getters.register(P.Sort)
+def get_bprop_sort(self):
+    """Grad definition for `Sort` operation."""
+    axis = self.axis
+    descending = self.descending
+    scatter = P.ScatterNd()
+    expand_dims = P.ExpandDims()
+    reshape_op = P.Reshape()
+    dtype = P.DType()
+    topk = P.TopK()
+    neg = P.Neg()
+    tranpose = P.Transpose()
+
+    def bprop(input_x, out, dout):
+        x_shape = input_x.shape
+        k = x_shape[axis]
+        rank = F.rank(input_x)
+        dvalue = dout[0]
+        if not descending:
+            input_x = neg(input_x)
+            dvalue = neg(dvalue)
+        if axis == -1 or (axis + 1) == rank:
+            transposition = None
+            top_k_input = input_x
+        else:
+            transposition = _get_transposition(axis, rank)
+            top_k_input = tranpose(input_x, transposition)
+
+        _, indices = topk(top_k_input, k)
+        ind_shape = indices.shape
+        top_k_input_shape = top_k_input.shape
+        in_lastdim = top_k_input_shape[-1]
+        ind_lastdim = ind_shape[-1]
+        ind_2d = reshape_op(indices, (-1, ind_lastdim))
+        outer_dim = ind_2d.shape[0]
+
+        # [0, outterdim, 2*outerdim, ..., (k-1)*outerdim]
+        indices_dtype = dtype(indices)
+        range_flatten_index = _range_op(0, outer_dim * in_lastdim, in_lastdim, indices_dtype)
+
+        # expand_dims to (k, 1), then broadcast
+        ind = reshape_op(ind_2d + expand_dims(range_flatten_index, -1), (-1,))
+        x_shape_1d = _get_1d_shape(top_k_input_shape)
+
+        if transposition is not None:
+            dvalue = tranpose(dvalue, invert_permutation(transposition))
+            out_grad = reshape_op(
+                scatter(expand_dims(ind, -1), reshape_op(dvalue, (-1,)), x_shape_1d), top_k_input_shape)
+            dx = tranpose(out_grad, invert_permutation(transposition))
+        else:
+            dx = reshape_op(scatter(expand_dims(ind, -1), reshape_op(dvalue, (-1,)), x_shape_1d), top_k_input_shape)
+        if not descending:
+            dx = neg(dx)
+        return (dx,)
+
+    return bprop
+
+
 @bprop_getters.register(P.Identity)
 def get_bprop_identity(self):
     """Generate bprop for Identity"""
@@ -475,17 +565,19 @@ def get_bprop_range(self):
 
     def bprop(x, out, dout):
         return (zeros_like(x),)
+
     return bprop
 
 
 @bprop_getters.register(P.Pack)
-def get_bprop_pack(self):
-    """Generate bprop for Pack"""
+@bprop_getters.register(P.Stack)
+def get_bprop_stack(self):
+    """Generate bprop for Stack"""
     axis = self.axis
 
     def bprop(x, out, dout):
-        pack_grad = P.Unpack(axis)
-        out = pack_grad(dout)
+        stack_grad = P.Unstack(axis)
+        out = stack_grad(dout)
         if is_sub_class(F.typeof(x), ms.list_):
             ret = []
             for item in out:
@@ -506,16 +598,17 @@ def get_bprop_reverse_v2(self):
         dx = reverse_grad(dout)
         return (dx,)
 
-    return  bprop
+    return bprop
 
-@bprop_getters.register(P.Unpack)
-def get_bprop_unpack(self):
-    """Generate bprop for Unpack"""
+
+@bprop_getters.register(P.Unstack)
+def get_bprop_unstack(self):
+    """Generate bprop for Unstack"""
     axis = self.axis
 
     def bprop(x, out, dout):
-        unpack_grad = P.Pack(axis)
-        out = unpack_grad(dout)
+        unstack_grad = P.Stack(axis)
+        out = unstack_grad(dout)
         return (out,)
 
     return bprop
@@ -636,6 +729,7 @@ def get_bprop_scatter_non_aliasing_add_update(self):
 
     return bprop
 
+
 @bprop_getters.register(P.TensorScatterUpdate)
 def get_bprop_tensor_scatter_update(self):
     """Generate bprop for TensorScatterUpdate"""
@@ -650,11 +744,10 @@ def get_bprop_tensor_scatter_update(self):
     return bprop
 
 
-
 @bprop_getters.register(P.ScatterMax)
 def get_bprop_scatter_max(self):
     """Generate bprop for ScatterMax"""
-    gather = P.GatherV2()
+    gather = P.Gather()
 
     def bprop(x, indices, update, out, dout):
         return dout, zeros_like(indices), gather(dout, indices, 0)
@@ -732,7 +825,7 @@ def _gather_drop_negatives(params,
                            is_positive=None):
     """Helper function for unsorted segment ops."""
     maximum = P.Maximum()
-    gather = P.GatherV2()
+    gather = P.Gather()
     greater_equal = P.GreaterEqual()
     rank = P.Rank()
     fill = P.Fill()
@@ -780,7 +873,7 @@ def get_bprop_unsorted_segment_sum(self):
 
     def bprop(x, segment_ids, num_segments, out, dout):
         return _gather_drop_negatives(dout, segment_ids, None, None)[0], zeros_like(segment_ids), \
-                zeros_like(num_segments)
+               zeros_like(num_segments)
 
     return bprop
 
@@ -811,7 +904,7 @@ def get_bprop_unsorted_segment_prod(self):
     equal = P.Equal()
     cast = P.Cast()
     select = P.Select()
-    gather = P.GatherV2()
+    gather = P.Gather()
     greater = P.Greater()
     ones_like = P.OnesLike()
     maximum = P.Maximum()
@@ -862,21 +955,26 @@ def get_bprop_batch_to_space(self):
 @bprop_getters.register(P.SpaceToBatchND)
 def get_bprop_space_to_batch_nd(self):
     """Generate bprop for SpaceToBatchND"""
-    space_to_batch_nd_grad = P.BatchToSpaceND(self.ori_block_shape, self.ori_paddings)
+    space_to_batch_nd_grad = P.BatchToSpaceND(self.block_shape, self.paddings)
+
     def bprop(x, out, dout):
         dx = space_to_batch_nd_grad(dout)
         return (dx,)
+
     return bprop
 
 
 @bprop_getters.register(P.BatchToSpaceND)
 def get_bprop_batch_to_space_nd(self):
     """Generate bprop for BatchToSpaceND"""
-    batch_to_space_nd_grad = P.SpaceToBatchND(self.ori_block_shape, self.ori_crops)
+    batch_to_space_nd_grad = P.SpaceToBatchND(self.block_shape, self.crops)
+
     def bprop(x, out, dout):
         dx = batch_to_space_nd_grad(dout)
         return (dx,)
+
     return bprop
+
 
 @bprop_getters.register(P.BroadcastTo)
 def get_bprop_broadcast_to(self):
@@ -894,6 +992,7 @@ def get_bprop_broadcast_to(self):
         reduced_grad = reduce_keep_dim(dout, reduction_axes)
         dx = reshape(reduced_grad, x_shape)
         return (dx,)
+
     return bprop
 
 
@@ -905,6 +1004,7 @@ def get_bprop_reverse_sequence(self):
     def bprop(x, seq_lengths, out, dout):
         dx = reverse_sequence_grad(dout, seq_lengths)
         return dx, zeros_like(seq_lengths)
+
     return bprop
 
 
@@ -912,9 +1012,11 @@ def get_bprop_reverse_sequence(self):
 def get_bprop_trans_shape(self):
     """Generate bprop for TransShape"""
     op = P.TransShape()
+
     def bprop(x, shape, out, dout):
         dx = op(dout, shape_op(x))
         return (dx, zeros_like(shape))
+
     return bprop
 
 
@@ -922,7 +1024,9 @@ def get_bprop_trans_shape(self):
 def get_bprop_unique(self):
     """Generate bprop for Unique"""
     op = G.UniqueGrad()
+
     def bprop(x, out, dout):
         dx = op(dout, out)
         return (dx,)
+
     return bprop

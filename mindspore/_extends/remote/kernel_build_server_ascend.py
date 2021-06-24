@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,15 +14,22 @@
 # ============================================================================
 """kernel build server for ascend"""
 import sys
-from mindspore._extends.remote.kernel_build_server import Messager, get_logger
-from mindspore._extends.parallel_compile.tbe_compiler.tbe_process import create_tbe_parallel_process, op_select_format, check_supported
-from mindspore._extends.parallel_compile.akg_compiler.akg_process import create_akg_parallel_process
+import warnings
+from mindspore._extends.remote.kernel_build_server import Messager, get_logger, AkgBuilder
+from mindspore._extends.parallel_compile.tbe_compiler.tbe_process import create_tbe_parallel_process, op_select_format
+from mindspore._extends.parallel_compile.tbe_compiler.tbe_process import check_supported
 
 class TbeBuilder:
     """Tbe building wrapper"""
 
     def __init__(self):
         self.tbe_builder = create_tbe_parallel_process()
+
+    def init_auto_tune_env(self, mode):
+        return self.tbe_builder.init_auto_tune_env(mode)
+
+    def create(self):
+        return self.tbe_builder.init_process_num()
 
     def start(self, json):
         return self.tbe_builder.start_compile_op(json)
@@ -36,21 +43,6 @@ class TbeBuilder:
     def exit(self):
         self.tbe_builder.exit()
 
-class AkgBuilder:
-    """Akg building wrapper"""
-
-    def __init__(self):
-        pass
-
-    def create(self, process_num, waitime):
-        self.akg_builder = create_akg_parallel_process(process_num, waitime)
-
-    def accept_json(self, json):
-        return self.akg_builder.accept_json(json)
-
-    def compile(self):
-        return self.akg_builder.compile()
-
 class AscendMessager(Messager):
     '''
     Ascend Messager
@@ -59,7 +51,7 @@ class AscendMessager(Messager):
 
     def __init__(self, fdin, fdout):
         super().__init__(fdin, fdout)
-        get_logger().info('[TRACE]', 'Ascend Messager init...')
+        get_logger().info("[TRACE] Ascend Messager init...")
         self.tbe_builder = TbeBuilder()
         self.akg_builder = AkgBuilder()
 
@@ -69,7 +61,15 @@ class AscendMessager(Messager):
         Reference protocol between them at PR#3821 and PR#3935
         """
         arg = self.get_message()
-        if arg == 'TBE/START':
+        if arg == 'TBE/PRE':
+            ans = self.tbe_builder.create()
+            self.send_res(ans)
+        elif arg == "TBE/TUNE":
+            self.send_ack()
+            tune_mode = self.get_message()
+            ans = self.tbe_builder.init_auto_tune_env(tune_mode)
+            self.send_res(ans)
+        elif arg == 'TBE/START':
             self.send_ack()
             json = self.get_message()
             res = self.tbe_builder.start(json)
@@ -77,7 +77,7 @@ class AscendMessager(Messager):
         elif arg == 'TBE/WAIT':
             self.send_ack()
             task_id, res, pre = self.tbe_builder.wait()
-            get_logger().debug('[TRACE]', str(task_id) + '/' + str(res) + '/' + str(pre))
+            get_logger().debug(f"[TRACE] {str(task_id)} / {str(res)} / {str(pre)}")
             if self.get_message() != 'CONTINUE':
                 self.send_ack(False)
                 self.exit()
@@ -98,7 +98,7 @@ class AscendMessager(Messager):
             process_num_str = self.get_message()
             self.send_ack()
             wait_time_str = self.get_message()
-            self.akg_builder.create(int(process_num_str), int(wait_time_str))
+            self.akg_builder.create(int(process_num_str), int(wait_time_str), "ASCEND")
             self.send_ack()
         elif arg == 'AKG/DATA':
             self.send_ack()
@@ -121,7 +121,7 @@ class AscendMessager(Messager):
         elif arg == 'SUPPORT':
             self.send_ack()
             json = self.get_message()
-            get_logger().debug('[SUPPORT]', json)
+            get_logger().debug(f"[SUPPORT] {json}")
             try:
                 res = check_supported(json)
             except json.decoder.JSONDecodeError:
@@ -137,12 +137,13 @@ class AscendMessager(Messager):
     def exit(self):
         self.tbe_builder.reset()
         self.tbe_builder.exit()
-        get_logger().info('[TRACE]', 'Ascend Messager Exit...')
+        get_logger().info("[TRACE] Ascend Messager Exit...")
         exit()
 
 if __name__ == '__main__':
+    warnings.simplefilter("ignore")
     if len(sys.argv) != 3:
         raise Exception('Incorrect argv: {}'.format(sys.argv))
-    get_logger().debug('[TRACE]', 'argv: ' + str(sys.argv))
+    get_logger().debug(f"[TRACE] argv: {str(sys.argv)}")
     messager = AscendMessager(int(sys.argv[1]), int(sys.argv[2]))
     messager.run()

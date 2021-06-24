@@ -35,6 +35,10 @@ def _get_full_batch():
     """Get whether to use full_batch."""
     return auto_parallel_context().get_full_batch()
 
+def _get_pipeline_stages():
+    """Get pipeline stages"""
+    return auto_parallel_context().get_pipeline_stages()
+
 def _check_full_batch():
     """
     full_batch could only be used under semi_auto_parallel or auto_parallel, check it.
@@ -141,9 +145,9 @@ def _get_parameter_broadcast():
     parallel_mode = auto_parallel_context().get_parallel_mode()
     parameter_broadcast = auto_parallel_context().get_parameter_broadcast()
 
-    if parallel_mode in ("data_parallel", "hybrid_parallel") and parameter_broadcast is False and get_seed is None:
-        logger.warning("You are suggested to use mindspore.common.set_seed() to share"
-                       " parameters among devices.")
+    if parallel_mode in ("data_parallel", "hybrid_parallel") and parameter_broadcast is False and get_seed() is None:
+        logger.warning("You are suggested to use mindspore.context.set_auto_parallel_context(parameter_broadcast=True)"
+                       " or mindspore.common.set_seed() to share parameters among multi-devices.")
 
     return parameter_broadcast
 
@@ -186,7 +190,10 @@ def _get_python_op(op_name, op_path, instance_name, arglist):
     """Get python operator."""
     module = __import__(op_path, fromlist=["None"])
     cls = getattr(module, op_name)
-    op = cls(*arglist)
+    if op_path != "mindspore.ops.functional":
+        op = cls(*arglist)
+    else:
+        op = cls
     op.set_prim_instance_name(instance_name)
     return op
 

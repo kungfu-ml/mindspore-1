@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,10 +20,12 @@
 #include "runtime/device/kernel_runtime_manager.h"
 #include "utils/comm_manager.h"
 #include "utils/scoped_long_running.h"
+#include "pybind_api/ir/tensor_py.h"
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
 #include "ps/ps_cache/ps_cache_manager.h"
 #endif
 
+using mindspore::tensor::TensorPy;
 namespace mindspore {
 namespace session {
 namespace {
@@ -190,6 +192,7 @@ void Executor::WorkerLoop() {
       done_tasks_.emplace_back(task);
     }
     if (task->type_ != kRunGraph || task->sync_run_) {
+      std::lock_guard<std::mutex> lock(task_mutex_);
       sync_run_task_finished_ = true;
       sync_cond_var_.notify_all();
     }
@@ -215,10 +218,15 @@ void Executor::OnEvent(const ExecutorEvent &event) {
   if (event == ExecutorEvent::kRunGraphFinished) {
     OnRunGraphFinished();
   } else if (event == ExecutorEvent::kClear) {
-    WorkerJoin();
+    OnClear();
   } else if (event == ExecutorEvent::kException) {
     OnException();
   }
+}
+
+void Executor::OnClear() {
+  WorkerJoin();
+  ClearDoneTasks();
 }
 
 void Executor::OnException() {
@@ -232,9 +240,7 @@ void Executor::OnException() {
   }
   {
     std::lock_guard<std::mutex> lock(pending_task_mutex_);
-    for (auto iter = pending_tasks_.begin(); iter != pending_tasks_.end(); ++iter) {
-      new_done_tasks.emplace_back(*iter);
-    }
+    std::copy(pending_tasks_.begin(), pending_tasks_.end(), std::back_inserter(new_done_tasks));
     pending_tasks_.clear();
   }
   {
@@ -249,7 +255,7 @@ void Executor::OnRunGraphFinished() {
   for (auto &task : new_ready_tasks) {
     ready_tasks_.push(task);
   }
-  if (new_ready_tasks.size() > 0) {
+  if (!new_ready_tasks.empty()) {
     task_cond_var_.notify_all();
   }
   reenter_cond_var_.notify_all();
@@ -277,26 +283,25 @@ void Executor::ClearDoneTasks() {
   done_tasks_.clear();
 }
 
-void Executor::RunTask(const std::shared_ptr<Task> &task, bool sync) {
+void Executor::RunTask(const std::shared_ptr<Task> &task, bool sync, bool long_run) {
   {
     std::lock_guard<std::mutex> lock(task_mutex_);
+    sync_run_task_finished_ = false;
     ready_tasks_.push(task);
   }
-  sync_run_task_finished_ = false;
   task_cond_var_.notify_all();
-  ClearDoneTasks();
   if (sync && !sync_run_task_finished_) {
     std::unique_lock<std::mutex> lock(task_mutex_);
-    sync_cond_var_.wait(lock, [this] {
-      bool finished = sync_run_task_finished_;
-      return finished;
-    });
+    if (long_run) {
+      mindspore::ScopedLongRunning long_running;
+      sync_cond_var_.wait(lock, [this] { return sync_run_task_finished_; });
+    } else {
+      sync_cond_var_.wait(lock, [this] { return sync_run_task_finished_; });
+    }
   }
   ClearDoneTasks();
   MsException::Instance().CheckException();
 }
-
-void Executor::SyncRunTask(const std::shared_ptr<Task> &task) { RunTask(task, true); }
 
 GraphId Executor::CompileGraph(const SessionPtr &session, const GraphSegmentPtr &segment,
                                const AnfNodePtrList &outputs) {
@@ -304,7 +309,7 @@ GraphId Executor::CompileGraph(const SessionPtr &session, const GraphSegmentPtr 
   task->session_ = session;
   task->segment_ = segment;
   task->output_nodes_ = outputs;
-  SyncRunTask(task);
+  RunTask(task, true);
   return task->graph_id_;
 }
 
@@ -312,7 +317,7 @@ GraphId Executor::CompileGraph(const SessionPtr &session, NotNull<FuncGraphPtr> 
   auto task = std::make_shared<CompileGraphTask>();
   task->session_ = session;
   task->func_graph_ = func_graph.get();
-  SyncRunTask(task);
+  RunTask(task, true);
   return task->graph_id_;
 }
 
@@ -320,7 +325,7 @@ void Executor::BuildGraph(const SessionPtr &session, GraphId graphId) {
   auto task = std::make_shared<BuildGraphTask>();
   task->session_ = session;
   task->graph_id_ = graphId;
-  SyncRunTask(task);
+  RunTask(task, true);
 }
 
 void Executor::RunGraph(const SessionPtr &session, const GraphId &graph_id,
@@ -334,11 +339,10 @@ void Executor::RunGraph(const SessionPtr &session, const GraphId &graph_id,
   session->CreateOutputTensors(graph_id, inputs, outputs, &task->tensor_to_node_);
   task->outputs_ = *outputs;
   task->sync_run_ = true;
-  mindspore::ScopedLongRunning long_running;
-  SyncRunTask(task);
+  RunTask(task, true, true);
 }
 
-void Executor::WaitTaskGraphAvailable(const SessionPtr &session, const std::shared_ptr<RunGraphTask> &task) {
+void Executor::WaitLockedInputs(const SessionPtr &session, const std::shared_ptr<RunGraphTask> &task) {
   bool need_lock = false;
   for (auto &tensor : task->input_tensors_) {
     if (tensor->NeedWait()) {
@@ -350,10 +354,10 @@ void Executor::WaitTaskGraphAvailable(const SessionPtr &session, const std::shar
     }
   }
   if (need_lock) {
-    ClearDoneTasks();
     mindspore::ScopedLongRunning long_running;
     for (auto &tensor : task->input_tensors_) {
       if (tensor->NeedWait() && !tensor->IsGraphOutput()) {
+        MsException::Instance().CheckException();
         tensor->Wait();
       }
     }
@@ -362,14 +366,6 @@ void Executor::WaitTaskGraphAvailable(const SessionPtr &session, const std::shar
   // need lock input parameters for optimizer
   for (auto &tensor : task->input_need_lock_tensors_) {
     tensor->SetNeedWait(true);
-  }
-  auto graph = session->GetGraph(task->graph_id_);
-  if (graph != nullptr && !graph->IsPostGraphFinished()) {
-    ClearDoneTasks();
-    mindspore::ScopedLongRunning long_running;
-    std::unique_lock<std::mutex> lock(reenter_mutex_);
-    reenter_cond_var_.wait(lock, [&graph] { return graph->IsPostGraphFinished(); });
-    MsException::Instance().CheckException();
   }
 }
 
@@ -382,21 +378,29 @@ void Executor::RunGraphAsync(const SessionPtr &session, const GraphId &graph_id,
   task->graph_id_ = graph_id;
   task->input_tensors_ = inputs;
   task->input_need_lock_tensors_ = session->GetInputNeedLockTensors(graph_id, inputs);
+  auto graph = session->GetGraph(task->graph_id_);
+  if (graph != nullptr && !graph->IsPostGraphFinished()) {
+    mindspore::ScopedLongRunning long_running;
+    std::unique_lock<std::mutex> lock(reenter_mutex_);
+    reenter_cond_var_.wait(lock, [&graph] { return graph->IsPostGraphFinished(); });
+    MsException::Instance().CheckException();
+  }
   session->CreateOutputTensors(graph_id, inputs, outputs, &task->tensor_to_node_);
   // maintain a copy of output vector
   task->outputs_ = *outputs;
   // sync run graph without output tensor(int dataset graph)
   if (!TensorInVector(outputs)) {
     task->sync_run_ = true;
-    mindspore::ScopedLongRunning long_running;
-    SyncRunTask(task);
+    RunTask(task, true, true);
     return;
   }
-  WaitTaskGraphAvailable(session, task);
-  if (!IsTaskReady(task)) {
+  WaitLockedInputs(session, task);
+  {
     std::lock_guard<std::mutex> lock(pending_task_mutex_);
-    pending_tasks_.push_back(task);
-    return;
+    if (!IsTaskReady(task)) {
+      pending_tasks_.push_back(task);
+      return;
+    }
   }
   RunTask(task, false);
 }
@@ -404,20 +408,39 @@ void Executor::RunGraphAsync(const SessionPtr &session, const GraphId &graph_id,
 void Executor::RunOp(const SessionPtr &session, OpRunInfo *op_run_info, const GraphInfo &graph_info,
                      std::vector<tensor::TensorPtr> *input_tensors, VectorRef *outputs,
                      const std::vector<int64_t> &tensors_mask) {
-  auto task = std::make_shared<RunOpTask>();
-  task->session_ = session;
-  task->op_run_info_ = op_run_info;
-  task->graph_info_ = graph_info;
-  task->input_tensors_ = input_tensors;
-  task->tensors_mask_ = tensors_mask;
-  for (auto &tensor : *input_tensors) {
-    if (tensor->NeedWait()) {
-      tensor->Wait();
+  MS_EXCEPTION_IF_NULL(session);
+  auto ms_context = MsContext::GetInstance();
+  auto target = ms_context->get_param<std::string>(MS_CTX_DEVICE_TARGET);
+  if (target == kGPUDevice) {
+    for (auto &tensor : *input_tensors) {
+      if (tensor->NeedWait()) {
+        tensor->Wait();
+      }
     }
+    {
+      // Release GIL before calling into (potentially long-running) C++ code
+      if (Py_IsInitialized()) {
+        py::gil_scoped_release release;
+        session->RunOpImpl(graph_info, op_run_info, input_tensors, outputs, tensors_mask);
+      } else {
+        session->RunOpImpl(graph_info, op_run_info, input_tensors, outputs, tensors_mask);
+      }
+    }
+  } else {
+    auto task = std::make_shared<RunOpTask>();
+    task->session_ = session;
+    task->op_run_info_ = op_run_info;
+    task->graph_info_ = graph_info;
+    task->input_tensors_ = input_tensors;
+    task->tensors_mask_ = tensors_mask;
+    for (auto &tensor : *input_tensors) {
+      if (tensor->NeedWait()) {
+        tensor->Wait();
+      }
+    }
+    RunTask(task, true, true);
+    *outputs = task->outputs_;
   }
-  mindspore::ScopedLongRunning long_running;
-  SyncRunTask(task);
-  *outputs = task->outputs_;
 }
 
 void Executor::RunOpsInGraph(const SessionPtr &session, const GraphId &graph_id,
@@ -428,7 +451,7 @@ void Executor::RunOpsInGraph(const SessionPtr &session, const GraphId &graph_id,
   task->session_ = session;
   task->graph_id_ = graph_id;
   task->input_tensors_ = inputs;
-  SyncRunTask(task);
+  RunTask(task, true, true);
   *outputs = task->outputs_;
 }
 
@@ -436,14 +459,14 @@ bool Executor::CreateCommGroup(const std::string &group_name, std::vector<uint32
   auto task = std::make_shared<CreateCommGroupTask>();
   task->group_name_ = group_name;
   task->ranks_ = ranks;
-  SyncRunTask(task);
+  RunTask(task, true);
   return task->result_;
 }
 
 bool Executor::DestroyCommGroup(const std::string &group_name) {
   auto task = std::make_shared<DestroyCommGroupTask>();
   task->group_name_ = group_name;
-  SyncRunTask(task);
+  RunTask(task, true);
   return task->result_;
 }
 

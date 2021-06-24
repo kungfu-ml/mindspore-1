@@ -212,7 +212,10 @@ int Benchmark::ReadTensorData(std::ifstream &in_file_stream, const std::string &
   std::string line;
   getline(in_file_stream, line);
   std::stringstream line_stream(line);
-  tensor::MSTensor *tensor = GetTensorByNodeOrTensorName(tensor_name);
+  if (this->benchmark_data_.find(tensor_name) != this->benchmark_data_.end()) {
+    return RET_OK;
+  }
+  tensor::MSTensor *tensor = GetTensorByNameOrShape(tensor_name, dims);
   if (tensor == nullptr) {
     MS_LOG(ERROR) << "Get tensor failed, tensor name: " << tensor_name;
     return RET_ERROR;
@@ -248,7 +251,7 @@ int Benchmark::CompareOutput() {
   int total_size = 0;
   for (const auto &calib_tensor : benchmark_data_) {
     std::string node_or_tensor_name = calib_tensor.first;
-    tensor::MSTensor *tensor = GetTensorByNodeOrTensorName(node_or_tensor_name);
+    tensor::MSTensor *tensor = GetTensorByNameOrShape(node_or_tensor_name, calib_tensor.second->shape);
     if (tensor == nullptr) {
       MS_LOG(ERROR) << "Get tensor failed, tensor name: " << node_or_tensor_name;
       return RET_ERROR;
@@ -284,13 +287,35 @@ int Benchmark::CompareOutput() {
   return RET_OK;
 }
 
-tensor::MSTensor *Benchmark::GetTensorByNodeOrTensorName(const std::string &node_or_tensor_name) {
+tensor::MSTensor *Benchmark::GetTensorByNodeShape(const std::vector<size_t> &node_shape) {
+  std::vector<tensor::MSTensor *> match_tensors;
+  std::vector<int> shape_vector;
+  (void)std::transform(node_shape.begin(), node_shape.end(), std::back_inserter(shape_vector),
+                       [](const size_t &value) { return static_cast<int>(value); });
+  auto tensors = session_->GetOutputs();
+  for (auto &out_tensor_pair : tensors) {
+    if (out_tensor_pair.second->shape() == shape_vector) {
+      match_tensors.emplace_back(out_tensor_pair.second);
+    }
+  }
+  if (match_tensors.empty() || match_tensors.size() != 1) {
+    MS_LOG(ERROR) << "get tensor by node shape failed";
+    return nullptr;
+  }
+  return match_tensors.front();
+}
+
+tensor::MSTensor *Benchmark::GetTensorByNameOrShape(const std::string &node_or_tensor_name,
+                                                    const std::vector<size_t> &dims) {
   tensor::MSTensor *tensor = nullptr;
   auto tensors = session_->GetOutputsByNodeName(node_or_tensor_name);
   if (tensors.empty() || tensors.size() != 1) {
     MS_LOG(INFO) << "Cannot find output node: " << node_or_tensor_name
                  << " or node has more than one output tensor, switch to GetOutputByTensorName";
     tensor = session_->GetOutputByTensorName(node_or_tensor_name);
+    if (tensor == nullptr) {
+      return GetTensorByNodeShape(dims);
+    }
   } else {
     tensor = tensors.front();
   }
@@ -327,8 +352,9 @@ int Benchmark::CompareDataGetTotalBiasAndSize(const std::string &name, tensor::M
     MS_LOG(ERROR) << "mutableData is nullptr.";
     return RET_ERROR;
   }
-  switch (msCalibDataType) {
-    case TypeId::kNumberTypeFloat: {
+  switch (tensor->data_type()) {
+    case TypeId::kNumberTypeFloat:
+    case TypeId::kNumberTypeFloat32: {
       bias = CompareData<float>(name, tensor->shape(), mutableData);
       break;
     }
@@ -344,8 +370,16 @@ int Benchmark::CompareDataGetTotalBiasAndSize(const std::string &name, tensor::M
       bias = CompareData<int32_t>(name, tensor->shape(), mutableData);
       break;
     }
+    case TypeId::kNumberTypeInt16: {
+      bias = CompareData<int16_t>(name, tensor->shape(), mutableData);
+      break;
+    }
+    case TypeId::kNumberTypeBool: {
+      bias = CompareData<bool>(name, tensor->shape(), mutableData);
+      break;
+    }
     default:
-      MS_LOG(ERROR) << "Datatype " << msCalibDataType << " is not supported.";
+      MS_LOG(ERROR) << "Datatype " << tensor->data_type() << " is not supported.";
       return RET_ERROR;
   }
   if (bias < 0) {
@@ -499,6 +533,8 @@ int Benchmark::PrintInputData() {
         std::cout << static_cast<const int32_t *>(in_data)[j] << " ";
       } else if (tensor_data_type == TypeId::kNumberTypeInt64) {
         std::cout << static_cast<const int64_t *>(in_data)[j] << " ";
+      } else if (tensor_data_type == TypeId::kNumberTypeBool) {
+        std::cout << static_cast<const bool *>(in_data)[j] << " ";
       } else {
         MS_LOG(ERROR) << "Datatype: " << tensor_data_type << " is not supported.";
         return RET_ERROR;
@@ -538,10 +574,8 @@ int Benchmark::RunBenchmark() {
   }
 
   auto &cpu_device_ctx = context->device_list_[0];
-  if (flags_->cpu_bind_mode_ == MID_CPU) {
-    cpu_device_ctx.device_info_.cpu_device_info_.cpu_bind_mode_ = MID_CPU;
-  } else if (flags_->cpu_bind_mode_ == HIGHER_CPU) {
-    cpu_device_ctx.device_info_.cpu_device_info_.cpu_bind_mode_ = HIGHER_CPU;
+  if (flags_->cpu_bind_mode_ == MID_CPU || flags_->cpu_bind_mode_ == HIGHER_CPU) {
+    cpu_device_ctx.device_info_.cpu_device_info_.cpu_bind_mode_ = CpuBindMode(flags_->cpu_bind_mode_);
   } else {
     cpu_device_ctx.device_info_.cpu_device_info_.cpu_bind_mode_ = NO_BIND;
   }
@@ -581,9 +615,8 @@ int Benchmark::RunBenchmark() {
       return ret;
     }
   }
-  if (model != nullptr) {
-    model->Free();
-  }
+  if (model != nullptr) model->Free();
+
   ms_inputs_ = session_->GetInputs();
   auto end_prepare_time = GetTimeUs();
   MS_LOG(INFO) << "PrepareTime = " << (end_prepare_time - start_prepare_time) / 1000 << " ms";
@@ -652,146 +685,160 @@ void BenchmarkFlags::InitResizeDimsList() {
   }
 }
 
-int Benchmark::InitCallbackParameter() {
-  if (flags_->time_profiling_) {
-    // before callback
-    before_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &before_inputs,
-                            const std::vector<mindspore::tensor::MSTensor *> &before_outputs,
-                            const CallBackParam &callParam) {
-      if (before_inputs.empty()) {
-        MS_LOG(INFO) << "The num of beforeInputs is empty";
-      }
-      if (before_outputs.empty()) {
-        MS_LOG(INFO) << "The num of beforeOutputs is empty";
-      }
-      if (op_times_by_type_.find(callParam.node_type) == op_times_by_type_.end()) {
-        op_times_by_type_.insert(std::make_pair(callParam.node_type, std::make_pair(0, 0.0f)));
-      }
-      if (op_times_by_name_.find(callParam.node_name) == op_times_by_name_.end()) {
-        op_times_by_name_.insert(std::make_pair(callParam.node_name, std::make_pair(0, 0.0f)));
-      }
-
-      op_call_times_total_++;
-      op_begin_ = GetTimeUs();
-      return true;
-    };
-
-    // after callback
-    after_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &after_inputs,
-                           const std::vector<mindspore::tensor::MSTensor *> &after_outputs,
-                           const CallBackParam &call_param) {
-      uint64_t opEnd = GetTimeUs();
-
-      if (after_inputs.empty()) {
-        MS_LOG(INFO) << "The num of after inputs is empty";
-      }
-      if (after_outputs.empty()) {
-        MS_LOG(INFO) << "The num of after outputs is empty";
-      }
-
-      float cost = static_cast<float>(opEnd - op_begin_) / 1000.0f;
-      op_cost_total_ += cost;
-      op_times_by_type_[call_param.node_type].first++;
-      op_times_by_type_[call_param.node_type].second += cost;
-      op_times_by_name_[call_param.node_name].first++;
-      op_times_by_name_[call_param.node_name].second += cost;
-      return true;
-    };
-  } else if (flags_->perf_profiling_) {
-#ifndef ENABLE_ARM64
-    MS_LOG(ERROR) << "Only support perf_profiling on arm64.";
-    return RET_ERROR;
-#else
-    struct perf_event_attr pe, pe2;
-    memset(&pe, 0, sizeof(struct perf_event_attr));
-    memset(&pe2, 0, sizeof(struct perf_event_attr));
-    pe.type = PERF_TYPE_HARDWARE;
-    pe2.type = PERF_TYPE_HARDWARE;
-    pe.size = sizeof(struct perf_event_attr);
-    pe2.size = sizeof(struct perf_event_attr);
-    pe.disabled = 1;
-    pe2.disabled = 1;
-    pe.exclude_kernel = 1;   // don't count kernel
-    pe2.exclude_kernel = 1;  // don't count kernel
-    pe.exclude_hv = 1;       // don't count hypervisor
-    pe2.exclude_hv = 1;      // don't count hypervisor
-    pe.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-    pe2.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
-    if (flags_->perf_event_ == "CACHE") {
-      pe.config = PERF_COUNT_HW_CACHE_REFERENCES;
-      pe2.config = PERF_COUNT_HW_CACHE_MISSES;
-    } else if (flags_->perf_event_ == "STALL") {
-      pe.config = PERF_COUNT_HW_STALLED_CYCLES_FRONTEND;
-      pe2.config = PERF_COUNT_HW_STALLED_CYCLES_BACKEND;
-    } else {
-      pe.config = PERF_COUNT_HW_CPU_CYCLES;
-      pe2.config = PERF_COUNT_HW_INSTRUCTIONS;
+int Benchmark::InitTimeProfilingCallbackParameter() {
+  // before callback
+  before_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &before_inputs,
+                          const std::vector<mindspore::tensor::MSTensor *> &before_outputs,
+                          const CallBackParam &callParam) {
+    if (before_inputs.empty()) {
+      MS_LOG(INFO) << "The num of beforeInputs is empty";
     }
-    perf_fd = syscall(__NR_perf_event_open, pe, 0, -1, -1, 0);
-    if (perf_fd == -1) {
-      MS_LOG(ERROR) << "Failed to open perf event " << pe.config;
-      return RET_ERROR;
+    if (before_outputs.empty()) {
+      MS_LOG(INFO) << "The num of beforeOutputs is empty";
     }
-    perf_fd2 = syscall(__NR_perf_event_open, pe2, 0, -1, perf_fd, 0);
-    if (perf_fd2 == -1) {
-      MS_LOG(ERROR) << "Failed to open perf event " << pe2.config;
-      return RET_ERROR;
+    if (op_times_by_type_.find(callParam.node_type) == op_times_by_type_.end()) {
+      op_times_by_type_.insert(std::make_pair(callParam.node_type, std::make_pair(0, 0.0f)));
     }
-    struct PerfCount zero;
-    zero.value[0] = 0;
-    zero.value[1] = 0;
-    // before callback
-    before_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &before_inputs,
-                            const std::vector<mindspore::tensor::MSTensor *> &before_outputs,
-                            const CallBackParam &callParam) {
-      if (before_inputs.empty()) {
-        MS_LOG(INFO) << "The num of beforeInputs is empty";
-      }
-      if (before_outputs.empty()) {
-        MS_LOG(INFO) << "The num of beforeOutputs is empty";
-      }
-      if (op_perf_by_type_.find(callParam.node_type) == op_perf_by_type_.end()) {
-        op_perf_by_type_.insert(std::make_pair(callParam.node_type, std::make_pair(0, zero)));
-      }
-      if (op_perf_by_name_.find(callParam.node_name) == op_perf_by_name_.end()) {
-        op_perf_by_name_.insert(std::make_pair(callParam.node_name, std::make_pair(0, zero)));
-      }
+    if (op_times_by_name_.find(callParam.node_name) == op_times_by_name_.end()) {
+      op_times_by_name_.insert(std::make_pair(callParam.node_name, std::make_pair(0, 0.0f)));
+    }
 
-      op_call_times_total_++;
-      ioctl(perf_fd, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
-      ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
-      return true;
-    };
+    op_call_times_total_++;
+    op_begin_ = GetTimeUs();
+    return true;
+  };
 
-    // after callback
-    after_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &after_inputs,
-                           const std::vector<mindspore::tensor::MSTensor *> &after_outputs,
-                           const CallBackParam &call_param) {
-      struct PerfResult res;
-      ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
-      read(perf_fd, &res, sizeof(struct PerfResult));
+  // after callback
+  after_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &after_inputs,
+                         const std::vector<mindspore::tensor::MSTensor *> &after_outputs,
+                         const CallBackParam &call_param) {
+    uint64_t opEnd = GetTimeUs();
 
-      if (after_inputs.empty()) {
-        MS_LOG(INFO) << "The num of after inputs is empty";
-      }
-      if (after_outputs.empty()) {
-        MS_LOG(INFO) << "The num of after outputs is empty";
-      }
-      float cost1 = static_cast<float>(res.values[0].value);
-      float cost2 = static_cast<float>(res.values[1].value);
-      op_cost_total_ += cost1;
-      op_cost2_total_ += cost2;
-      op_perf_by_type_[call_param.node_type].first++;
-      op_perf_by_type_[call_param.node_type].second.value[0] += cost1;
-      op_perf_by_type_[call_param.node_type].second.value[1] += cost2;
-      op_perf_by_name_[call_param.node_name].first++;
-      op_perf_by_name_[call_param.node_name].second.value[0] += cost1;
-      op_perf_by_name_[call_param.node_name].second.value[1] += cost2;
-      return true;
-    };
-#endif
-  }
+    if (after_inputs.empty()) {
+      MS_LOG(INFO) << "The num of after inputs is empty";
+    }
+    if (after_outputs.empty()) {
+      MS_LOG(INFO) << "The num of after outputs is empty";
+    }
+
+    float cost = static_cast<float>(opEnd - op_begin_) / 1000.0f;
+    if (flags_->device_ == "GPU") {
+      auto gpu_param = reinterpret_cast<const GPUCallBackParam &>(call_param);
+      cost = static_cast<float>(gpu_param.execute_time);
+    }
+    op_cost_total_ += cost;
+    op_times_by_type_[call_param.node_type].first++;
+    op_times_by_type_[call_param.node_type].second += cost;
+    op_times_by_name_[call_param.node_name].first++;
+    op_times_by_name_[call_param.node_name].second += cost;
+    return true;
+  };
   return RET_OK;
+}
+int Benchmark::InitPerfProfilingCallbackParameter() {
+#ifndef ENABLE_ARM64
+  MS_LOG(ERROR) << "Only support perf_profiling on arm64.";
+  return RET_ERROR;
+#else
+  struct perf_event_attr pe, pe2;
+  memset(&pe, 0, sizeof(struct perf_event_attr));
+  memset(&pe2, 0, sizeof(struct perf_event_attr));
+  pe.type = PERF_TYPE_HARDWARE;
+  pe2.type = PERF_TYPE_HARDWARE;
+  pe.size = sizeof(struct perf_event_attr);
+  pe2.size = sizeof(struct perf_event_attr);
+  pe.disabled = 1;
+  pe2.disabled = 1;
+  pe.exclude_kernel = 1;   // don't count kernel
+  pe2.exclude_kernel = 1;  // don't count kernel
+  pe.exclude_hv = 1;       // don't count hypervisor
+  pe2.exclude_hv = 1;      // don't count hypervisor
+  pe.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
+  pe2.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
+  if (flags_->perf_event_ == "CACHE") {
+    pe.config = PERF_COUNT_HW_CACHE_REFERENCES;
+    pe2.config = PERF_COUNT_HW_CACHE_MISSES;
+  } else if (flags_->perf_event_ == "STALL") {
+    pe.config = PERF_COUNT_HW_STALLED_CYCLES_FRONTEND;
+    pe2.config = PERF_COUNT_HW_STALLED_CYCLES_BACKEND;
+  } else {
+    pe.config = PERF_COUNT_HW_CPU_CYCLES;
+    pe2.config = PERF_COUNT_HW_INSTRUCTIONS;
+  }
+  perf_fd = syscall(__NR_perf_event_open, pe, 0, -1, -1, 0);
+  if (perf_fd == -1) {
+    MS_LOG(ERROR) << "Failed to open perf event " << pe.config;
+    return RET_ERROR;
+  }
+  perf_fd2 = syscall(__NR_perf_event_open, pe2, 0, -1, perf_fd, 0);
+  if (perf_fd2 == -1) {
+    MS_LOG(ERROR) << "Failed to open perf event " << pe2.config;
+    return RET_ERROR;
+  }
+  struct PerfCount zero;
+  zero.value[0] = 0;
+  zero.value[1] = 0;
+  // before callback
+  before_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &before_inputs,
+                          const std::vector<mindspore::tensor::MSTensor *> &before_outputs,
+                          const CallBackParam &callParam) {
+    if (before_inputs.empty()) {
+      MS_LOG(INFO) << "The num of beforeInputs is empty";
+    }
+    if (before_outputs.empty()) {
+      MS_LOG(INFO) << "The num of beforeOutputs is empty";
+    }
+    if (op_perf_by_type_.find(callParam.node_type) == op_perf_by_type_.end()) {
+      op_perf_by_type_.insert(std::make_pair(callParam.node_type, std::make_pair(0, zero)));
+    }
+    if (op_perf_by_name_.find(callParam.node_name) == op_perf_by_name_.end()) {
+      op_perf_by_name_.insert(std::make_pair(callParam.node_name, std::make_pair(0, zero)));
+    }
+
+    op_call_times_total_++;
+    ioctl(perf_fd, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP);
+    ioctl(perf_fd, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
+    return true;
+  };
+
+  // after callback
+  after_call_back_ = [&](const std::vector<mindspore::tensor::MSTensor *> &after_inputs,
+                         const std::vector<mindspore::tensor::MSTensor *> &after_outputs,
+                         const CallBackParam &call_param) {
+    struct PerfResult res;
+    ioctl(perf_fd, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
+    read(perf_fd, &res, sizeof(struct PerfResult));
+
+    if (after_inputs.empty()) {
+      MS_LOG(INFO) << "The num of after inputs is empty";
+    }
+    if (after_outputs.empty()) {
+      MS_LOG(INFO) << "The num of after outputs is empty";
+    }
+    float cost1 = static_cast<float>(res.values[0].value);
+    float cost2 = static_cast<float>(res.values[1].value);
+    op_cost_total_ += cost1;
+    op_cost2_total_ += cost2;
+    op_perf_by_type_[call_param.node_type].first++;
+    op_perf_by_type_[call_param.node_type].second.value[0] += cost1;
+    op_perf_by_type_[call_param.node_type].second.value[1] += cost2;
+    op_perf_by_name_[call_param.node_name].first++;
+    op_perf_by_name_[call_param.node_name].second.value[0] += cost1;
+    op_perf_by_name_[call_param.node_name].second.value[1] += cost2;
+    return true;
+  };
+#endif
+  return RET_OK;
+}
+
+int Benchmark::InitCallbackParameter() {
+  int ret = RET_OK;
+  if (flags_->time_profiling_) {
+    ret = InitTimeProfilingCallbackParameter();
+  } else if (flags_->perf_profiling_) {
+    ret = InitPerfProfilingCallbackParameter();
+  }
+  return ret;
 }
 
 int Benchmark::Init() {
@@ -829,13 +876,10 @@ int Benchmark::Init() {
     std::cerr << "numThreads:" << this->flags_->num_threads_ << " must be greater than 0" << std::endl;
     return RET_ERROR;
   }
-
-  if (this->flags_->cpu_bind_mode_ == 2) {
-    MS_LOG(INFO) << "cpuBindMode = MID_CPU";
-    std::cout << "cpuBindMode = MID_CPU" << std::endl;
-  } else if (this->flags_->cpu_bind_mode_ == 1) {
-    MS_LOG(INFO) << "cpuBindMode = HIGHER_CPU";
-    std::cout << "cpuBindMode = HIGHER_CPU" << std::endl;
+  static std::vector<std::string> CPU_BIND_MODE_MAP = {"NO_BIND", "HIGHER_CPU", "MID_CPU"};
+  if (this->flags_->cpu_bind_mode_ >= 1) {
+    MS_LOG(INFO) << "cpuBindMode = " << CPU_BIND_MODE_MAP[this->flags_->cpu_bind_mode_];
+    std::cout << "cpuBindMode = " << CPU_BIND_MODE_MAP[this->flags_->cpu_bind_mode_] << std::endl;
   } else {
     MS_LOG(INFO) << "cpuBindMode = NO_BIND";
     std::cout << "cpuBindMode = NO_BIND" << std::endl;

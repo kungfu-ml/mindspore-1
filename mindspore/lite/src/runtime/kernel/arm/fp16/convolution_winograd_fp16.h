@@ -24,20 +24,20 @@
 #include "nnacl/fp16/conv_fp16.h"
 #include "nnacl/fp16/winograd_utils_fp16.h"
 #include "src/common/utils.h"
-#include "nnacl/minimal_filtering_generator.h"
+#include "nnacl/base/minimal_filtering_generator.h"
 
 namespace mindspore::kernel {
 class ConvolutionWinogradFP16CPUKernel : public ConvolutionBaseFP16CPUKernel {
  public:
   ConvolutionWinogradFP16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                                   const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx,
-                                   const mindspore::lite::PrimitiveC *primitive, int out_unit)
-      : ConvolutionBaseFP16CPUKernel(parameter, inputs, outputs, ctx, primitive), output_unit_(out_unit) {}
+                                   const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx, int out_unit,
+                                   void *origin_weight, void *origin_bias, TypeId origin_weight_data_type,
+                                   TypeId origin_bias_data_type)
+      : ConvolutionBaseFP16CPUKernel(parameter, inputs, outputs, ctx, origin_weight_data_type, origin_bias_data_type),
+        output_unit_(out_unit),
+        origin_weight_(origin_weight),
+        origin_bias_(origin_bias) {}
   ~ConvolutionWinogradFP16CPUKernel() override {
-    if (fp16_weight_ != nullptr) {
-      free(fp16_weight_);
-      fp16_weight_ = nullptr;
-    }
     if (trans_weight_ != nullptr) {
       free(trans_weight_);
       trans_weight_ = nullptr;
@@ -52,6 +52,7 @@ class ConvolutionWinogradFP16CPUKernel : public ConvolutionBaseFP16CPUKernel {
   int InitTmpBuffer();
   int ConfigInputOutput();
   int WinogradFilterTransformFp16(const float16_t *weight_data, float *matrix_g, float *matrix_gt, int oc_block);
+  void AdjustNumberOfThread();
 
  private:
   void FreeTmpBuffer() {
@@ -75,6 +76,8 @@ class ConvolutionWinogradFP16CPUKernel : public ConvolutionBaseFP16CPUKernel {
   int kernel_unit_;
   int input_unit_;
   int output_unit_;
+  void *origin_weight_;  // do not free
+  void *origin_bias_;    // do not free
   float16_t *tmp_data_ = nullptr;
   float16_t *trans_input_ = nullptr;
   float16_t *gemm_out_ = nullptr;

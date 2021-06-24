@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -97,7 +97,9 @@ class AnfRuntimeAlgorithm {
   static bool HasNodeAttr(const std::string &key, const CNodePtr &node);
   // delete attr of anf node
   static void EraseNodeAttr(const std::string &key, AnfNodePtr node);
-  // get the num of input real_kernel(which can be build and run in device)
+  // get the num of inputs include monads for a cnode
+  static size_t GetInputNum(const CNodePtr &cnode);
+  // get the num of inputs exclude monads for real_kernel (which can be build and run in device)
   static size_t GetInputTensorNum(const AnfNodePtr &node);
   // get the num of output real_kernel(which can be build and run in device)
   static size_t GetOutputTensorNum(const AnfNodePtr &node);
@@ -105,6 +107,10 @@ class AnfRuntimeAlgorithm {
   static std::vector<std::string> GetAllOutputFormats(const AnfNodePtr &node);
   // get all inputs format select of anf node
   static std::vector<std::string> GetAllInputFormats(const AnfNodePtr &node);
+  // get all inputs type select of anf node
+  static std::vector<TypeId> GetAllInputDeviceTypes(const AnfNodePtr &node);
+  // get all outputs type select of anf node
+  static std::vector<TypeId> GetAllOutputDeviceTypes(const AnfNodePtr &node);
   // get origin data format select of anf node
   static std::string GetOriginDataFormat(const AnfNodePtr &node);
   // get output format select of anf node
@@ -116,7 +122,7 @@ class AnfRuntimeAlgorithm {
   // get output format from prev node,input_index is the input index of current node related to prev node
   static std::string GetPrevNodeOutputFormat(const AnfNodePtr &node, size_t input_idx);
   // get reshape_type of from the output of input node.
-  static std::vector<Axis> GetPrevNodeOutputReshapeType(const AnfNodePtr &node, size_t input_idx);
+  static std::string GetPrevNodeOutputReshapeType(const AnfNodePtr &node, size_t input_idx);
   // get output shapes inferred by ME from input nodes.
   static std::vector<size_t> GetOutputInferShape(const AnfNodePtr &node, size_t output_idx);
   // get input shapes inferred by ME from input nodes.
@@ -126,9 +132,9 @@ class AnfRuntimeAlgorithm {
   // get input shapes which will built and run in device
   static std::vector<size_t> GetInputDeviceShape(const AnfNodePtr &node, size_t input_idx);
   // Get Input Padding Axis
-  static std::vector<Axis> GetInputReshapeType(const AnfNodePtr &node, size_t output_idx);
+  static std::string GetInputReshapeType(const AnfNodePtr &node, size_t output_idx);
   // Get Output Padding Axis
-  static std::vector<Axis> GetOutputReshapeType(const AnfNodePtr &node, size_t output_idx);
+  static std::string GetOutputReshapeType(const AnfNodePtr &node, size_t output_idx);
   // get output data type inferred by ME of anf node
   static TypeId GetOutputInferDataType(const AnfNodePtr &node, size_t output_idx);
   // get output original data type from prev node,input_index is the input index of current node related to prev node
@@ -210,6 +216,7 @@ class AnfRuntimeAlgorithm {
   // get real input index for some tbe ops which input order is different between me and tbe impl
   static size_t GetRealInputIndex(const AnfNodePtr &anf_node, const size_t cur_index);
   static bool IsCommunicationOp(const AnfNodePtr &node);
+  static bool IsFusedCommunicationOp(const AnfNodePtr &node);
   static bool IsInplaceNode(const AnfNodePtr &node, const string &type);
   static bool IsGetNext(const NotNull<AnfNodePtr> &node);
   static FuncGraphPtr GetValueNodeFuncGraph(const AnfNodePtr &node);
@@ -217,12 +224,14 @@ class AnfRuntimeAlgorithm {
   static bool IsSwitchCall(const CNodePtr &call_node);
   static bool IsScalarInput(const CNodePtr &cnode, size_t index);
   static bool IsScalarOutput(const CNodePtr &cnode, size_t index);
-  static void ReorderExecList(NotNull<std::vector<CNodePtr> *> node_list);
+  static void ReorderOptimizerExecList(NotNull<std::vector<CNodePtr> *> node_list);
+  static void ReorderPosteriorExecList(NotNull<std::vector<CNodePtr> *> node_list);
   // get fix output precision of cnode.
   static TypeId GetCNodeOutputPrecision(const AnfNodePtr &node);
   // get fix output precision from prev node, input_idx is the input index of current node related to prev node.
   static TypeId GetPrevNodeOutputPrecision(const AnfNodePtr &node, size_t input_idx);
   static bool IsDynamicShape(const AnfNodePtr &node);
+  static bool HasDynamicShapeFlag(const PrimitivePtr &prim);
   static bool IsCondControlKernel(const CNodePtr &node);
   static bool IsIndependentNode(const CNodePtr &node);
   static bool GetBooleanAttr(const AnfNodePtr &node, const std::string &attr);

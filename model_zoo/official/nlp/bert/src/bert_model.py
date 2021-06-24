@@ -55,8 +55,8 @@ class BertConfig:
         compute_type (:class:`mindspore.dtype`): Compute type in BertTransformer. Default: mstype.float32.
     """
     def __init__(self,
-                 seq_length=128,
-                 vocab_size=32000,
+                 seq_length=384,
+                 vocab_size=30522,
                  hidden_size=768,
                  num_hidden_layers=12,
                  num_attention_heads=12,
@@ -113,7 +113,7 @@ class EmbeddingLookup(nn.Cell):
                                           [vocab_size, embedding_size]))
         self.expand = P.ExpandDims()
         self.shape_flat = (-1,)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.one_hot = P.OneHot()
         self.on_value = Tensor(1.0, mstype.float32)
         self.off_value = Tensor(0.0, mstype.float32)
@@ -178,7 +178,7 @@ class EmbeddingPostprocessor(nn.Cell):
         self.reshape = P.Reshape()
         self.shape = tuple(embedding_shape)
         self.dropout = nn.Dropout(1 - dropout_prob)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.use_relative_positions = use_relative_positions
         self.slice = P.StridedSlice()
         _, seq, _ = self.shape
@@ -188,7 +188,7 @@ class EmbeddingPostprocessor(nn.Cell):
             use_one_hot=False)
         self.layernorm = nn.LayerNorm((embedding_size,))
         self.position_ids = Tensor(np.arange(seq).reshape(-1, seq).astype(np.int32))
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     def construct(self, token_type_ids, word_embeddings):
         """Postprocessors apply positional and token type embeddings to word embeddings."""
@@ -226,7 +226,7 @@ class BertOutput(nn.Cell):
                               weight_init=TruncatedNormal(initializer_range)).to_float(compute_type)
         self.dropout = nn.Dropout(1 - dropout_prob)
         self.dropout_prob = dropout_prob
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.layernorm = nn.LayerNorm((out_channels,)).to_float(compute_type)
         self.cast = P.Cast()
 
@@ -310,7 +310,7 @@ class RelaPosEmbeddingsGenerator(nn.Cell):
         self.reshape = P.Reshape()
         self.one_hot = nn.OneHot(depth=self.vocab_size)
         self.shape = P.Shape()
-        self.gather = P.GatherV2()  # index_select
+        self.gather = P.Gather()  # index_select
         self.matmul = P.BatchMatMul()
 
     def construct(self):
@@ -444,7 +444,7 @@ class BertAttention(nn.Cell):
         if self.has_attention_mask:
             self.expand_dims = P.ExpandDims()
             self.sub = P.Sub()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.cast = P.Cast()
             self.get_dtype = P.DType()
         if do_return_2d_tensor:
@@ -804,8 +804,8 @@ class BertModel(nn.Cell):
         self.bert_embedding_lookup = nn.Embedding(
             vocab_size=config.vocab_size,
             embedding_size=self.embedding_size,
-            use_one_hot=use_one_hot_embeddings)
-        self.embedding_tables = self.bert_embedding_lookup.embedding_table
+            use_one_hot=use_one_hot_embeddings,
+            embedding_table=TruncatedNormal(config.initializer_range))
 
         self.bert_embedding_postprocessor = EmbeddingPostprocessor(
             embedding_size=self.embedding_size,
@@ -847,7 +847,7 @@ class BertModel(nn.Cell):
     def construct(self, input_ids, token_type_ids, input_mask):
         """Bidirectional Encoder Representations from Transformers."""
         # embedding
-        embedding_tables = self.embedding_tables
+        embedding_tables = self.bert_embedding_lookup.embedding_table
         word_embeddings = self.bert_embedding_lookup(input_ids)
         embedding_output = self.bert_embedding_postprocessor(token_type_ids,
                                                              word_embeddings)

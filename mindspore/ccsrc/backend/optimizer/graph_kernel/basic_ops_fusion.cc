@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,13 @@
  */
 #include "backend/optimizer/graph_kernel/basic_ops_fusion.h"
 
-#include <memory>
 #include <algorithm>
+#include <map>
+#include <memory>
+#include <set>
 #include <unordered_set>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 #include <string>
 
@@ -66,23 +69,36 @@ IncludeType IncludeFusedBasicOpForward(const AnfNodePtr &cur_node, const AnfNode
   return EXCLUDE;
 }
 
-// The GetItem node should be fused with its real input.
+// The GetItem node should be fused with its real input and users.
 // If its real input is not in the fuse_list, the GetItem should be excluded.
 AnfNodePtrList RemoveWildGetitem(const AnfNodePtrList &fused_op) {
   if (fused_op.empty()) return AnfNodePtrList();
   std::set<AnfNodePtr> fused_op_set(fused_op.begin(), fused_op.end());
   auto check_include = [&fused_op_set](const AnfNodePtr &node) { return fused_op_set.count(node) ? FOLLOW : EXCLUDE; };
 
+  auto mng = fused_op[0]->func_graph()->manager();
+  MS_EXCEPTION_IF_NULL(mng);
   bool changed = true;
   while (changed) {
     changed = false;
     AnfNodePtrList remove_list;
     for (auto getitem : fused_op_set) {
       if (!AnfAlgo::CheckPrimitiveType(getitem, prim::kPrimTupleGetItem)) continue;
+
       // GetItem should be fused with its real input.
       auto prev_node = getitem->cast<CNodePtr>()->input(kRealInputNodeIndexInTupleGetItem);
       if (check_include(prev_node) == EXCLUDE) {
         remove_list.push_back(getitem);
+        break;
+      }
+
+      // GetItem should be fused with its all users.
+      const auto &users = mng->node_users()[getitem];
+      if (std::any_of(users.begin(), users.end(), [check_include](const std::pair<AnfNodePtr, int> &user) {
+            return check_include(user.first) == EXCLUDE;
+          })) {
+        remove_list = DeepLinkedGraphSearch(getitem, check_include);
+        break;
       }
     }
     if (!remove_list.empty()) {
@@ -127,7 +143,7 @@ bool FuseBasicOps(const FuncGraphPtr &kernel_graph, const std::vector<AnfNodePtr
 
   for (auto iter = todos.cbegin(); iter != todos.cend(); ++iter) {
     auto node = (*iter)->cast<CNodePtr>();
-    if (node == nullptr || fused_ops->count(node)) {
+    if (node == nullptr || IsKeepBasicNode(node) || fused_ops->count(node)) {
       continue;
     }
     bool is_fusible_op = IsFusibleOp(node);
@@ -136,9 +152,18 @@ bool FuseBasicOps(const FuncGraphPtr &kernel_graph, const std::vector<AnfNodePtr
     }
 
     auto fuse_nodes = FindFuseCNodes(node, depend_prior);
-    if (fuse_nodes.empty() || (fuse_nodes.size() == 1 && AnfAlgo::IsGraphKernel(fuse_nodes[0]))) {
+    if (fuse_nodes.empty()) {
       continue;
     }
+
+    if (fuse_nodes.size() == 1) {
+      // Do not fuse a single GraphKernel again.
+      // Do not fuse a single Assign.
+      if (AnfAlgo::IsGraphKernel(fuse_nodes[0]) || IsPrimitiveCNode(fuse_nodes[0], prim::kPrimAssign)) {
+        continue;
+      }
+    }
+
     changed = true;
     fused_ops->insert(fuse_nodes.begin(), fuse_nodes.end());
     AnfNodePtr fused_new_node;

@@ -25,11 +25,11 @@ using mindspore::kernel::KERNEL_ARCH::kCPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_BiasGrad;
+using mindspore::schema::PrimitiveType_BiasAddGrad;
 
 namespace mindspore::kernel {
 
-int BiasGradCPUKernel::Init() {
+int BiasGradCPUKernel::ReSize() {
   auto dims = in_tensors_[0]->shape();
   bias_param->ndim_ = dims.size();
   for (unsigned int i = 0; i < bias_param->ndim_; i++) {
@@ -44,7 +44,12 @@ int BiasGradCPUKernel::Init() {
   return RET_OK;
 }
 
-int BiasGradCPUKernel::ReSize() { return RET_OK; }
+int BiasGradCPUKernel::Init() {
+  if (!InferShapeDone()) {
+    return RET_OK;
+  }
+  return ReSize();
+}
 
 int BiasGradCPUKernel::Execute(int task_id) {
   auto in = reinterpret_cast<float *>(in_tensors_.at(0)->MutableData());
@@ -88,11 +93,10 @@ int BiasGradCPUKernel::Run() {
 
 kernel::LiteKernel *CpuBiasGradFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                  const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                                 const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                                 const mindspore::lite::PrimitiveC *primitive) {
+                                                 const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
   MS_ASSERT(opParameter != nullptr);
-  MS_ASSERT(desc.type == schema::PrimitiveType_BiasGrad);
-  auto *kernel = new (std::nothrow) BiasGradCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  MS_ASSERT(desc.type == schema::PrimitiveType_BiasAddGrad);
+  auto *kernel = new (std::nothrow) BiasGradCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new BiasGradCPUKernel fail!";
     free(opParameter);
@@ -109,5 +113,5 @@ kernel::LiteKernel *CpuBiasGradFp32KernelCreator(const std::vector<lite::Tensor 
   return kernel;
 }
 
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_BiasGrad, CpuBiasGradFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_BiasAddGrad, CpuBiasGradFp32KernelCreator)
 }  // namespace mindspore::kernel

@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "debug/common.h"
 #include "proto/anf_ir.pb.h"
 #include "ir/graph_utils.h"
 #include "utils/ms_context.h"
@@ -103,11 +104,26 @@ static irpb::DataType GetNumberDataType(const TypePtr &type) {
   }
 }
 
+void CheckIfValidType(const TypePtr &type) {
+  if (type->isa<Problem>()) {
+    MS_LOG(WARNING) << "The type: " << type->type_name();
+  }
+  if (!(type->isa<Number>() || type->isa<TensorType>() || type->isa<Tuple>() || type->isa<TypeType>() ||
+        type->isa<List>() || type->isa<TypeAnything>() || type->isa<RefKeyType>() || type->isa<RefType>() ||
+        type->isa<Function>() || type->isa<TypeNone>() || type->isa<Problem>() || type->isa<String>() ||
+        type->isa<RowTensorType>() || type->isa<UndeterminedType>() || type->isa<SparseTensorType>() ||
+        type->isa<SymbolicKeyType>() || type->isa<MonadType>())) {
+    MS_LOG(EXCEPTION) << "Unknown type: " << type->type_name();
+  }
+}
+
 void ProtoExporter::SetNodeOutputType(const TypePtr &type, const BaseShapePtr &shape, irpb::TypeProto *type_proto) {
   if (type_proto == nullptr) {
     return;
   }
-
+  if (type != nullptr) {
+    CheckIfValidType(type);
+  }
   if (type == nullptr) {
     type_proto->set_data_type(irpb::DT_UNDEFINED);
   } else if (type->isa<Number>()) {
@@ -122,12 +138,6 @@ void ProtoExporter::SetNodeOutputType(const TypePtr &type, const BaseShapePtr &s
         type_proto->mutable_tensor_type()->mutable_shape()->add_dim()->set_size(elem);
       }
     }
-  } else if (type->isa<RowTensorType>()) {
-    // Do Nothing
-  } else if (type->isa<UndeterminedType>()) {
-    // Do Nothing
-  } else if (type->isa<SparseTensorType>()) {
-    // Do Nothing
   } else if (type->isa<Tuple>()) {
     TuplePtr tuple_type = dyn_cast<Tuple>(type);
     type_proto->set_data_type(irpb::DT_TUPLE);
@@ -154,10 +164,6 @@ void ProtoExporter::SetNodeOutputType(const TypePtr &type, const BaseShapePtr &s
     type_proto->set_data_type(irpb::DT_NONE);
   } else if (type->isa<String>()) {
     type_proto->set_data_type(irpb::DT_STRING);
-  } else if (type->isa<SymbolicKeyType>()) {
-    // Do Nothing.
-  } else {
-    MS_LOG(EXCEPTION) << "Unknown type: " << type->type_name();
   }
 }
 
@@ -218,6 +224,8 @@ void ProtoExporter::SetValueToProto(const ValuePtr &val, irpb::ValueProto *value
     type_proto->set_data_type(irpb::DT_TENSOR);
     TypePtr elem_type = dyn_cast<TensorType>(val)->element();
     type_proto->mutable_tensor_type()->set_elem_type(GetNumberDataType(elem_type));
+  } else if (val->isa<Monad>() || val->isa<MonadType>()) {
+    value_proto->set_str_val(val->ToString());
   } else {
     MS_LOG(WARNING) << "Unsupported type " << val->type_name();
   }

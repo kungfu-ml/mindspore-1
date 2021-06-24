@@ -30,6 +30,7 @@
 #include "base/float16.h"
 #include "utils/shape_utils.h"
 #include "utils/ms_exception.h"
+#include "ir/device_event.h"
 
 // brief mindspore namespace.
 //
@@ -206,7 +207,7 @@ class Tensor : public MetaTensor {
   // it do real value comparison.
   bool ValueEqual(const Tensor &tensor) const;
 
-  // assgin value to this tensor
+  // assign value to this tensor
   Tensor &AssignValue(const Tensor &tensor);
 
   bool operator==(const Value &other) const override {
@@ -279,17 +280,31 @@ class Tensor : public MetaTensor {
 
   std::string ToStringRepr() const;
 
+  void CheckShape(const ShapeVector &shape) const;
+
   bool is_init() const { return init_flag_; }
   void set_init_flag(bool flag) { init_flag_ = flag; }
 
   DeviceSyncPtr device_address() const { return device_sync_; }
   void set_device_address(const DeviceSyncPtr &device_sync) { device_sync_ = device_sync; }
-  void set_padding_type(std::vector<Axis> padding_type) { padding_type_ = padding_type; }
-  std::vector<Axis> padding_type() const { return padding_type_; }
+  void set_padding_type(const std::string padding_type) { padding_type_ = padding_type; }
+  std::string padding_type() const { return padding_type_; }
 
   std::string id() const { return id_; }
   TypePtr cast_dtype() { return cast_dtype_; }
   void set_cast_dtype(TypePtr dtype = nullptr) { cast_dtype_ = dtype; }
+
+  // used if cache_enable, in order to update tensor from cache to host
+  bool cache_enable() const { return cache_enable_; }
+  void set_cache_enable(bool cache_enable = true) { cache_enable_ = cache_enable; }
+  std::shared_ptr<Tensor> hashmap_tensor_ptr() const { return hashmap_tensor_ptr_; }
+  void set_hashmap_tensor_ptr(std::shared_ptr<Tensor> hashmap_tensor_ptr = nullptr) {
+    hashmap_tensor_ptr_ = hashmap_tensor_ptr;
+  }
+  std::shared_ptr<Tensor> cache_tensor_ptr() const { return cache_tensor_ptr_; }
+  void set_cache_tensor_ptr(std::shared_ptr<Tensor> cache_tensor_ptr = nullptr) {
+    cache_tensor_ptr_ = cache_tensor_ptr;
+  }
 
   void SetNeedWait(bool need_wait) {
     if (event_ != nullptr) {
@@ -314,6 +329,21 @@ class Tensor : public MetaTensor {
     event_ = nullptr;
   }
 
+  void SetDeviceEvent(const std::shared_ptr<DeviceEvent> &device_event) { device_event_ = device_event; }
+
+  void WaitDevice() {
+    if (device_event_ != nullptr) {
+      device_event_->WaitEvent();
+    }
+  }
+
+  bool NeedWaitDevice() const {
+    if (device_event_ != nullptr) {
+      return device_event_->NeedWait();
+    }
+    return false;
+  }
+
   void set_sync_status(TensorSyncStatus sync_status) { sync_status_ = sync_status; }
 
   TensorSyncStatus sync_status() const { return sync_status_; }
@@ -335,8 +365,12 @@ class Tensor : public MetaTensor {
   mutable TensorSyncStatus sync_status_{kNeedSyncHostToDevice};
   bool graph_output_{false};
   DeviceSyncPtr device_sync_{nullptr};
-  std::vector<Axis> padding_type_;
+  bool cache_enable_{false};
+  std::shared_ptr<Tensor> cache_tensor_ptr_{nullptr};
+  std::shared_ptr<Tensor> hashmap_tensor_ptr_{nullptr};
+  std::string padding_type_{""};
   TypePtr cast_dtype_{nullptr};
+  std::shared_ptr<DeviceEvent> device_event_{nullptr};
 };
 using TensorPtr = std::shared_ptr<Tensor>;
 using TensorPtrList = std::vector<std::shared_ptr<Tensor>>;

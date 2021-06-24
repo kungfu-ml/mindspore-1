@@ -39,6 +39,48 @@ def _send_data_no_flag(dataset, epoch_num):
     exec_dataset.send(epoch_num)
 
 
+def _dynamic_sink_scenario(dataset, dataset_iter):
+    """Special scenario with dynamic shape and sink_size=1."""
+    flag = False
+    ms_role = os.getenv("MS_ROLE")
+    if hasattr(dataset_iter, "sink_size") and \
+       dataset_iter.sink_size == 1 and \
+       dataset.get_dataset_size() != 1 and \
+       hasattr(dataset_iter, "sink_count") and \
+       dataset_iter.sink_count == 1 and \
+       context.get_context("device_target") == "Ascend" and \
+       context.get_context("mode") == context.GRAPH_MODE and \
+       ms_role != "MS_WORKER":
+        flag = True
+    return flag
+
+
+class _DataWrapper(nn.Cell):
+    """
+    Wraps the input network with a dataset which automatically fetches data with 'GetNext' function from the
+    dataset channel 'queue_name' and performs the forward computation.
+    """
+
+    def __init__(self, network, dataset_types, dataset_shapes, queue_name):
+        super(_DataWrapper, self).__init__(auto_prefix=False, flags=network.get_flags())
+        # Also copy the flag in `network` construct
+        flags = getattr(network.__class__.construct, "_mindspore_flags", {})
+        self.info = (dataset_types, dataset_shapes)
+        self.add_flags(**flags)
+        self.get_next = P.GetNext(dataset_types, dataset_shapes, len(dataset_types), queue_name)
+        self.network = network
+
+    def construct(self):
+        outputs = self.get_next()
+        return self.network(*outputs)
+
+
+def _generate_dataset_sink_mode_net(network, dataset_shapes, dataset_types, queue_name):
+    if not isinstance(network, _DataWrapper):
+        network = _DataWrapper(network, dataset_types, dataset_shapes, queue_name)
+    return network
+
+
 def connect_network_with_dataset(network, dataset_helper):
     """
     Connect the `network` with dataset in `dataset_helper`.
@@ -53,38 +95,25 @@ def connect_network_with_dataset(network, dataset_helper):
 
     Args:
         network (Cell): The training network for dataset.
-        dataset_helper(DatasetHelper): A class to process the MindData dataset, it provides the type, shape and queue
+        dataset_helper (DatasetHelper): A class to process the MindData dataset, it provides the type, shape and queue
             name of the dataset to wrap the `GetNext`.
 
-    Outputs:
+    Returns:
         Cell, a new network wrapped with 'GetNext' in the case of running the task on Ascend in graph mode, otherwise
         it is the input network.
 
+    Supported Platforms:
+        ``Ascend`` ``GPU``
+
     Examples:
+        >>> from mindspore import DatasetHelper
+        >>>
         >>> # call create_dataset function to create a regular dataset, refer to mindspore.dataset
         >>> train_dataset = create_custom_dataset()
-        >>> dataset_helper = mindspore.DatasetHelper(train_dataset, dataset_sink_mode=True)
+        >>> dataset_helper = DatasetHelper(train_dataset, dataset_sink_mode=True)
         >>> net = Net()
         >>> net_with_get_next = connect_network_with_dataset(net, dataset_helper)
     """
-
-    class _DataWrapper(nn.Cell):
-        """
-        Wraps the input network with a dataset which automatically fetches data with 'GetNext' function from the
-        dataset channel 'queue_name' and performs the forward computation.
-        """
-
-        def __init__(self, network, dataset_types, dataset_shapes, queue_name):
-            super(_DataWrapper, self).__init__(auto_prefix=False, flags=network.get_flags())
-            # Also copy the flag in `network` construct
-            flags = getattr(network.__class__.construct, "_mindspore_flags", {})
-            self.add_flags(**flags)
-            self.get_next = P.GetNext(dataset_types, dataset_shapes, len(dataset_types), queue_name)
-            self.network = network
-
-        def construct(self):
-            outputs = self.get_next()
-            return self.network(*outputs)
 
     dataset_iter = dataset_helper.iter
     dataset = dataset_iter.dataset
@@ -96,41 +125,35 @@ def connect_network_with_dataset(network, dataset_helper):
     if ms_role in ("MS_PSERVER", "MS_SCHED"):
         return network
 
-    if (hasattr(dataset_iter, "sink_size") and dataset_iter.sink_size == 1) \
-            and (hasattr(dataset_iter, "sink_count") and dataset_iter.sink_count == 1) \
-            and context.get_context("device_target") == "Ascend" \
-            and context.get_context("mode") == context.GRAPH_MODE \
-            and ms_role != "MS_WORKER":
-
-        if not hasattr(dataset, '__network__'):
-            dataset.__network__ = network
-        network = dataset.__network__
+    queue_name = dataset.__transfer_dataset__.queue_name
+    if _dynamic_sink_scenario(dataset, dataset_iter):
+        if not hasattr(dataset_iter, '__network__'):
+            dataset_iter.__network__ = network
+        network = dataset_iter.__network__
 
         dataset_types, dataset_shapes = dataset_helper.get_data_info()
         dataset_types = [pytype_to_dtype(x) for x in dataset_types]
 
         key = str(dataset_types) + str(dataset_shapes)
-        if hasattr(dataset, '__network_manage__') and key in dataset.__network_manage__:
-            network = dataset.__network_manage__[key]
+        if hasattr(dataset_iter, '__network_manage__') and key in dataset_iter.__network_manage__:
+            network = dataset_iter.__network_manage__[key]
         else:
             if _need_to_full():
                 device_num = _get_device_num()
                 dataset_shapes = _to_full_shapes(dataset_shapes, device_num)
-            network = _DataWrapper(network, dataset_types, dataset_shapes, dataset.__transfer_dataset__.queue_name)
-            dataset.__network_manage__ = dataset.__network_manage__ if hasattr(
-                dataset, '__network_manage__') else dict()
-            dataset.__network_manage__[key] = network
 
+            network = _generate_dataset_sink_mode_net(network, dataset_shapes, dataset_types, queue_name)
+            dataset_iter.__network_manage__ = dataset_iter.__network_manage__ if hasattr(
+                dataset_iter, '__network_manage__') else dict()
+            dataset_iter.__network_manage__[key] = network
         return network
 
-    if not hasattr(dataset, '__me_inited__') and (context.get_context("device_target") == "Ascend" or \
-            context.get_context("device_target") == "GPU") and not context.get_context("enable_ge"):
+    if not hasattr(dataset, '__me_inited__') and \
+       not context.get_context("enable_ge") and \
+       context.get_context("device_target") in ("Ascend", "GPU"):
         dataset.__me_inited__ = True
-
         dataset_types, dataset_shapes = dataset_helper.types_shapes()
-        queue_name = dataset.__transfer_dataset__.queue_name
-
-        network = _DataWrapper(network, dataset_types, dataset_shapes, queue_name)
+        network = _generate_dataset_sink_mode_net(network, dataset_shapes, dataset_types, queue_name)
     return network
 
 
@@ -145,18 +168,22 @@ class DatasetHelper:
         The iteration of DatasetHelper will provide one epoch data.
 
     Args:
-        dataset (DataSet): The training dataset iterator.
-        dataset_sink_mode (bool): If true use GetNext to fetch the data, or else feed the data from host. Default: True.
+        dataset (Dataset): The training dataset iterator.
+        dataset_sink_mode (bool): If true use GetNext to fetch the data, or else feed the data
+                                  from host. Default: True.
         sink_size (int): Control the amount of data in each sink.
-                             If sink_size=-1, sink the complete dataset for each epoch.
-                             If sink_size>0, sink sink_size data for each epoch. Default: -1.
+                          If sink_size=-1, sink the complete dataset for each epoch.
+                          If sink_size>0, sink sink_size data for each epoch.
+                          Default: -1.
         epoch_num (int): Control the number of epoch data to send. Default: 1.
 
     Examples:
+        >>> from mindspore import nn, DatasetHelper
+        >>>
         >>> network = Net()
         >>> net_loss = nn.SoftmaxCrossEntropyWithLogits(sparse=True, reduction="mean")
         >>> network = nn.WithLossCell(network, net_loss)
-        >>> train_dataset = create_custom_dataset(sparse=True)
+        >>> train_dataset = create_custom_dataset()
         >>> dataset_helper = DatasetHelper(train_dataset, dataset_sink_mode=False)
         >>> for next_element in dataset_helper:
         ...     outputs = network(*next_element)
@@ -373,6 +400,7 @@ class _DatasetIterPSServer(_DatasetIter):
 
         self.op = op
 
+
 class _DatasetIterPSWork(_DatasetIter):
     """Iter for context on MS_WORKER"""
 
@@ -387,6 +415,7 @@ class _DatasetIterPSWork(_DatasetIter):
             return tuple()
 
         self.op = op
+
 
 class _DatasetIterNormal:
     """Iter for normal(non sink) mode, feed the data from host."""

@@ -19,17 +19,15 @@
 
 #include <vector>
 #include "src/lite_kernel.h"
-
-#include "nnacl/winograd_transform.h"
+#include "nnacl/fp32/winograd_transform.h"
 #include "src/runtime/kernel/arm/base/convolution_base.h"
 
 namespace mindspore::kernel {
 class Convolution3x3Int8CPUKernel : public ConvolutionBaseCPUKernel {
  public:
   Convolution3x3Int8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                              const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx,
-                              const mindspore::lite::PrimitiveC *primitive)
-      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                              const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx)
+      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx) {}
   ~Convolution3x3Int8CPUKernel() override;
 
   int Init() override;

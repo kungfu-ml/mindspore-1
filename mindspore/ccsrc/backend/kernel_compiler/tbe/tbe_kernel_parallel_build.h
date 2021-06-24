@@ -36,19 +36,22 @@ struct KernelBuildTaskInfo {
   std::string json_name;
   std::vector<size_t> input_size_list;
   std::vector<size_t> output_size_list;
-  int32_t scope_id;
+  int64_t scope_id;
 };
 
 class ParallelBuildManager {
  public:
-  ParallelBuildManager() = default;
+  ParallelBuildManager() { AscendKernelBuildClient::Instance().TbeReset(); }
   ~ParallelBuildManager();
   void SaveTaskInfo(int32_t task_id, const AnfNodePtr &anf_node, const std::string &json_name,
                     const std::vector<size_t> &input_size_list, const std::vector<size_t> &output_size_list,
                     int32_t scope_id = 0);
   void SaveSameOpInfo(const AnfNodePtr &anf_node, const std::string &json_name,
                       const std::vector<size_t> &input_size_list, const std::vector<size_t> &output_size_list);
+  void SaveSameFusionOpInfo(const int64_t scope_id, const std::string &json_name, const std::string &processor,
+                            const std::vector<size_t> &input_size_list, const std::vector<size_t> &output_size_list);
   bool GenSameOpKernelMod() const;
+  bool GenSameFusionOpKernelMod(std::map<int64_t, KernelModPtr> *kernel_mode_ret) const;
   bool SearchInCache(const std::string &json_name, const std::string &processor,
                      const std::vector<size_t> &input_size_list, const std::vector<size_t> &output_size_list,
                      AnfNode *node) const;

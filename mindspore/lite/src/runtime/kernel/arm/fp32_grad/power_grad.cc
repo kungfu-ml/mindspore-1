@@ -45,13 +45,20 @@ int PowerGradCPUKernel::Execute(int task_id) {
   auto dy_addr = reinterpret_cast<float *>(in_tensors_.at(0)->MutableData());
   auto x_addr = reinterpret_cast<float *>(in_tensors_.at(1)->MutableData());
   auto dx_addr = reinterpret_cast<float *>(out_tensors_.at(0)->MutableData());
-  auto size = in_tensors_.at(0)->ElementsNum();
+
+  int length = in_tensors_.at(0)->ElementsNum();
+
+  int stride = UP_DIV(length, thread_count_);
+  int count = MSMIN(stride, length - stride * task_id);
+  count = (count < 0) ? 0 : count;
+  int start = stride * task_id;
+  int end = start + count;
 
   float exp = power_ - 1;
-  Power(x_addr, &exp, dx_addr, size, scale_, shift_, true);
-  ElementMul(dx_addr, dy_addr, dx_addr, size);
+  Power(&(x_addr[start]), &exp, &(dx_addr[start]), count, scale_, shift_, true);
+  ElementMul(&(dx_addr[start]), &(dy_addr[start]), &(dx_addr[start]), count);
   float scale = scale_ * power_;
-  for (int i = 0; i < size; i++) {
+  for (int i = start; i < end; i++) {
     dx_addr[i] *= scale;
   }
 
@@ -69,7 +76,7 @@ int PowerGradRun(void *cdata, int task_id) {
 }
 
 int PowerGradCPUKernel::Run() {
-  int error_code = ParallelLaunch(this->context_->thread_pool_, PowerGradRun, this, 1);
+  int error_code = ParallelLaunch(this->context_->thread_pool_, PowerGradRun, this, thread_count_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "power grad function error error_code[" << error_code << "]";
     return RET_ERROR;
@@ -79,11 +86,10 @@ int PowerGradCPUKernel::Run() {
 
 kernel::LiteKernel *CpuPowerGradFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                   const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                                  const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                                  const mindspore::lite::PrimitiveC *primitive) {
+                                                  const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
   MS_ASSERT(opParameter != nullptr);
   MS_ASSERT(desc.type == schema::PrimitiveType_PowerGrad);
-  auto *kernel = new (std::nothrow) PowerGradCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  auto *kernel = new (std::nothrow) PowerGradCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new PowerGradCPUKernel fail!";
     free(opParameter);

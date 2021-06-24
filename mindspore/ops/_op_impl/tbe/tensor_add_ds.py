@@ -16,7 +16,7 @@
 """TensorAdd op"""
 from mindspore.ops.op_info_register import op_info_register, TBERegOp, DataType
 
-tensor_add_op_info = TBERegOp("TensorAdd") \
+tensor_add_op_info = TBERegOp("Add") \
     .fusion_type("ELEMWISE") \
     .async_flag(False) \
     .binfile_name("add.so") \
@@ -27,7 +27,7 @@ tensor_add_op_info = TBERegOp("TensorAdd") \
     .input(0, "x1", False, "required", "all") \
     .input(1, "x2", False, "required", "all") \
     .output(0, "y", False, "required", "all") \
-    .op_pattern("dynamicFormat") \
+    .is_dynamic_format(True) \
     .dtype_format(DataType.I32_Default, DataType.I32_Default, DataType.I32_Default) \
     .dtype_format(DataType.F16_Default, DataType.F16_Default, DataType.F16_Default) \
     .dtype_format(DataType.F32_Default, DataType.F32_Default, DataType.F32_Default) \

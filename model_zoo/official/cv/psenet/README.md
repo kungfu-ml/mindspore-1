@@ -46,7 +46,7 @@ A testing set containing about 2000 readable words
 # [Environment Requirements](#contents)
 
 - Hardware（Ascend）
-    - Prepare hardware environment with Ascend processor. If you want to try Ascend  , please send the [application form](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx) to ascend@huawei.com. Once approved, you can get the resources.
+    - Prepare hardware environment with Ascend processor.
 - Framework
     - [MindSpore](http://www.mindspore.cn/install/en)
 - For more information, please check the resources below：
@@ -197,7 +197,7 @@ Calculated!{"precision": 0.814796668299853, "recall": 0.8006740491092923, "hmean
 | Total time                 | 1pc: 75.48 h;  8pcs: 10.01 h                                |
 | Parameters (M)             | 27.36                                                       |
 | Checkpoint for Fine tuning | 109.44M (.ckpt file)                                        |
-| Scripts                    | <https://gitee.com/mindspore/mindspore/tree/master/model_zoo/psenet> |
+| Scripts                    | <https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/psenet> |
 
 ### Inference Performance
 

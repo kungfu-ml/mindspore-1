@@ -48,6 +48,10 @@ class RandomAccessOp {
   // default destructor
   virtual ~RandomAccessOp() = default;
 
+  /// Set num_rows
+  /// \param num_rows
+  void SetNumRows(int64_t num_rows) { num_rows_ = num_rows; }
+
  protected:
   // The amount of rows in the dataset itself. This is the before-sampling value, the
   // total count of rows.  A sampler may choose to sample less than this amount.
@@ -104,7 +108,7 @@ class SamplerRT {
 
   // Calculate num samples. Unlike GetNumSamples, it is not a getter and doesn't necessarily return the value of
   // num_samples_
-  // @return number of samples
+  // @return number of samples, return -1 if sampler cannot determine this value (e.g. PKSampler)
   virtual int64_t CalculateNumSamples(int64_t num_rows);
 
   // setter for num or records in the dataset
@@ -148,6 +152,11 @@ class SamplerRT {
   // @param int64_t id - The id used as an index to get the associated child id.
   // @return Status The status code returned
   Status GetAssociatedChildId(int64_t *out_associated_id, int64_t id);
+
+  /// \brief Get the arguments of node
+  /// \param[out] out_json JSON string of all attributes
+  /// \return Status of the function
+  virtual Status to_json(nlohmann::json *out_json) { return Status::OK(); }
 
  protected:
   // Number of rows of data from the place this sampler is sampling from. If this sampler

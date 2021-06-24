@@ -45,6 +45,18 @@ class Flags : public virtual mindspore::lite::FlagParser {
 
   ~Flags() override = default;
 
+  int InitInputOutputDataType();
+
+  int InitFmk();
+
+  bool IsValidNum(const std::string &str, int *num);
+
+  int QuantParamInputCheck();
+
+  int InitQuantParam();
+
+  int InitTrainModel();
+
   int Init(int argc, const char **argv);
 
  public:
@@ -66,10 +78,13 @@ class Flags : public virtual mindspore::lite::FlagParser {
   TypeId inputDataType;
   TypeId outputDataType;
   // used for post-trainning-weight
-  std::string quantWeightSize;
-  std::string bitNum;
+  std::string quantWeightSizeIn;
+  int quantWeightSize;
+  std::string bitNumIn;
+  int bitNum;
   std::string configFile;
-  std::string quantWeightChannel;
+  std::string quantWeightChannelIn;
+  int quantWeightChannel;
   std::string trainModelIn;
   bool trainModel = false;
 };

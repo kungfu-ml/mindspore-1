@@ -23,18 +23,19 @@ conv2d_op_info = TBERegOp("Conv2D") \
     .compute_cost(10) \
     .kernel_name("conv2d") \
     .partial_flag(True) \
-    .op_pattern("dynamicFormat") \
+    .is_dynamic_format(True) \
     .attr("stride", "required", "listInt", "all") \
     .attr("pad_list", "required", "listInt", "all") \
     .attr("dilation", "required", "listInt", "all") \
     .attr("groups", "optional", "int", "all") \
-    .attr("data_format", "optional", "str", "all") \
+    .attr("format", "optional", "str", "all") \
+    .attr("offset_x", "optional", "int", "all", "0") \
     .input(0, "x", False, "required", "all") \
     .input(1, "filter", False, "required", "all") \
     .input(2, "bias", False, "optional", "all") \
     .input(3, "offset_w", False, "optional", "all") \
     .output(0, "y", True, "required", "all") \
-    .op_pattern("dynamicFormat") \
+    .is_dynamic_format(True) \
     .dtype_format(DataType.F16_None, DataType.F16_None, DataType.F16_None, DataType.I8_None, DataType.F16_None) \
     .dtype_format(DataType.I8_None, DataType.I8_None, DataType.I32_None, DataType.I8_None, DataType.I32_None) \
     .get_op_info()

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@
 #include <unordered_map>
 #include <utility>
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/engine/opt/pass.h"
 
 namespace mindspore {
 namespace dataset {
@@ -80,14 +79,15 @@ Status BuildVocabOp::WorkerEntry(int32_t worker_id) {
 Status BuildVocabOp::operator()() {
   // launch the collector thread
   if (tree_ == nullptr) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, "Pipeline init failed, Execution tree not set.");
   }
   RETURN_IF_NOT_OK(distributor_queue_->Register(tree_->AllTasks()));
   RETURN_IF_NOT_OK(collector_queue_->Register(tree_->AllTasks()));
   // launch worker threads and collector thread
   RETURN_IF_NOT_OK(
-    tree_->LaunchWorkers(num_workers_, std::bind(&BuildVocabOp::WorkerEntry, this, std::placeholders::_1)));
-  RETURN_IF_NOT_OK(tree_->AllTasks()->CreateAsyncTask("collector", std::bind(&BuildVocabOp::CollectorThread, this)));
+    tree_->LaunchWorkers(num_workers_, std::bind(&BuildVocabOp::WorkerEntry, this, std::placeholders::_1), "", id()));
+  RETURN_IF_NOT_OK(
+    tree_->AllTasks()->CreateAsyncTask("collector", std::bind(&BuildVocabOp::CollectorThread, this), nullptr, id()));
   TaskManager::FindMe()->Post();
   child_iterator_ = std::make_unique<ChildIterator>(this, 0, 0);
   TensorRow new_row;
@@ -228,12 +228,6 @@ void BuildVocabOp::Print(std::ostream &out, bool show_all) const {
     out << "\nCode is needed here to show more info about the op."
         << "\n\n";
   }
-}
-
-// Pre-Visitor accept method for NodePass
-Status BuildVocabOp::PreAccept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call the pre-visitation
-  return p->PreRunOnNode(shared_from_base<BuildVocabOp>(), modified);
 }
 }  // namespace dataset
 }  // namespace mindspore

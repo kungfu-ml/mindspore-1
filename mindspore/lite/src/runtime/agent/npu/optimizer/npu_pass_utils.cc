@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,62 +15,44 @@
  */
 
 #include "src/runtime/agent/npu/optimizer/npu_pass_utils.h"
-#include "src/ops/transpose.h"
+#include <algorithm>
+#include "src/runtime/agent/npu/npu_manager.h"
 #include "nnacl/transpose.h"
+#include "nnacl/scale.h"
 #include "src/ops/populate/populate_register.h"
 #include "src/runtime/kernel/arm/fp32/transpose_fp32.h"
 
 namespace mindspore::lite {
 using kernel::KERNEL_ARCH::kCPU;
 using kernel::KERNEL_ARCH::kNPU;
-PrimitiveC *NPUPassUtils::CreateTransposePrimitive() {
-  flatbuffers::FlatBufferBuilder fbb(1024);
-  auto val_offset = schema::CreateNchw2Nhwc(fbb);
-  auto prim_offset = schema::CreatePrimitive(fbb, schema::PrimitiveType_Transpose, val_offset.o);
-  fbb.Finish(prim_offset);
-  auto buf = fbb.GetBufferPointer();
-  if (buf == nullptr) {
-    MS_LOG(ERROR) << "GetBufferPointer return nullptr";
-    fbb.Clear();
-    return nullptr;
-  }
-  auto primitive_buf = reinterpret_cast<char *>(malloc(fbb.GetSize()));
-  if (primitive_buf == nullptr) {
-    MS_LOG(ERROR) << "Malloc primitive buffer failed.";
-    fbb.Clear();
-    return nullptr;
-  }
-  memcpy(primitive_buf, buf, fbb.GetSize());
-  auto *primitive = PrimitiveC::NewPrimitiveC<Transpose>(flatbuffers::GetRoot<schema::Primitive>(primitive_buf));
-  free(primitive_buf);
-  fbb.Clear();
-  return primitive;
-}
-
+std::unordered_map<schema::PrimitiveType, std::set<int>> nodes2const_index{
+  {schema::PrimitiveType_Split, {1}},
+  {schema::PrimitiveType_PadFusion, {1}},
+  {schema::PrimitiveType_StridedSlice, {1, 2, 3}}};
 kernel::LiteKernel *NPUPassUtils::CreateNchw2NhwcKernel(const std::vector<Tensor *> &in_tensors,
                                                         const std::vector<Tensor *> &out_tensors,
                                                         const InnerContext *ctx, const std::string &name) {
   kernel::KernelKey key{kCPU, kNumberTypeFloat32, schema::PrimitiveType_Transpose};
-  auto nchw2nhwc_primitive = CreateTransposePrimitive();
   auto *transpose_param = reinterpret_cast<TransposeParameter *>(malloc(sizeof(TransposeParameter)));
   if (transpose_param == nullptr) {
     MS_LOG(ERROR) << "malloc TransposeParameter failed.";
     return nullptr;
   }
   memset(transpose_param, 0, sizeof(TransposeParameter));
-  transpose_param->op_parameter_.type_ = nchw2nhwc_primitive->Type();
+  transpose_param->op_parameter_.type_ = schema::PrimitiveType_Transpose;
   transpose_param->perm_[0] = 0;
   transpose_param->perm_[1] = 2;
   transpose_param->perm_[2] = 3;
   transpose_param->perm_[3] = 1;
   transpose_param->num_axes_ = 4;
 
-  auto kernel = new (std::nothrow) kernel::TransposeCPUKernel(reinterpret_cast<OpParameter *>(transpose_param),
-                                                              in_tensors, out_tensors, ctx, nchw2nhwc_primitive);
+  auto kernel = new (std::nothrow)
+    kernel::TransposeCPUKernel(reinterpret_cast<OpParameter *>(transpose_param), in_tensors, out_tensors, ctx);
   if (kernel != nullptr) {
     kernel->set_desc(key);
   } else {
     MS_LOG(ERROR) << "New Nchw2Nhwc Kernel failed.";
+    free(transpose_param);
     return nullptr;
   }
 
@@ -82,22 +64,21 @@ kernel::LiteKernel *NPUPassUtils::CreateNhwc2NchwKernel(const std::vector<Tensor
                                                         const std::vector<Tensor *> &out_tensors,
                                                         const InnerContext *ctx, const std::string &name) {
   kernel::KernelKey key{kCPU, kNumberTypeFloat32, schema::PrimitiveType_Transpose};
-  auto nhwc2nchw_primitive = CreateTransposePrimitive();
   auto *transpose_param = reinterpret_cast<TransposeParameter *>(malloc(sizeof(TransposeParameter)));
   if (transpose_param == nullptr) {
     MS_LOG(ERROR) << "malloc TransposeParameter failed.";
     return nullptr;
   }
   memset(transpose_param, 0, sizeof(TransposeParameter));
-  transpose_param->op_parameter_.type_ = nhwc2nchw_primitive->Type();
+  transpose_param->op_parameter_.type_ = schema::PrimitiveType_Transpose;
   transpose_param->perm_[0] = 0;
   transpose_param->perm_[1] = 3;
   transpose_param->perm_[2] = 1;
   transpose_param->perm_[3] = 2;
   transpose_param->num_axes_ = 4;
 
-  auto kernel = new (std::nothrow) kernel::TransposeCPUKernel(reinterpret_cast<OpParameter *>(transpose_param),
-                                                              in_tensors, out_tensors, ctx, nhwc2nchw_primitive);
+  auto kernel = new (std::nothrow)
+    kernel::TransposeCPUKernel(reinterpret_cast<OpParameter *>(transpose_param), in_tensors, out_tensors, ctx);
   if (kernel != nullptr) {
     kernel->set_desc(key);
   } else {
@@ -120,79 +101,92 @@ void NPUPassUtils::UpdateKernel(kernel::LiteKernel *kernel, const std::vector<ke
 
 void NPUPassUtils::UpdateNH2NCTransNodePreKernel(kernel::LiteKernel *pre_kernel, kernel::LiteKernel *trans_kernel,
                                                  kernel::LiteKernel *kernel) {
-  std::vector<kernel::LiteKernel *> out_kernels;
-
-  for (auto out_kernel : pre_kernel->out_kernels()) {
-    if (out_kernel == kernel) {
-      out_kernels.push_back(trans_kernel);
-    } else {
-      out_kernels.push_back(out_kernel);
+  // For kernel before trans, update the out_kernels; the output tensor of kernel is the input tensor of trans.
+  std::vector<kernel::LiteKernel *> out_kernels = pre_kernel->out_kernels();
+  for (size_t i = 0; i < out_kernels.size(); i++) {
+    if (out_kernels[i] == kernel) {
+      out_kernels[i] = trans_kernel;
+      break;
     }
+  }
+  if (out_kernels.empty()) {
+    out_kernels.push_back(trans_kernel);
   }
   pre_kernel->set_out_kernels(out_kernels);
 }
 
-void NPUPassUtils::UpdateNC2NHTransNodePreKernel(kernel::LiteKernel *kernel, kernel::LiteKernel *trans_kernel,
-                                                 kernel::LiteKernel *post_kernel) {
-  std::vector<kernel::LiteKernel *> cur_out_kernels;
-  for (auto out_kernel : kernel->out_kernels()) {
-    if (out_kernel == post_kernel) {
-      cur_out_kernels.push_back(trans_kernel);
-    } else {
-      cur_out_kernels.push_back(out_kernel);
+void NPUPassUtils::UpdateNC2NHTransNodePreKernel(kernel::LiteKernel *pre_kernel,
+                                                 const std::vector<kernel::LiteKernel *> &trans_kernels,
+                                                 const std::vector<kernel::LiteKernel *> &kernels) {
+  // For kernel before trans, there may be multiple outputs.
+  auto cur_out_kernels = pre_kernel->out_kernels();
+  for (size_t i = 0; i < kernels.size(); i++) {
+    auto itr = find(cur_out_kernels.begin(), cur_out_kernels.end(), kernels[i]);
+    if (itr != cur_out_kernels.end()) {
+      cur_out_kernels.erase(itr);
     }
   }
-  auto kernel_out_tensor = kernel->out_tensors()[0];
-  // Change format the output of the current kernel nhwc->nchw
-  auto nhwc_shape = kernel_out_tensor->shape();
-  std::vector<int> nchw_shape = {nhwc_shape[0], nhwc_shape[3], nhwc_shape[1], nhwc_shape[2]};
-  kernel_out_tensor->set_format(schema::Format_NCHW);
-  kernel_out_tensor->set_shape(nchw_shape);
-  kernel->set_out_kernels(cur_out_kernels);
-  kernel->set_out_tensors({kernel_out_tensor});
+  std::copy(trans_kernels.begin(), trans_kernels.end(), std::back_inserter(cur_out_kernels));
+  pre_kernel->set_out_kernels(cur_out_kernels);
+  // For kernel before trans, the output tensor is used for output tensor of trans, so replace the output tensor
+  // with the input tensor of trans.
+  pre_kernel->set_out_tensors({trans_kernels.at(0)->in_tensors().at(0)});
 }
 
-void NPUPassUtils::UpdateNH2NCTransNodeAfterKernel(kernel::LiteKernel *kernel, kernel::LiteKernel *trans_kernel,
-                                                   kernel::LiteKernel *pre_kernel) {
-  std::vector<lite::Tensor *> cur_kernel_in_tensors = {trans_kernel->out_tensors()[0]};
-  for (int i = 1; i < kernel->in_tensors().size(); i++) {
-    cur_kernel_in_tensors.push_back(kernel->in_tensors()[i]);
-  }
-  std::vector<kernel::LiteKernel *> cur_in_kernels = {trans_kernel};
-  for (int i = 1; i < kernel->in_kernels().size(); i++) {
-    auto in_kernel = kernel->in_kernels()[i];
-    if (in_kernel != kernel) {
-      cur_in_kernels.push_back(in_kernel);
-    }
-  }
-  kernel->set_in_kernels(cur_in_kernels);
-  kernel->set_in_tensors({cur_kernel_in_tensors});
+void NPUPassUtils::UpdateNH2NCTransNodePostKernel(kernel::LiteKernel *trans_kernel, kernel::LiteKernel *post_kernel) {
+  auto cur_in_tensors = post_kernel->in_tensors();
+  cur_in_tensors[0] = trans_kernel->out_tensors()[0];
+  post_kernel->set_in_tensors(cur_in_tensors);
+  post_kernel->set_in_kernels({trans_kernel});
 }
 
-void NPUPassUtils::UpdateNC2NHTransNodeAfterKernel(kernel::LiteKernel *kernel, kernel::LiteKernel *trans_kernel,
-                                                   kernel::LiteKernel *post_kernel) {
-  std::vector<Tensor *> post_in_tensors;
-  for (auto post_in_tensor : post_kernel->in_tensors()) {
-    if (post_in_tensor != kernel->out_tensors()[0]) {
-      post_in_tensors.push_back(post_in_tensor);
-    } else {
-      post_in_tensors.push_back(trans_kernel->out_tensors()[0]);
+void NPUPassUtils::UpdateNC2NHPostKernelInTensors(kernel::LiteKernel *kernel, kernel::LiteKernel *trans_kernel,
+                                                  kernel::LiteKernel *post_kernel) {
+  // For post_kernel that doesn't require insert trans kernel, because the output tensor of kernel(input tensor of
+  // trans_kernel) is updated, replace the input tensor of post_kernel.
+  auto post_in_tensors = post_kernel->in_tensors();
+  for (size_t i = 0; i < post_in_tensors.size(); i++) {
+    if (post_in_tensors[i] == kernel->out_tensors()[0]) {
+      post_in_tensors[i] = trans_kernel->in_tensors()[0];
+      break;
     }
   }
   post_kernel->set_in_tensors(post_in_tensors);
-  std::vector<kernel::LiteKernel *> post_in_kernels;
-  for (auto in_kernel : post_kernel->in_kernels()) {
-    if (in_kernel == kernel) {
-      post_in_kernels.push_back(trans_kernel);
-    } else {
-      post_in_kernels.push_back(in_kernel);
+}
+
+void NPUPassUtils::UpdateNC2NHTransNodePostKernel(kernel::LiteKernel *kernel, kernel::LiteKernel *trans_kernel,
+                                                  kernel::LiteKernel *post_kernel) {
+  // The input tensor should be replaced with the output tensor of trans_kernel.
+  auto post_in_tensors = post_kernel->in_tensors();
+  Tensor *old_in_tensor = nullptr;
+  // find out which input tensor of post_kernel should be updated
+  for (size_t i = 0; i < post_in_tensors.size(); ++i) {
+    if (KernelInputFromKernel(post_kernel, post_in_tensors.at(i)) == kernel) {
+      old_in_tensor = post_in_tensors.at(i);
+      break;
     }
   }
+  if (old_in_tensor == nullptr) {
+    MS_LOG(WARNING) << "Could not find in tensor index";
+    return;
+  }
+  std::replace(post_in_tensors.begin(), post_in_tensors.end(), old_in_tensor, trans_kernel->out_tensors().at(0));
+  post_kernel->set_in_tensors(post_in_tensors);
+
+  // For post_kernel after trans, kernel in in_kernels should be replaced with trans_kernel.
+  auto post_in_kernels = post_kernel->in_kernels();
+  if (kernel == nullptr) {
+    post_in_kernels.push_back(trans_kernel);
+  } else {
+    std::replace(post_in_kernels.begin(), post_in_kernels.end(), kernel, trans_kernel);
+  }
   post_kernel->set_in_kernels(post_in_kernels);
-  post_kernel->set_in_tensors({post_in_tensors});
 }
 
 bool NPUPassUtils::IsNhwc2Nchw(const kernel::LiteKernel *kernel) {
+  if (kernel == nullptr) {
+    return false;
+  }
   if (kernel->Type() != schema::PrimitiveType_Transpose) {
     return false;
   }
@@ -210,6 +204,9 @@ bool NPUPassUtils::IsNhwc2Nchw(const kernel::LiteKernel *kernel) {
 }
 
 bool NPUPassUtils::IsNchw2Nhwc(const kernel::LiteKernel *kernel) {
+  if (kernel == nullptr) {
+    return false;
+  }
   if (kernel->Type() != schema::PrimitiveType_Transpose) {
     return false;
   }
@@ -225,5 +222,75 @@ bool NPUPassUtils::IsNchw2Nhwc(const kernel::LiteKernel *kernel) {
   }
   return false;
 }
+kernel::LiteKernel *NPUPassUtils::KernelInputFromKernel(const kernel::LiteKernel *kernel, Tensor *in_tensor) {
+  // given kernel and input tensor index, get which kernel output this tensor.
+  // If input tensor is graph input, return nullptr.
+  if (kernel == nullptr) {
+    return nullptr;
+  }
+  auto in_kernels = kernel->in_kernels();
+  auto output_contain = [in_tensor](const kernel::LiteKernel *kernel) {
+    auto out_tensors = kernel->out_tensors();
+    return std::find(out_tensors.begin(), out_tensors.end(), in_tensor) != out_tensors.end();
+  };
+  auto it = std::find_if(in_kernels.begin(), in_kernels.end(), output_contain);
+  if (it == in_kernels.end()) {
+    return nullptr;
+  }
+  return *it;
+}
 
+std::vector<Tensor *> NPUPassUtils::GetNonConstInputs(kernel::LiteKernel *kernel) {
+  if (kernel == nullptr) {
+    return std::vector<Tensor *>{};
+  }
+  auto type = static_cast<schema::PrimitiveType>(kernel->op_parameter()->type_);
+  auto it = nodes2const_index.find(type);
+  if (it != nodes2const_index.end()) {
+    auto const_input_indices = it->second;
+    std::vector<Tensor *> non_const_in_tensors;
+    auto in_tensors = kernel->in_tensors();
+    for (auto i = 0; i < in_tensors.size(); ++i) {
+      if (const_input_indices.find(i) == const_input_indices.end()) {
+        non_const_in_tensors.push_back(in_tensors[i]);
+      }
+    }
+    return non_const_in_tensors;
+  }
+  return kernel->in_tensors();
+}
+
+bool NPUPassUtils::Scale4dCase(const kernel::LiteKernel *kernel) {
+  MS_ASSERT(kernel != nullptr && kernel->op_parameter() != nullptr);
+  auto scale_param = reinterpret_cast<ScaleParameter *>(kernel->op_parameter());
+  auto in_tensor = kernel->in_tensors().at(1);
+  return in_tensor->shape().size() == 1 && (scale_param->axis_ == 3 || scale_param->axis_ == -1);
+}
+
+void NPUPassUtils::AssistDataNHWC2NCHW(int *data, size_t unit_size) {
+  MS_ASSERT(data != nullptr);
+  for (size_t i = 0; i < unit_size; ++i) {
+    int c = data[3 * unit_size + i];
+    // n h w c
+    // n c h w
+    data[3 * unit_size + i] = data[2 * unit_size + i];
+    data[2 * unit_size + i] = data[unit_size + i];
+    data[unit_size + i] = c;
+  }
+}
+
+int NPUPassUtils::MaskDataNHWC2NCHW(int mask) {
+  int mask_vec[4];
+  for (int i = 0; i < 4; ++i) {
+    mask_vec[i] = (uint32_t)(mask) & (1 << i);
+  }
+  AssistDataNHWC2NCHW(mask_vec, 1);
+  int ret = 0;
+  for (int i = 0; i < 4; ++i) {
+    if (mask_vec[i]) {
+      ret += 1 << i;
+    }
+  }
+  return ret;
+}
 }  // namespace mindspore::lite

@@ -36,6 +36,7 @@
 #include "frontend/parallel/strategy.h"
 #include "frontend/parallel/tensor_layout/tensor_info.h"
 #include "utils/log_adapter.h"
+#include "base/core_ops.h"
 
 namespace mindspore {
 namespace parallel {
@@ -54,7 +55,8 @@ class Edge;
 class OperatorInfo {
  public:
   OperatorInfo(std::string name, Shapes inputs_shape, Shapes outputs_shape, PrimitiveAttrs attrs, OperatorCostPtr cost)
-      : name_(std::move(name)),
+      : is_last_node_(false),
+        name_(std::move(name)),
         inputs_shape_(std::move(inputs_shape)),
         outputs_shape_(std::move(outputs_shape)),
         attrs_(std::move(attrs)),
@@ -160,7 +162,7 @@ class OperatorInfo {
   void set_refkey_parameter_name(std::string p_name) { refkey_parameter_name_ = std::move(p_name); }
   const std::string &refkey_parameter_name() const { return refkey_parameter_name_; }
   // When the output of a Parameter (require_grad) being used by multiple operators, the Parameter's cost is calculated
-  // multiple times. This method is to correct this, and makes the cost is calulated only once.
+  // multiple times. This method is to correct this, and makes the cost is calculated only once.
   Status CorrectMemoryCost(size_t input_index);
   int64_t is_output_parameter_involve() const { return is_output_parameter_involve_; }
   int64_t is_output_critical() const { return is_output_critical_; }
@@ -170,6 +172,8 @@ class OperatorInfo {
   // needed by rec_parser
   void set_type(const std::string &type) { type_ = type; }
   const std::string &type() const { return type_; }
+  void set_last_node_flag(const bool &is_last_node) { is_last_node_ = is_last_node; }
+  const bool &is_last_node() const { return is_last_node_; }
   const std::unordered_map<std::string, ValuePtr> &attrs() const { return attrs_; }
   void set_stage_id(int32_t stage_id) { stage_id_ = stage_id; }
   int32_t stage_id() const { return stage_id_; }
@@ -181,13 +185,14 @@ class OperatorInfo {
  protected:
   // needed by rec_parser
   std::string type_;
+  bool is_last_node_;
   virtual Status CheckStrategy(const StrategyPtr &strategy) = 0;
   virtual Status InferTensorMap() = 0;
   virtual Status InferForwardCommunication() = 0;
-  virtual Status InferMirrorOps() = 0;
   virtual Status GetAttrs() = 0;
   virtual Status InferTensorInfo() = 0;
   virtual Status InferDevMatrixShape() = 0;
+  virtual Status InferMirrorOps();
   Status CheckStrategyValue(const StrategyPtr &strategy, const Shapes &inputs_shape);
   void SetRepeatedCalcDevMatrix();
   void ResetTensorMapIfRepeatedCalc();
@@ -239,7 +244,7 @@ class OperatorInfo {
   bool is_auto_parallel_ = false;  // false: semi_auto_parallel; true: auto_parallel
   // 'corrected_input_indices_' used to store the indices of input that have ALREADY been corrected.
   std::vector<size_t> corrected_input_indices_;
-  // Given a parallization strategy, there is a cost.
+  // Given a parallelization strategy, there is a cost.
   std::vector<std::shared_ptr<StrategyWithCost>> strategy_cost_;
   // For each input in 'inputs_', there is a bool variable indicating whether that the corresponding input is parameter
   std::vector<bool> is_parameter_;
@@ -285,6 +290,9 @@ Operator CreateVirtualDivOp(int64_t div_num);
 Operator CreateAllReduceOp(const std::string &reduce_op, const std::string &group);
 Operator CreateReduceScatterOp(const std::string &reduce_op, const std::string &group);
 Operator CreateAllGatherOp(const std::string &group);
+Operator CreateMiniStepAllGatherOp(const std::string &group);
+void AddCommOpFusionType(const CNodePtr &comm_node, const AnfNodePtr &param_node);
+void AddCommOpMeanFlag(const CNodePtr &comm_node);
 Operator CreateGetTensorSliceOp(const TensorLayout &tensor_layout);
 OperatorVector CreateMirrorOps(const std::string &group_name, size_t dev_num);
 int64_t ComputeRepeatDeviceNumByTensorMap(const Shape &dev_matrix_shape, const Shape &tensor_map);

@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,15 +19,18 @@ import json
 import os
 import sys
 
+import mindspore.common.dtype as mstype
 from mindspore import log as logger
 from . import datasets as de
-from ..vision.utils import Inter, Border
-from ..core import config
+from ..vision.utils import Inter, Border, ImageBatchFormat
 
 
-def serialize(dataset, json_filepath=None):
+def serialize(dataset, json_filepath=""):
     """
     Serialize dataset pipeline into a json file.
+
+    Currently some python objects are not supported to be serialized.
+    For python function serialization of map operator, de.serialize will only return its function name.
 
     Args:
         dataset (Dataset): the starting node.
@@ -40,27 +43,22 @@ def serialize(dataset, json_filepath=None):
         OSError cannot open a file
 
     Examples:
-        >>> import mindspore.dataset as ds
-        >>> import mindspore.dataset.transforms.c_transforms as C
-        >>> DATA_DIR = "../../data/testMnistData"
-        >>> data = ds.MnistDataset(DATA_DIR, 100)
-        >>> one_hot_encode = C.OneHot(10)  # num_classes is input argument
-        >>> data = data.map(operation=one_hot_encode, input_column_names="label")
-        >>> data = data.batch(batch_size=10, drop_remainder=True)
-        >>>
-        >>> ds.engine.serialize(data, json_filepath="mnist_dataset_pipeline.json")  # serialize it to json file
-        >>> serialized_data = ds.engine.serialize(data)  # serialize it to Python dict
+        >>> dataset = ds.MnistDataset(mnist_dataset_dir, 100)
+        >>> one_hot_encode = c_transforms.OneHot(10)  # num_classes is input argument
+        >>> dataset = dataset.map(operation=one_hot_encode, input_column_names="label")
+        >>> dataset = dataset.batch(batch_size=10, drop_remainder=True)
+        >>> # serialize it to json file
+        >>> ds.engine.serialize(dataset, json_filepath="/path/to/mnist_dataset_pipeline.json")
+        >>> serialized_data = ds.engine.serialize(dataset)  # serialize it to Python dict
     """
-    serialized_pipeline = traverse(dataset)
-    if json_filepath:
-        with open(json_filepath, 'w') as json_file:
-            json.dump(serialized_pipeline, json_file, indent=2)
-    return serialized_pipeline
+    return dataset.to_json(json_filepath)
 
 
 def deserialize(input_dict=None, json_filepath=None):
     """
     Construct a de pipeline from a json file produced by de.serialize().
+
+    Currently python function deserialization of map operator are not supported.
 
     Args:
         input_dict (dict): a Python dictionary containing a serialized dataset graph
@@ -73,20 +71,16 @@ def deserialize(input_dict=None, json_filepath=None):
         OSError cannot open a file.
 
     Examples:
-        >>> import mindspore.dataset as ds
-        >>> import mindspore.dataset.transforms.c_transforms as C
-        >>> DATA_DIR = "../../data/testMnistData"
-        >>> data = ds.MnistDataset(DATA_DIR, 100)
-        >>> one_hot_encode = C.OneHot(10)  # num_classes is input argument
-        >>> data = data.map(operation=one_hot_encode, input_column_names="label")
-        >>> data = data.batch(batch_size=10, drop_remainder=True)
-        >>>
+        >>> dataset = ds.MnistDataset(mnist_dataset_dir, 100)
+        >>> one_hot_encode = c_transforms.OneHot(10)  # num_classes is input argument
+        >>> dataset = dataset.map(operation=one_hot_encode, input_column_names="label")
+        >>> dataset = dataset.batch(batch_size=10, drop_remainder=True)
         >>> # Use case 1: to/from json file
-        >>> ds.engine.serialize(data, json_filepath="mnist_dataset_pipeline.json")
-        >>> data = ds.engine.deserialize(json_filepath="mnist_dataset_pipeline.json")
+        >>> ds.engine.serialize(dataset, json_filepath="/path/to/mnist_dataset_pipeline.json")
+        >>> dataset = ds.engine.deserialize(json_filepath="/path/to/mnist_dataset_pipeline.json")
         >>> # Use case 2: to/from Python dictionary
-        >>> serialized_data = ds.engine.serialize(data)
-        >>> data = ds.engine.deserialize(input_dict=serialized_data)
+        >>> serialized_data = ds.engine.serialize(dataset)
+        >>> dataset = ds.engine.deserialize(input_dict=serialized_data)
 
     """
     data = None
@@ -110,93 +104,6 @@ def expand_path(node_repr, key, val):
         node_repr[key] = os.path.abspath(val)
 
 
-def serialize_operations(node_repr, key, val):
-    """Serialize tensor op (Python object) to dictionary."""
-    if isinstance(val, list):
-        node_repr[key] = []
-        for op in val:
-            node_repr[key].append(op.__dict__)
-            # Extracting module and name information from a Python object
-            # Example: tensor_op_module is 'minddata.transforms.c_transforms' and tensor_op_name is 'Decode'
-            node_repr[key][-1]['tensor_op_name'] = type(op).__name__
-            node_repr[key][-1]['tensor_op_module'] = type(op).__module__
-    else:
-        node_repr[key] = val.__dict__
-        node_repr[key]['tensor_op_name'] = type(val).__name__
-        node_repr[key]['tensor_op_module'] = type(val).__module__
-
-
-def serialize_sampler(node_repr, val):
-    """Serialize sampler object to dictionary."""
-    if val is None:
-        node_repr['sampler'] = None
-    else:
-        node_repr['sampler'] = val.__dict__
-        node_repr['sampler']['sampler_module'] = type(val).__module__
-        node_repr['sampler']['sampler_name'] = type(val).__name__
-
-
-def traverse(node):
-    """Pre-order traverse the pipeline and capture the information as we go."""
-    # Node representation (node_repr) is a Python dictionary that capture and store the
-    # dataset pipeline information before dumping it to JSON or other format.
-    node_repr = dict()
-    node_repr['op_type'] = type(node).__name__
-    node_repr['op_module'] = type(node).__module__
-
-    # Start with an empty list of children, will be added later as we traverse this node.
-    node_repr["children"] = []
-
-    # Retrieve the information about the current node. It should include arguments
-    # passed to the node during object construction.
-    node_args = node.get_args()
-    for k, v in node_args.items():
-        # Store the information about this node into node_repr.
-        # Further serialize the object in the arguments if needed.
-        if k == 'operations':
-            serialize_operations(node_repr, k, v)
-        elif k == 'sampler':
-            serialize_sampler(node_repr, v)
-        elif k == 'padded_sample' and v:
-            v1 = {key: value for key, value in v.items() if not isinstance(value, bytes)}
-            node_repr[k] = json.dumps(v1, indent=2)
-        # return schema json str if its type is mindspore.dataset.Schema
-        elif k == 'schema' and isinstance(v, de.Schema):
-            node_repr[k] = v.to_json()
-        elif k in set(['schema', 'dataset_files', 'dataset_dir', 'schema_file_path']):
-            expand_path(node_repr, k, v)
-        elif k == "num_parallel_workers" and v is None:
-            node_repr[k] = config.get_num_parallel_workers()
-        else:
-            node_repr[k] = v
-
-    # If a sampler exists in this node, then the following 4 arguments must be set to None:
-    #    num_samples, shard_id, num_shards, shuffle
-    # These arguments get moved into the sampler itself, so they are no longer needed to
-    # be set at the dataset level.
-    # TF Record is a special case because it uses both the dataset and sampler arguments
-    # which is not decided until later during tree preparation phase.
-    if node_repr['op_type'] != 'TFRecordDataset' and 'sampler' in node_args.keys():
-        if 'num_samples' in node_repr.keys():
-            node_repr['num_samples'] = None
-        if 'shuffle' in node_repr.keys():
-            node_repr['shuffle'] = None
-        if 'num_shards' in node_repr.keys():
-            node_repr['num_shards'] = None
-        if 'shard_id' in node_repr.keys():
-            node_repr['shard_id'] = None
-
-    # Leaf node doesn't have input attribute.
-    if not node.children:
-        return node_repr
-
-    # Recursively traverse the child and assign it to the current node_repr['children'].
-    for child in node.children:
-        node_repr["children"].append(traverse(child))
-
-    return node_repr
-
-
 def show(dataset, indentation=2):
     """
     Write the dataset pipeline graph onto logger.info.
@@ -206,7 +113,7 @@ def show(dataset, indentation=2):
         indentation (int, optional): indentation used by the json print. Pass None to not indent.
     """
 
-    pipeline = traverse(dataset)
+    pipeline = dataset.to_json()
     logger.info(json.dumps(pipeline, indent=indentation))
 
 
@@ -219,7 +126,7 @@ def compare(pipeline1, pipeline2):
         pipeline2 (Dataset): a dataset pipeline.
     """
 
-    return traverse(pipeline1) == traverse(pipeline2)
+    return pipeline1.to_json() == pipeline2.to_json()
 
 
 def construct_pipeline(node):
@@ -244,139 +151,163 @@ def create_node(node):
     """Parse the key, value in the node dictionary and instantiate the Python Dataset object"""
     logger.info('creating node: %s', node['op_type'])
     dataset_op = node['op_type']
-    op_module = node['op_module']
+    op_module = "mindspore.dataset"
 
     # Get the Python class to be instantiated.
     # Example:
     #  "op_type": "MapDataset",
     #  "op_module": "mindspore.dataset.datasets",
-    pyclass = getattr(sys.modules[op_module], dataset_op)
+    if node.get("children"):
+        pyclass = getattr(sys.modules[op_module], "Dataset")
+    else:
+        pyclass = getattr(sys.modules[op_module], dataset_op)
 
     pyobj = None
     # Find a matching Dataset class and call the constructor with the corresponding args.
     # When a new Dataset class is introduced, another if clause and parsing code needs to be added.
-    if dataset_op == 'ImageFolderDataset':
+    # Dataset Source Ops (in alphabetical order)
+    pyobj = create_dataset_node(pyclass, node, dataset_op)
+    if not pyobj:
+        # Dataset Ops (in alphabetical order)
+        pyobj = create_dataset_operation_node(node, dataset_op)
+
+    return pyobj
+
+
+def create_dataset_node(pyclass, node, dataset_op):
+    """Parse the key, value in the dataset node dictionary and instantiate the Python Dataset object"""
+    pyobj = None
+    if dataset_op == 'CelebADataset':
         sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node.get('num_samples'), node.get('num_parallel_workers'),
-                        node.get('shuffle'), sampler, node.get('extensions'),
-                        node.get('class_indexing'), node.get('decode'), node.get('num_shards'),
-                        node.get('shard_id'))
-
-    elif dataset_op == 'RangeDataset':
-        pyobj = pyclass(node['start'], node['stop'], node['step'])
-
-    elif dataset_op == 'ImageFolderDataset':
-        pyobj = pyclass(node['dataset_dir'], node['schema'], node.get('distribution'),
-                        node.get('column_list'), node.get('num_parallel_workers'),
-                        node.get('deterministic_output'), node.get('prefetch_size'),
-                        node.get('labels_filename'), node.get('dataset_usage'))
-
-    elif dataset_op == 'MnistDataset':
-        sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node['usage'], node.get('num_samples'), node.get('num_parallel_workers'),
-                        node.get('shuffle'), sampler, node.get('num_shards'), node.get('shard_id'))
-
-    elif dataset_op == 'MindDataset':
-        sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_file'], node.get('columns_list'),
-                        node.get('num_parallel_workers'), node.get('seed'), node.get('num_shards'),
-                        node.get('shard_id'), sampler)
-
-    elif dataset_op == 'TFRecordDataset':
-        shuffle = node.get('shuffle')
-        if shuffle is not None and isinstance(shuffle, str):
-            shuffle = de.Shuffle(shuffle)
-        pyobj = pyclass(node['dataset_files'], node.get('schema'), node.get('column_list'),
-                        node.get('num_samples'), node.get('num_parallel_workers'),
-                        shuffle, node.get('num_shards'), node.get('shard_id'))
-
-    elif dataset_op == 'ManifestDataset':
-        sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_file'], node['usage'], node.get('num_samples'),
-                        node.get('num_parallel_workers'), node.get('shuffle'), sampler,
-                        node.get('class_indexing'), node.get('decode'), node.get('num_shards'),
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], node.get('num_parallel_workers'), node.get('shuffle'), node.get('usage'),
+                        sampler, node.get('decode'), node.get('extensions'), num_samples, node.get('num_shards'),
                         node.get('shard_id'))
 
     elif dataset_op == 'Cifar10Dataset':
         sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node['usage'], node.get('num_samples'), node.get('num_parallel_workers'),
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], node['usage'], num_samples, node.get('num_parallel_workers'),
                         node.get('shuffle'), sampler, node.get('num_shards'), node.get('shard_id'))
 
     elif dataset_op == 'Cifar100Dataset':
         sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node['usage'], node.get('num_samples'), node.get('num_parallel_workers'),
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], node['usage'], num_samples, node.get('num_parallel_workers'),
                         node.get('shuffle'), sampler, node.get('num_shards'), node.get('shard_id'))
 
-    elif dataset_op == 'VOCDataset':
-        sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node.get('task'), node.get('mode'), node.get('class_indexing'),
-                        node.get('num_samples'), node.get('num_parallel_workers'), node.get('shuffle'),
-                        node.get('decode'), sampler, node.get('num_shards'), node.get('shard_id'))
+    elif dataset_op == 'ClueDataset':
+        shuffle = to_shuffle_mode(node.get('shuffle'))
+        if isinstance(shuffle, str):
+            shuffle = de.Shuffle(shuffle)
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_files'], node.get('task'),
+                        node.get('usage'), num_samples, node.get('num_parallel_workers'), shuffle,
+                        node.get('num_shards'), node.get('shard_id'))
 
     elif dataset_op == 'CocoDataset':
         sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node.get('annotation_file'), node.get('task'), node.get('num_samples'),
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], node.get('annotation_file'), node.get('task'), num_samples,
                         node.get('num_parallel_workers'), node.get('shuffle'), node.get('decode'), sampler,
                         node.get('num_shards'), node.get('shard_id'))
 
-    elif dataset_op == 'CelebADataset':
+    elif dataset_op == 'CSVDataset':
+        shuffle = to_shuffle_mode(node.get('shuffle'))
+        if isinstance(shuffle, str):
+            shuffle = de.Shuffle(shuffle)
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_files'], node.get('field_delim'),
+                        node.get('column_defaults'), node.get('column_names'), num_samples,
+                        node.get('num_parallel_workers'), shuffle,
+                        node.get('num_shards'), node.get('shard_id'))
+
+    elif dataset_op == 'ImageFolderDataset':
         sampler = construct_sampler(node.get('sampler'))
-        pyobj = pyclass(node['dataset_dir'], node.get('num_parallel_workers'), node.get('shuffle'),
-                        node.get('dataset_type'), sampler, node.get('decode'), node.get('extensions'),
-                        node.get('num_samples'), sampler, node.get('num_shards'), node.get('shard_id'))
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], num_samples, node.get('num_parallel_workers'),
+                        node.get('shuffle'), sampler, node.get('extensions'),
+                        node.get('class_indexing'), node.get('decode'), node.get('num_shards'),
+                        node.get('shard_id'))
 
-    elif dataset_op == 'GeneratorDataset':
-        # Serializing py function can be done using marshal library
-        raise RuntimeError(dataset_op + " is not yet supported")
+    elif dataset_op == 'ManifestDataset':
+        sampler = construct_sampler(node.get('sampler'))
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_file'], node['usage'], num_samples,
+                        node.get('num_parallel_workers'), node.get('shuffle'), sampler,
+                        node.get('class_indexing'), node.get('decode'), node.get('num_shards'),
+                        node.get('shard_id'))
 
-    elif dataset_op == 'RepeatDataset':
-        pyobj = de.Dataset().repeat(node.get('count'))
+    elif dataset_op == 'MnistDataset':
+        sampler = construct_sampler(node.get('sampler'))
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], node['usage'], num_samples, node.get('num_parallel_workers'),
+                        node.get('shuffle'), sampler, node.get('num_shards'), node.get('shard_id'))
 
-    elif dataset_op == 'SkipDataset':
-        pyobj = de.Dataset().skip(node.get('count'))
+    elif dataset_op == 'TextFileDataset':
+        shuffle = to_shuffle_mode(node.get('shuffle'))
+        if isinstance(shuffle, str):
+            shuffle = de.Shuffle(shuffle)
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_files'], num_samples,
+                        node.get('num_parallel_workers'), shuffle,
+                        node.get('num_shards'), node.get('shard_id'))
 
-    elif dataset_op == 'TakeDataset':
-        pyobj = de.Dataset().take(node.get('count'))
+    elif dataset_op == 'TFRecordDataset':
+        shuffle = to_shuffle_mode(node.get('shuffle'))
+        if isinstance(shuffle, str):
+            shuffle = de.Shuffle(shuffle)
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_files'], node.get('schema'), node.get('columns_list'),
+                        num_samples, node.get('num_parallel_workers'),
+                        shuffle, node.get('num_shards'), node.get('shard_id'))
 
-    elif dataset_op == 'MapDataset':
-        tensor_ops = construct_tensor_ops(node.get('operations'))
-        pyobj = de.Dataset().map(tensor_ops, node.get('input_columns'), node.get('output_columns'),
-                                 node.get('column_order'), node.get('num_parallel_workers'))
+    elif dataset_op == 'VOCDataset':
+        sampler = construct_sampler(node.get('sampler'))
+        num_samples = check_and_replace_input(node.get('num_samples'), 0, None)
+        pyobj = pyclass(node['dataset_dir'], node.get('task'), node.get('usage'), node.get('class_indexing'),
+                        num_samples, node.get('num_parallel_workers'), node.get('shuffle'),
+                        node.get('decode'), sampler, node.get('num_shards'), node.get('shard_id'))
 
-    elif dataset_op == 'ShuffleDataset':
-        pyobj = de.Dataset().shuffle(node.get('buffer_size'))
+    return pyobj
 
-    elif dataset_op == 'BatchDataset':
+
+def create_dataset_operation_node(node, dataset_op):
+    """Parse the key, value in the dataset operation node dictionary and instantiate the Python Dataset object"""
+    pyobj = None
+    if dataset_op == 'Batch':
         pyobj = de.Dataset().batch(node['batch_size'], node.get('drop_remainder'))
 
-    elif dataset_op == 'CacheDataset':
-        # Member function cache() is not defined in class Dataset yet.
-        raise RuntimeError(dataset_op + " is not yet supported.")
+    elif dataset_op == 'Map':
+        tensor_ops = construct_tensor_ops(node.get('operations'))
+        pyobj = de.Dataset().map(tensor_ops, node.get('input_columns'), node.get('output_columns'),
+                                 node.get('column_order'), node.get('num_parallel_workers'),
+                                 False, None, node.get('callbacks'))
 
-    elif dataset_op == 'FilterDataset':
-        # Member function filter() is not defined in class Dataset yet.
-        raise RuntimeError(dataset_op + " is not yet supported.")
-
-    elif dataset_op == 'TakeDataset':
-        # Member function take() is not defined in class Dataset yet.
-        raise RuntimeError(dataset_op + " is not yet supported.")
-
-    elif dataset_op == 'ZipDataset':
-        # Create ZipDataset instance, giving dummy input dataset that will be overrided in the caller.
-        pyobj = de.ZipDataset((de.Dataset(), de.Dataset()))
-
-    elif dataset_op == 'ConcatDataset':
-        # Create ConcatDataset instance, giving dummy input dataset that will be overrided in the caller.
-        pyobj = de.ConcatDataset((de.Dataset(), de.Dataset()))
-
-    elif dataset_op == 'RenameDataset':
-        pyobj = de.Dataset().rename(node['input_columns'], node['output_columns'])
-
-    elif dataset_op == 'ProjectDataset':
+    elif dataset_op == 'Project':
         pyobj = de.Dataset().project(node['columns'])
 
-    elif dataset_op == 'TransferDataset':
-        pyobj = de.Dataset().to_device()
+    elif dataset_op == 'Rename':
+        pyobj = de.Dataset().rename(node['input_columns'], node['output_columns'])
+
+    elif dataset_op == 'Repeat':
+        pyobj = de.Dataset().repeat(node.get('count'))
+
+    elif dataset_op == 'Shuffle':
+        pyobj = de.Dataset().shuffle(node.get('buffer_size'))
+
+    elif dataset_op == 'Skip':
+        pyobj = de.Dataset().skip(node.get('count'))
+
+    elif dataset_op == 'Take':
+        pyobj = de.Dataset().take(node.get('count'))
+
+    elif dataset_op == 'Transfer':
+        pyobj = de.Dataset().to_device(node.get('send_epoch_end'), node.get('create_data_info_queue'))
+
+    elif dataset_op == 'Zip':
+        # Create ZipDataset instance, giving dummy input dataset that will be overrode in the caller.
+        pyobj = de.ZipDataset((de.Dataset(), de.Dataset()))
 
     else:
         raise RuntimeError(dataset_op + " is not yet supported by ds.engine.deserialize().")
@@ -388,23 +319,28 @@ def construct_sampler(in_sampler):
     """Instantiate Sampler object based on the information from dictionary['sampler']"""
     sampler = None
     if in_sampler is not None:
+        if "num_samples" in in_sampler:
+            num_samples = check_and_replace_input(in_sampler['num_samples'], 0, None)
         sampler_name = in_sampler['sampler_name']
-        sampler_module = in_sampler['sampler_module']
+        sampler_module = "mindspore.dataset"
         sampler_class = getattr(sys.modules[sampler_module], sampler_name)
         if sampler_name == 'DistributedSampler':
             sampler = sampler_class(in_sampler['num_shards'], in_sampler['shard_id'], in_sampler.get('shuffle'))
         elif sampler_name == 'PKSampler':
             sampler = sampler_class(in_sampler['num_val'], in_sampler.get('num_class'), in_sampler('shuffle'))
         elif sampler_name == 'RandomSampler':
-            sampler = sampler_class(in_sampler.get('replacement'), in_sampler.get('num_samples'))
+            sampler = sampler_class(in_sampler.get('replacement'), num_samples)
         elif sampler_name == 'SequentialSampler':
-            sampler = sampler_class()
+            sampler = sampler_class(in_sampler.get('start_index'), num_samples)
         elif sampler_name == 'SubsetRandomSampler':
-            sampler = sampler_class(in_sampler['indices'])
+            sampler = sampler_class(in_sampler['indices'], num_samples)
         elif sampler_name == 'WeightedRandomSampler':
-            sampler = sampler_class(in_sampler['weights'], in_sampler['num_samples'], in_sampler.get('replacement'))
+            sampler = sampler_class(in_sampler['weights'], num_samples, in_sampler.get('replacement'))
         else:
             raise ValueError("Sampler type is unknown: {}.".format(sampler_name))
+    if in_sampler.get("child_sampler"):
+        for child in in_sampler["child_sampler"]:
+            sampler.add_child(construct_sampler(child))
 
     return sampler
 
@@ -413,70 +349,108 @@ def construct_tensor_ops(operations):
     """Instantiate tensor op object(s) based on the information from dictionary['operations']"""
     result = []
     for op in operations:
-        op_module = op['tensor_op_module']
-        op_name = op['tensor_op_name']
-        op_class = getattr(sys.modules[op_module], op_name)
+        op_name = op.get('tensor_op_name')
+        op_params = op.get('tensor_op_params')
 
-        if op_name == 'Decode':
-            result.append(op_class(op.get('rgb')))
+        if op.get('is_python_front_end_op'):  # check if it's a py_transform op
+            raise NotImplementedError("python function is not yet supported by de.deserialize().")
 
-        elif op_name == 'Normalize':
-            result.append(op_class(op['mean'], op['std']))
+        if op_name == "HwcToChw": op_name = "HWC2CHW"
+        if op_name == "UniformAug": op_name = "UniformAugment"
+        op_module_vis = sys.modules["mindspore.dataset.vision.c_transforms"]
+        op_module_trans = sys.modules["mindspore.dataset.transforms.c_transforms"]
 
-        elif op_name == 'RandomCrop':
-            result.append(op_class(op['size'], op.get('padding'), op.get('pad_if_needed'),
-                                   op.get('fill_value'), Border(op.get('padding_mode'))))
-
-        elif op_name == 'RandomHorizontalFlip':
-            result.append(op_class(op.get('prob')))
-
-        elif op_name == 'RandomVerticalFlip':
-            result.append(op_class(op.get('prob')))
-
-        elif op_name == 'Resize':
-            result.append(op_class(op['size'], Inter(op.get('interpolation'))))
-
-        elif op_name == 'RandomResizedCrop':
-            result.append(op_class(op['size'], op.get('scale'), op.get('ratio'),
-                                   Inter(op.get('interpolation')), op.get('max_attempts')))
-
-        elif op_name == 'CenterCrop':
-            result.append(op_class(op['size']))
-
-        elif op_name == 'RandomColorAdjust':
-            result.append(op_class(op.get('brightness'), op.get('contrast'), op.get('saturation'),
-                                   op.get('hue')))
-
-        elif op_name == 'RandomRotation':
-            result.append(op_class(op['degree'], op.get('resample'), op.get('expand'),
-                                   op.get('center'), op.get('fill_value')))
-
-        elif op_name == 'Rescale':
-            result.append(op_class(op['rescale'], op['shift']))
-
-        elif op_name == 'RandomResize':
-            result.append(op_class(op['size']))
-
-        elif op_name == 'TypeCast':
-            result.append(op_class(op['data_type']))
-
-        elif op_name == 'HWC2CHW':
-            result.append(op_class())
-
-        elif op_name == 'CHW2HWC':
-            raise ValueError("Tensor op is not supported: {}.".format(op_name))
-
-        elif op_name == 'OneHot':
-            result.append(op_class(op['num_classes']))
-
-        elif op_name == 'RandomCropDecodeResize':
-            result.append(op_class(op['size'], op.get('scale'), op.get('ratio'),
-                                   Inter(op.get('interpolation')), op.get('max_attempts')))
-
-        elif op_name == 'Pad':
-            result.append(op_class(op['padding'], op['fill_value'], Border(op['padding_mode'])))
-
+        if hasattr(op_module_vis, op_name):
+            op_class = getattr(op_module_vis, op_name, None)
+        elif hasattr(op_module_trans, op_name[:-2]):
+            op_name = op_name[:-2]  # to remove op from the back of the name
+            op_class = getattr(op_module_trans, op_name, None)
         else:
-            raise ValueError("Tensor op name is unknown: {}.".format(op_name))
+            raise RuntimeError(op_name + " is not yet supported by deserialize().")
 
+        if op_params is None:  # If no parameter is specified, call it directly
+            result.append(op_class())
+        else:
+            # Input parameter type cast
+            for key, val in op_params.items():
+                if key in ['center', 'fill_value']:
+                    op_params[key] = tuple(val)
+                elif key in ['interpolation', 'resample']:
+                    op_params[key] = Inter(to_interpolation_mode(val))
+                elif key in ['padding_mode']:
+                    op_params[key] = Border(to_border_mode(val))
+                elif key in ['data_type']:
+                    op_params[key] = to_mstype(val)
+                elif key in ['image_batch_format']:
+                    op_params[key] = to_image_batch_format(val)
+                elif key in ['policy']:
+                    op_params[key] = to_policy(val)
+                elif key in ['transform', 'transforms']:
+                    op_params[key] = construct_tensor_ops(val)
+
+            result.append(op_class(**op_params))
     return result
+
+
+def to_policy(op_list):
+    policy_tensor_ops = []
+    for policy_list in op_list:
+        sub_policy_tensor_ops = []
+        for policy_item in policy_list:
+            sub_policy_tensor_ops.append(
+                (construct_tensor_ops(policy_item.get('tensor_op')), policy_item.get('prob')))
+        policy_tensor_ops.append(sub_policy_tensor_ops)
+    return policy_tensor_ops
+
+
+def to_shuffle_mode(shuffle):
+    if shuffle == 2: return "global"
+    if shuffle == 1: return "file"
+    return False
+
+
+def to_interpolation_mode(inter):
+    return {
+        0: Inter.LINEAR,
+        1: Inter.NEAREST,
+        2: Inter.CUBIC,
+        3: Inter.AREA
+    }[inter]
+
+
+def to_border_mode(border):
+    return {
+        0: Border.CONSTANT,
+        1: Border.EDGE,
+        2: Border.REFLECT,
+        3: Border.SYMMETRIC
+    }[border]
+
+
+def to_mstype(data_type):
+    return {
+        "bool": mstype.bool_,
+        "int8": mstype.int8,
+        "int16": mstype.int16,
+        "int32": mstype.int32,
+        "int64": mstype.int64,
+        "uint8": mstype.uint8,
+        "uint16": mstype.uint16,
+        "uint32": mstype.uint32,
+        "uint64": mstype.uint64,
+        "float16": mstype.float16,
+        "float32": mstype.float32,
+        "float64": mstype.float64,
+        "string": mstype.string
+    }[data_type]
+
+
+def to_image_batch_format(image_batch_format):
+    return {
+        0: ImageBatchFormat.NHWC,
+        1: ImageBatchFormat.NCHW
+    }[image_batch_format]
+
+
+def check_and_replace_input(input_value, expect, replace):
+    return replace if input_value == expect else input_value

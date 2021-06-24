@@ -33,6 +33,7 @@ const char kDeviceQueueTracingName[] = "Device_Queue_Tracing";
 const char kDatasetIteratorTracingName[] = "Dataset_Iterator_Tracing";
 const char kConnectorSizeSamplingName[] = "Connector_Size_Sampling";
 const char kConnectorThroughputSamplingName[] = "Connector_Throughput_Sampling";
+const char kCpuSamplingName[] = "Cpu_Sampling";
 
 // Profiling is a class of basic unit of profiling action
 // This base class encapsulate the serialization output logic
@@ -64,6 +65,7 @@ class Sampling : public Profiling {
   // Sampling action function. This function will be invoked by performance monitor thread.
   virtual Status Sample() = 0;
   // virtual Status TestPrint() = 0;
+  virtual Status Analyze() = 0;
   virtual ~Sampling() = default;
 };
 
@@ -117,6 +119,9 @@ class ProfilingManager {
 
   Status ChangeFileMode();
 
+  // Analyze profile data and print warning messages
+  Status Analyze();
+
  private:
   std::unique_ptr<Monitor> perf_monitor_;
   bool enabled_;
@@ -150,7 +155,7 @@ enum ProfilingTimeSubType {
 
 class ProfilingTime {
  public:
-  static int64_t GetCurMilliSecond();
+  static uint64_t GetCurMilliSecond();
 };
 }  // namespace dataset
 }  // namespace mindspore

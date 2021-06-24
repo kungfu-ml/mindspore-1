@@ -46,7 +46,7 @@ class ExportToQuantInferNetwork:
     Returns:
         Cell, Infer network.
     """
-    __quant_op_name__ = ["TensorAdd", "Sub", "Mul", "RealDiv"]
+    __quant_op_name__ = ["Add", "Sub", "Mul", "RealDiv"]
 
     def __init__(self, network, mean, std_dev, *inputs, is_mindir=False):
         network = Validator.check_isinstance('network', network, (nn.Cell,))
@@ -76,7 +76,7 @@ class ExportToQuantInferNetwork:
         return network
 
     def _get_quant_block(self, cell_core, activation, fake_quant_a_out):
-        """convet network's quant subcell to deploy subcell"""
+        """convert network's quant subcell to deploy subcell"""
         # Calculate the scale and zero point
         w_minq_name = cell_core.fake_quant_weight.minq.name
         np_type = mstype.dtype_to_nptype(self.data_type)
@@ -129,7 +129,7 @@ class ExportToQuantInferNetwork:
         if isinstance(cell_core, (quant.DenseQuant, quant.Conv2dQuant)):
             if cell_core.has_bias:
                 bias = cell_core.bias.data.asnumpy()
-        elif isinstance(cell_core, quant.Conv2dBnFoldQuant):
+        elif isinstance(cell_core, (quant.Conv2dBnFoldQuant, quant.Conv2dBnFoldQuantOneConv)):
             weight, bias = quant_utils.fold_batchnorm(weight, cell_core)
         elif isinstance(cell_core, quant.Conv2dBnWithoutFoldQuant):
             weight, bias = quant_utils.without_fold_batchnorm(weight, cell_core)
@@ -225,7 +225,7 @@ class ExportManualQuantNetwork(ExportToQuantInferNetwork):
         Returns:
             Cell, Infer network.
         """
-    __quant_op_name__ = ["TensorAdd", "Sub", "Mul", "RealDiv"]
+    __quant_op_name__ = ["Add", "Sub", "Mul", "RealDiv"]
 
     def __init__(self, network, mean, std_dev, *inputs, is_mindir=False):
         super(ExportManualQuantNetwork, self).__init__(network, mean, std_dev, *inputs, is_mindir)

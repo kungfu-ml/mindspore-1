@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,6 @@
 #include "tools/converter/legacy_optimizer/graph/switch_pass.h"
 #include "src/common/log_adapter.h"
 #include "include/errorcode.h"
-#include "src/ops/primitive_c.h"
 #include "src/common/utils.h"
 #include "tools/common/graph_util.h"
 
@@ -42,6 +41,35 @@ STATUS SwitchPass::Run(mindspore::schema::MetaGraphT *graph) {
       MS_LOG(ERROR) << "node: " << node->name << "'s switch pass failed: " << ret;
       return ret;
     }
+  }
+  // remove empty subgraphs
+  std::vector<std::unique_ptr<SubGraphT>> new_sub_graphs;
+  std::map<uint32_t, uint32_t> sub_graph_index_map;
+  for (size_t i = 0; i < graph->subGraph.size(); ++i) {
+    auto &sub_graph = graph->subGraph.at(i);
+    if (!sub_graph->nodeIndices.empty()) {
+      new_sub_graphs.emplace_back(std::move(sub_graph));
+      sub_graph_index_map.emplace(std::make_pair(i, new_sub_graphs.size() - 1));
+    }
+  }
+  graph->subGraph.swap(new_sub_graphs);
+  for (size_t i = 0; i < graph->nodes.size(); ++i) {
+    auto &node = graph->nodes.at(i);
+    auto type = node->primitive->value.type;
+    if (type != schema::PrimitiveType_PartialFusion) {
+      continue;
+    }
+    MS_ASSERT(node->primitive != nullptr);
+    MS_ASSERT(node->primitive->value..AsPartialFusion() != nullptr);
+    auto partial_prim = node->primitive->value.AsPartialFusion();
+    if (partial_prim->sub_graph_index == -1) {
+      continue;
+    }
+    if (sub_graph_index_map.find(partial_prim->sub_graph_index) == sub_graph_index_map.end()) {
+      MS_LOG(ERROR) << "sub_graph_index is illegal";
+      return RET_ERROR;
+    }
+    partial_prim->sub_graph_index = sub_graph_index_map[partial_prim->sub_graph_index];
   }
   return RET_OK;
 }
@@ -96,8 +124,9 @@ STATUS SingleSwitchPass::UpdateSwitchUser() {
 
 bool SingleSwitchPass::IsLoop() {
   for (auto &node : second_graph_nodes_) {
-    if (node->primitive->value.type == schema::PrimitiveType_Partial && node->primitive->value.AsPartial() != nullptr &&
-        node->primitive->value.AsPartial()->subGraphIndex == first_subgraph_index_) {
+    if (node->primitive->value.type == schema::PrimitiveType_PartialFusion &&
+        node->primitive->value.AsPartialFusion() != nullptr &&
+        node->primitive->value.AsPartialFusion()->sub_graph_index == first_subgraph_index_) {
       body_to_cond_partial_node_ = node;
       return true;
     }
@@ -136,6 +165,64 @@ STATUS SingleSwitchPass::BodyGraphVariableInput(std::vector<size_t> *variable_in
   return RET_OK;
 }
 
+std::unique_ptr<schema::CNodeT> SingleSwitchPass::MakeMergeNode(const std::string &name,
+                                                                const std::vector<size_t> &const_input) {
+  auto merge_node = std::make_unique<schema::CNodeT>();
+  if (merge_node == nullptr) {
+    MS_LOG(ERROR) << "new CNodeT failed";
+    return nullptr;
+  }
+  merge_node->primitive = std::make_unique<PrimitiveT>();
+  if (merge_node->primitive == nullptr) {
+    MS_LOG(ERROR) << "new PrimitiveT failed";
+    return nullptr;
+  }
+
+  merge_node->name = name;
+  merge_node->primitive->value.type = schema::PrimitiveType_Merge;
+  merge_node->primitive->value.value = new (std::nothrow) MergeT();
+  if (merge_node->primitive->value.value == nullptr) {
+    MS_LOG(ERROR) << "new MergeT failed";
+    return nullptr;
+  }
+
+  // merge node output is same as switch
+  for (auto &out_index : origin_switch_output_tensor_indices_) {
+    auto &switch_out_tensor = graph_->allTensors.at(out_index);
+    auto tensor = NewTensor(switch_out_tensor);
+    graph_->allTensors.push_back(std::move(tensor));
+    merge_node->outputIndex.push_back(graph_->allTensors.size() - 1);
+  }
+
+  merge_node->inputIndex.assign(first_partial_node_->inputIndex.begin(), first_partial_node_->inputIndex.end());
+
+  std::set<uint32_t> input_set{};
+  for (auto &iter : merge_node->inputIndex) {
+    if (input_set.find(iter) != input_set.end()) {
+      auto &in_tensor = graph_->allTensors.at(iter);
+      auto tensor = NewTensor(in_tensor, true);
+      graph_->allTensors.push_back(std::move(tensor));
+      iter = graph_->allTensors.size() - 1;
+    }
+    input_set.insert(iter);
+  }
+
+  // double merge inputs to contain the outputs of body  node
+  auto old_merge_input = merge_node->inputIndex;
+  for (size_t i = 0; i < old_merge_input.size(); i++) {
+    auto &in_tensor = graph_->allTensors.at(old_merge_input[i]);
+    if (IsContain(const_input, i)) {
+      merge_node->inputIndex.push_back(old_merge_input[i]);
+    } else {
+      auto tensor = NewTensor(in_tensor);
+      tensor->nodeType = NodeType_CNode;
+      graph_->allTensors.push_back(std::move(tensor));
+      merge_node->inputIndex.push_back(graph_->allTensors.size() - 1);
+    }
+  }
+  return merge_node;
+}
+
 STATUS SingleSwitchPass::InsertMerge() {
   // update body graph output
   auto &body_fg = graph_->subGraph.at(second_subgraph_index_);
@@ -168,61 +255,11 @@ STATUS SingleSwitchPass::InsertMerge() {
     }
     const_input.push_back(i);
   }
-
-  auto merge_node = std::make_unique<schema::CNodeT>();
+  auto merge_node = MakeMergeNode(switch_node_->name + "-merge", const_input);
   if (merge_node == nullptr) {
-    MS_LOG(ERROR) << "new CNodeT failed";
-    return RET_NULL_PTR;
+    MS_LOG(ERROR) << "make merge node failed";
+    return ret;
   }
-  merge_node->primitive = std::make_unique<PrimitiveT>();
-  if (merge_node->primitive == nullptr) {
-    MS_LOG(ERROR) << "new PrimitiveT failed";
-    return RET_NULL_PTR;
-  }
-
-  merge_node->name = switch_node_->name + "-merge";
-  merge_node->primitive->value.type = schema::PrimitiveType_Merge;
-  merge_node->primitive->value.value = new (std::nothrow) MergeT();
-  if (merge_node->primitive->value.value == nullptr) {
-    MS_LOG(ERROR) << "new MergeT failed";
-    return RET_NULL_PTR;
-  }
-
-  // merge node output is same as switch
-  for (auto &out_index : origin_switch_output_tensor_indices_) {
-    auto &switch_out_tensor = graph_->allTensors.at(out_index);
-    auto tensor = NewTensor(switch_out_tensor);
-    graph_->allTensors.push_back(std::move(tensor));
-    merge_node->outputIndex.push_back(graph_->allTensors.size() - 1);
-  }
-
-  merge_node->inputIndex.assign(first_partial_node_->inputIndex.begin(), first_partial_node_->inputIndex.end());
-
-  std::set<uint32_t> input_set{};
-  for (auto &iter : merge_node->inputIndex) {
-    if (input_set.find(iter) != input_set.end()) {
-      auto &in_tensor = graph_->allTensors.at(iter);
-      auto tensor = NewTensor(in_tensor, true);
-      graph_->allTensors.push_back(std::move(tensor));
-      iter = graph_->allTensors.size() - 1;
-    }
-    input_set.insert(iter);
-  }
-
-  // double merge inputs to contain the outputs of body  node
-  auto old_merge_input = merge_node->inputIndex;
-  for (size_t i = 0; i < old_merge_input.size(); i++) {
-    auto &in_tensor = graph_->allTensors.at(old_merge_input[i]);
-    if (IsContain(const_input, i)) {
-      merge_node->inputIndex.push_back(old_merge_input[i]);
-    } else {
-      auto tensor = NewTensor(in_tensor);
-      tensor->nodeType = schema::NodeType_CNode;
-      graph_->allTensors.push_back(std::move(tensor));
-      merge_node->inputIndex.push_back(graph_->allTensors.size() - 1);
-    }
-  }
-
   // insert merge node before the cond graph
   std::map<int, int> cond_input_update_map{};
   for (size_t i = 0; i < first_partial_node_->inputIndex.size(); i++) {
@@ -251,9 +288,34 @@ STATUS SingleSwitchPass::InsertMerge() {
   second_partial_node_->inputIndex.assign(switch_node_->outputIndex.begin(),
                                           switch_node_->outputIndex.begin() + switch_node_->outputIndex.size() / 2);
 
+  // skip tensor which is not any nodes' inputs to avoid body partial connect to merge input cnode
+  std::vector<uint32_t> skip_input_tensors;
+  for (auto input : const_input) {
+    auto real_input = graph_->subGraph.at(second_subgraph_index_)->inputIndices.at(input);
+    bool skip = true;
+    for (auto &node : second_graph_nodes_) {
+      if (IsContain(node->inputIndex, real_input)) {
+        skip = false;
+        break;
+      }
+    }
+    if (skip) {
+      auto &skip_tensor = graph_->allTensors.at(real_input);
+      int partial_idx = GetSubgraphInputTensorIndex(graph_->subGraph.at(second_subgraph_index_), skip_tensor);
+      skip_input_tensors.emplace_back(partial_idx);
+    }
+  }
+
   // concat body output to merge input
-  second_partial_node_->outputIndex.assign(merge_node->inputIndex.begin() + merge_node->inputIndex.size() / 2,
-                                           merge_node->inputIndex.end());
+  second_partial_node_->outputIndex.clear();
+  for (uint32_t merge_right_input = 0; merge_right_input < merge_node->inputIndex.size() / 2; merge_right_input++) {
+    if (!IsContain(skip_input_tensors, merge_right_input)) {
+      second_partial_node_->outputIndex.emplace_back(
+        merge_node->inputIndex.at(merge_node->inputIndex.size() / 2 + merge_right_input));
+    } else {
+      second_partial_node_->outputIndex.emplace_back(UINT32_MAX);
+    }
+  }
 
   graph_->nodes.push_back(std::move(merge_node));
 
@@ -283,7 +345,7 @@ STATUS SingleSwitchPass::InsertPartialAndMergeAfterSwitch() {
   auto origin_switch_outputs = switch_node_->outputIndex;
   switch_node_->outputIndex.clear();
   for (size_t i = 3; i < switch_node_->inputIndex.size(); i++) {
-    auto &switch_in_tensor = graph_->allTensors.at(i);
+    auto &switch_in_tensor = graph_->allTensors.at(switch_node_->inputIndex[i]);
     auto tensor = NewTensor(switch_in_tensor);
     graph_->allTensors.push_back(std::move(tensor));
     switch_node_->outputIndex.push_back(graph_->allTensors.size() - 1);
@@ -405,16 +467,16 @@ STATUS SingleSwitchPass::Init() {
   }
 
   // get cond_graph_nodes_
-  MS_ASSERT(first_partial_node_->primitive->value.AsPartial() != nullptr);
-  first_subgraph_index_ = first_partial_node_->primitive->value.AsPartial()->subGraphIndex;
+  MS_ASSERT(first_partial_node_->primitive->value..AsPartialFusion() != nullptr);
+  first_subgraph_index_ = first_partial_node_->primitive->value.AsPartialFusion()->sub_graph_index;
   auto cond_node_indices = graph_->subGraph.at(first_subgraph_index_)->nodeIndices;
   for (auto &index : cond_node_indices) {
     first_graph_nodes_.push_back(graph_->nodes.at(index).get());
   }
 
   // get second_graph_nodes_
-  MS_ASSERT(second_partial_node_->primitive->value.AsPartial() != nullptr);
-  second_subgraph_index_ = second_partial_node_->primitive->value.AsPartial()->subGraphIndex;
+  MS_ASSERT(second_partial_node_->primitive->value..AsPartialFusion() != nullptr);
+  second_subgraph_index_ = second_partial_node_->primitive->value.AsPartialFusion()->sub_graph_index;
   auto body_node_indices = graph_->subGraph.at(second_subgraph_index_)->nodeIndices;
   for (auto &index : body_node_indices) {
     second_graph_nodes_.push_back(graph_->nodes.at(index).get());
@@ -537,6 +599,11 @@ STATUS SingleSwitchPass::UpdateSubgraphOutput(const size_t &subgraph_index, sche
         output = subgraph_output_map.at(output);
       }
     }
+    for (auto &input : subgraph_node->inputIndex) {
+      if (subgraph_output_map.find(input) != subgraph_output_map.end()) {
+        input = subgraph_output_map.at(input);
+      }
+    }
   }
 
   std::vector<int> new_subgraph_outputs{};
@@ -544,11 +611,21 @@ STATUS SingleSwitchPass::UpdateSubgraphOutput(const size_t &subgraph_index, sche
                  [](std::pair<int, int> iter) { return iter.second; });
   subgraph_outputs.assign(new_subgraph_outputs.begin(), new_subgraph_outputs.end());
 
+  // filter for -1 output index
+  std::vector<uint32_t> new_partial_outputs;
+  std::copy_if(partial_outputs.begin(), partial_outputs.end(),
+               std::inserter(new_partial_outputs, new_partial_outputs.begin()),
+               [](uint32_t output) { return output != UINT32_MAX; });
+  partial_node->outputIndex = new_partial_outputs;
+
   return RET_OK;
 }
 
 STATUS SingleSwitchPass::ConcatCondSubgraphInputAndOutput() {
   if (first_subgraph_index_ == -1) {
+    MS_ASSERT(first_partial_node_->primitive != nullptr);
+    MS_ASSERT(first_partial_node_->primitive->value..AsPartialFusion() != nullptr);
+    first_partial_node_->primitive->value.AsPartialFusion()->sub_graph_index = -1;
     return RET_OK;
   }
   int ret = UpdateSubgraphInput(first_subgraph_index_, first_partial_node_, first_graph_nodes_);
@@ -567,6 +644,9 @@ STATUS SingleSwitchPass::ConcatCondSubgraphInputAndOutput() {
 
 STATUS SingleSwitchPass::ConcatBodySubgraphInputAndOutput() {
   if (second_subgraph_index_ == -1) {
+    MS_ASSERT(first_partial_node_->primitive != nullptr);
+    MS_ASSERT(first_partial_node_->primitive->value..AsPartialFusion() != nullptr);
+    first_partial_node_->primitive->value.AsPartialFusion()->sub_graph_index = -1;
     return RET_OK;
   }
   int ret = UpdateSubgraphInput(second_subgraph_index_, second_partial_node_, second_graph_nodes_);

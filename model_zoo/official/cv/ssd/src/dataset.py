@@ -122,7 +122,7 @@ def preprocess_fn(img_id, image, box, is_training):
     def _data_aug(image, box, is_training, image_size=(300, 300)):
         """Data augmentation function."""
         ih, iw, _ = image.shape
-        w, h = image_size
+        h, w = image_size
 
         if not is_training:
             return _infer_data(image, image_size)
@@ -207,10 +207,10 @@ def create_voc_label(is_training):
                 print(f'Label "{cls_name}" not in "{config.classes}"')
                 continue
             bnd_box = obj.find('bndbox')
-            x_min = int(bnd_box.find('xmin').text) - 1
-            y_min = int(bnd_box.find('ymin').text) - 1
-            x_max = int(bnd_box.find('xmax').text) - 1
-            y_max = int(bnd_box.find('ymax').text) - 1
+            x_min = int(float(bnd_box.find('xmin').text)) - 1
+            y_min = int(float(bnd_box.find('ymin').text)) - 1
+            x_max = int(float(bnd_box.find('xmax').text)) - 1
+            y_max = int(float(bnd_box.find('ymax').text)) - 1
             labels.append([y_min, x_min, y_max, x_max, cls_map[cls_name]])
 
             if not is_training:
@@ -391,7 +391,7 @@ def data_to_mindrecord_byte_image(dataset="coco", is_training=True, prefix="ssd.
 
 
 def create_ssd_dataset(mindrecord_file, batch_size=32, repeat_num=10, device_num=1, rank=0,
-                       is_training=True, num_parallel_workers=4, use_multiprocessing=True):
+                       is_training=True, num_parallel_workers=6, use_multiprocessing=True):
     """Create SSD dataset with MindDataset."""
     ds = de.MindDataset(mindrecord_file, columns_list=["img_id", "image", "annotation"], num_shards=device_num,
                         shard_id=rank, num_parallel_workers=num_parallel_workers, shuffle=is_training)

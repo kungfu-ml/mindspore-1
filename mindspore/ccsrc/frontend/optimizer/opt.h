@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include "ir/anf.h"
 #include "ir/func_graph.h"
@@ -59,19 +60,28 @@ SubstitutionPtr MakeSubstitution(const OptimizerCallerPtr &transform, const std:
 SubstitutionPtr MakeSubstitution(const OptimizerCallerPtr &transform, const std::string &name,
                                  const PredicateFuncType &predicate, const RenormAction &action_renorm = CHECK_RENORM);
 
+enum OptTraverseSubstitutionsMode { kOptTraverseFromIRToSubstitutions = 0, kOptTraverseFromSubstitutionsToIR };
+
 class SubstitutionList {
  public:
-  explicit SubstitutionList(const std::vector<SubstitutionPtr> &patterns, bool is_once = false)
-      : list_(patterns), is_once_(is_once) {}
+  explicit SubstitutionList(const std::vector<SubstitutionPtr> &patterns, bool is_once = false,
+                            bool global_sensitive = false)
+      : list_(patterns), is_once_(is_once), global_sensitive_(global_sensitive) {}
   ~SubstitutionList() = default;
 
   bool operator()(const FuncGraphPtr &func_graph, const OptimizerPtr &optimizer) const;
 
  private:
-  bool ApplyTransform(const OptimizerPtr &optimizer, const AnfNodePtr &node, const SubstitutionPtr &transform) const;
+  bool ApplyIRToSubstitutions(const OptimizerPtr &optimizer, const FuncGraphPtr &func_graph) const;
+  bool ApplySubstitutionToIR(const OptimizerPtr &optimizer, const AnfNodePtr &node, const SubstitutionPtr &sub) const;
+  bool ApplySubstitutionsToIR(const OptimizerPtr &optimizer, const FuncGraphPtr &func_graph) const;
+  void DisplayStatusOfSubstitution(const std::unordered_map<std::string, std::vector<bool>> &status,
+                                   const OptimizerPtr &optimizer, size_t space) const;
+
   std::vector<SubstitutionPtr> list_;
   // a flag to mark this list of Substitution can only be executed only once
   bool is_once_;
+  bool global_sensitive_;
 };
 }  // namespace opt
 }  // namespace mindspore

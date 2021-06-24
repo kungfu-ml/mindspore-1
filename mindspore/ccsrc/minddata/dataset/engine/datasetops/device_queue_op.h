@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,12 @@
 
 #include "minddata/dataset/engine/datasetops/pipeline_op.h"
 #include "minddata/dataset/engine/datasetops/repeat_op.h"
+#include "minddata/dataset/engine/perf/device_queue_tracing.h"
 #include "minddata/dataset/util/status.h"
+#ifdef ENABLE_DUMP_IR
+#include "debug/rdr/running_data_recorder.h"
+#include "minddata/dataset/util/rdr.h"
+#endif
 
 #ifdef ENABLE_TDTQUE
 #include "minddata/dataset/util/queue.h"
@@ -167,11 +172,10 @@ class DeviceQueueOp : public PipelineOp {
 
   Status operator()() override;
 
-  // Base-class override for NodePass visitor acceptor.
-  // @param p - Pointer to the NodePass to be accepted.
-  // @param modified - Whether this node visit modified the pipeline.
-  // @return - Status of the node visit.
-  Status Accept(NodePass *p, bool *modified) override;
+  // Record the pipeline profiling info
+  void ProfilingRecorder(bool isProfilingEnable, std::shared_ptr<DeviceQueueTracing> profiling_node, int64_t send_batch,
+                         int32_t tdt_cost, uint64_t *batch_start_time, uint64_t *end_time, int32_t connector_capacity,
+                         int32_t connector_size);
 
   // Op name getter
   // @return Name of the current Op
@@ -184,17 +188,22 @@ class DeviceQueueOp : public PipelineOp {
 
  private:
 #ifdef ENABLE_TDTQUE
+  void WaitContinueSignal() const;
   Status SendDataToAscend();
+  void LimitSendingBatches(int64_t send_batch, int64_t *sending_num, std::shared_ptr<ConfigManager> cfg);
+  Status SendRowToTdt(TensorRow currRow, bool isProfilingEnable, int32_t *tdt_cost);
   bool ascend_keep_waiting_;
 #endif
 
 #ifdef ENABLE_GPUQUE
   Status SendDataToGPU();
   Status MallocForGPUData(std::vector<device::DataItemGpu> *items, const TensorRow &curr_row, const int32_t &worker_id);
+  Status RetryPushData(unsigned int handle, const std::vector<DataItemGpu> &data);
   void ReleaseData(void *addr, int32_t worker_id);
   Status LaunchParallelCopyThread();
   Status PushDataToGPU();
   Status WorkerEntry(int32_t worker_id);
+  Status SetThreadDevice();
 
   QueueList<std::unique_ptr<DataBuffer>> receive_queues_;
   std::vector<std::shared_ptr<MemoryPool>> pool_;
@@ -218,6 +227,10 @@ class DeviceQueueOp : public PipelineOp {
   bool create_data_info_queue_;
   std::unique_ptr<DATA_INFO_QUEUE> data_info_queue_ptr_;
   std::mutex data_info_mutex_;
+  bool send_finished_;
+#ifdef ENABLE_DUMP_IR
+  std::shared_ptr<MDChannelInfo> md_channel_info_;
+#endif
 
 #ifdef ENABLE_TDTQUE
   std::shared_ptr<TdtPlugin> tdtInstancePtr;

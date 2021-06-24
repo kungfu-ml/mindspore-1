@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -93,17 +93,24 @@ class LSTM(Cell):
         bidirectional (bool): Specifies whether it is a bidirectional LSTM. Default: False.
 
     Inputs:
-        - **input** (Tensor) - Tensor of shape (seq_len, batch_size, `input_size`).
+        - **input** (Tensor) - Tensor of shape (seq_len, batch_size, `input_size`) or
+          (batch_size, seq_len, `input_size`).
         - **hx** (tuple) - A tuple of two Tensors (h_0, c_0) both of data type mindspore.float32 or
           mindspore.float16 and shape (num_directions * `num_layers`, batch_size, `hidden_size`).
           Data type of `hx` must be the same as `input`.
 
     Outputs:
-        Tuple, a tuple constains (`output`, (`h_n`, `c_n`)).
+        Tuple, a tuple contains (`output`, (`h_n`, `c_n`)).
 
         - **output** (Tensor) - Tensor of shape (seq_len, batch_size, num_directions * `hidden_size`).
         - **hx_n** (tuple) - A tuple of two Tensor (h_n, c_n) both of shape
           (num_directions * `num_layers`, batch_size, `hidden_size`).
+
+    Raises:
+        TypeError: If `input_size`, `hidden_size` or `num_layers` is not an int.
+        TypeError: If `has_bias`, `batch_first` or `bidirectional` is not a bool.
+        TypeError: If `dropout` is neither a float nor an int.
+        ValueError: If `dropout` is not in range [0.0, 1.0].
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -246,11 +253,14 @@ class LSTM(Cell):
             x = self.transpose(x, (1, 0, 2))
         h, c = hx
         if self.is_ascend:
+            x_dtype = F.dtype(x)
+            h_dtype = F.dtype(h)
+            c_dtype = F.dtype(c)
             _check_input_3d(F.shape(h), "h of hx", self.cls_name)
             _check_input_3d(F.shape(c), "c of hx", self.cls_name)
-            _check_input_dtype(F.dtype(x), "x", [mstype.float32, mstype.float16], self.cls_name)
-            _check_input_dtype(F.dtype(h), "h", [mstype.float32, mstype.float16], self.cls_name)
-            _check_input_dtype(F.dtype(c), "c", [mstype.float32, mstype.float16], self.cls_name)
+            _check_input_dtype(x_dtype, "x", [mstype.float32, mstype.float16], self.cls_name)
+            _check_input_dtype(h_dtype, "h", [mstype.float32, mstype.float16], self.cls_name)
+            _check_input_dtype(c_dtype, "c", [mstype.float32, mstype.float16], self.cls_name)
             x = self.cast(x, mstype.float16)
             h = self.cast(h, mstype.float16)
             c = self.cast(c, mstype.float16)
@@ -258,6 +268,9 @@ class LSTM(Cell):
                 x, h, c = self._stacked_bi_dynamic_rnn(x, h, c, self.w_list, self.b_list)
             else:
                 x, h, c = self._stacked_dynamic_rnn(x, h, c, self.w_list, self.b_list)
+            x = self.cast(x, x_dtype)
+            h = self.cast(h, h_dtype)
+            c = self.cast(c, c_dtype)
         else:
             x, h, c, _, _ = self.lstm(x, h, c, self.weight)
         if self.batch_first:
@@ -332,6 +345,12 @@ class LSTMCell(Cell):
         - **c** - A Tensor with shape (num_directions, batch_size, `hidden_size`).
         - **reserve** - reserved
         - **state** - reserved
+
+    Raises:
+        TypeError: If `input_size` or `hidden_size` or `num_layers` is not an int.
+        TypeError: If `has_bias` or `batch_first` or `bidirectional` is not a bool.
+        TypeError: If `dropout` is neither a float nor an int.
+        ValueError: If `dropout` is not in range [0.0, 1.0].
 
     Supported Platforms:
         ``GPU`` ``CPU``

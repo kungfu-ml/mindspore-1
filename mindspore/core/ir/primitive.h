@@ -42,6 +42,7 @@ enum PrimType {
 class Primitive : public Named {
  public:
   explicit Primitive(const std::string &name, const bool is_base = true, const PrimType prim_type = kPrimTypeBuiltIn);
+  Primitive(const std::string &name, const std::unordered_map<std::string, ValuePtr> &attrs);
   Primitive(const Primitive &prim);
   MS_DECLARE_PARENT(Primitive, Named);
   abstract::AbstractBasePtr ToAbstract();
@@ -57,6 +58,11 @@ class Primitive : public Named {
     if (record_evaluate_add_attr_) {
       evaluate_added_attrs_[name] = attr;
     }
+    return *this;
+  }
+
+  Primitive &DelAttr(const std::string &name) {
+    attrs_.erase(name);
     return *this;
   }
 
@@ -142,7 +148,7 @@ struct PrimitiveEqual {
   bool operator()(PrimitivePtr const &t1, PrimitivePtr const &t2) const {
     MS_EXCEPTION_IF_NULL(t1);
     MS_EXCEPTION_IF_NULL(t2);
-    return t1->name() == t2->name();
+    return t1 == t2 || t1->name() == t2->name();
   }
 };
 

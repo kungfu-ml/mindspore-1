@@ -23,6 +23,10 @@
             - [Ascend处理器环境运行](#ascend处理器环境运行-1)
         - [结果](#结果-1)
             - [训练准确率](#训练准确率)
+    - [导出mindir模型](#导出mindir模型)
+    - [推理过程](#推理过程)
+        - [用法](#用法-2)
+        - [结果](#结果-2)
 - [模型描述](#模型描述)
     - [性能](#性能)
         - [评估性能](#评估性能)
@@ -85,7 +89,7 @@ Pascal VOC数据集和语义边界数据集（Semantic Boundaries Dataset，SBD�
 # 环境要求
 
 - 硬件（Ascend）
-    - 准备Ascend处理器搭建硬件环境。如需试用Ascend处理器，请发送[申请表](https://obs-9be7.obs.cn-east-2.myhuaweicloud.com/file/other/Ascend%20Model%20Zoo%E4%BD%93%E9%AA%8C%E8%B5%84%E6%BA%90%E7%94%B3%E8%AF%B7%E8%A1%A8.docx)至ascend@huawei.com，审核通过即可获得资源。
+    - 准备Ascend处理器搭建硬件环境。
 - 框架
     - [MindSpore](https://www.mindspore.cn/install)
 - 如需查看详情，请参见如下资源：
@@ -371,6 +375,14 @@ python ${train_code_path}/train.py --data_file=/PATH/TO/MINDRECORD_NAME  \
                     --keep_checkpoint_max=200 >log 2>&1 &
 ```
 
+#### 迁移训练
+
+用户可以根据预训练好的checkpoint进行迁移学习， 步骤如下：
+
+1. 将数据集格式转换为上述VOC数据集格式，或者自行添加数据处理代码。
+2. 运行`train.py`时设置 `filter_weight` 为 `True`, `ckpt_pre_trained` 为预训练模型路径，`num_classes` 为数据集匹配的类别数目, 加载checkpoint中参数时过滤掉最后的卷积的权重。
+3. 重写启动脚本。
+
 ### 结果
 
 #### Ascend处理器环境运行
@@ -492,6 +504,35 @@ python ${train_code_path}/eval.py --data_root=/PATH/TO/DATA  \
 
 注意：OS指输出步长（output stride）， MS指多尺度（multiscale）。
 
+## 导出mindir模型
+
+```shell
+python export.py --ckpt_file [CKPT_PATH] --file_name [FILE_NAME] --file_format [FILE_FORMAT]
+```
+
+参数`ckpt_file` 是必需的，`EXPORT_FORMAT` 必须在 ["AIR", "MINDIR"]中进行选择。
+
+## 推理过程
+
+### 用法
+
+目前仅可处理batch_Size为1。
+
+```shell
+# Ascend310 推理
+bash run_infer_310.sh [MINDIR_PATH] [DATA_PATH] [DATA_ROOT] [DATA_LIST] [DEVICE_ID]
+```
+
+`DEVICE_ID` 可选，默认值为 0。
+
+### 结果
+
+推理结果保存在当前路径，可在acc.log中看到最终精度结果。
+
+| **Network**    | OS=16 | OS=8 | MS   | Flip  | mIOU  | mIOU in paper |
+| :----------: | :-----: | :----: | :----: | :-----: | :-----: | :-------------: |
+| deeplab_v3 |       | √    |      |       | 78.84 | 78.51    |
+
 # 模型描述
 
 ## 性能
@@ -510,7 +551,7 @@ python ${train_code_path}/eval.py --data_root=/PATH/TO/DATA  \
 | 损失函数 | Softmax交叉熵 |
 | 输出 | 概率 |
 | 损失 | 0.0065883575 |
-| 速度 | 31毫秒/步（单卡，s8）<br> 234毫秒/步（8卡，s8） |  
+| 速度 | 31 帧数/秒（单卡，s8）<br> 234 帧数/秒（8卡，s8） |  
 | 微调检查点 | 443M （.ckpt文件） |
 | 脚本 | [链接](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/deeplabv3) |
 

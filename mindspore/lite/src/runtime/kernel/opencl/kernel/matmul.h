@@ -20,15 +20,14 @@
 #include <vector>
 
 #include "src/runtime/kernel/opencl/opencl_kernel.h"
+#include "src/common/utils.h"
 #include "nnacl/matmul_parameter.h"
 
 namespace mindspore::kernel {
 
 class MatMulOpenCLKernel : public OpenCLKernel {
  public:
-  MatMulOpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                     const std::vector<lite::Tensor *> &outputs)
-      : OpenCLKernel(parameter, inputs, outputs) {}
+  using OpenCLKernel::OpenCLKernel;
   ~MatMulOpenCLKernel() override = default;
 
   int Run() override;
@@ -39,16 +38,16 @@ class MatMulOpenCLKernel : public OpenCLKernel {
   void SetGlobalLocal() override;
   int Tune() override { return lite::RET_OK; }
 
- private:
+ protected:
   void *padWeight_{nullptr};
   bool enable_fp16_{false};
   bool transposeA{false};
   bool transposeB{true};
   int dims{};
   static constexpr int MAX_DIMS{4};  // max supported matmul dims
+  bool act_weight_{false};
   std::vector<int> inShape{std::vector<int>(MAX_DIMS, 1)};
   std::vector<int> outShape{std::vector<int>(MAX_DIMS, 1)};
-  bool act_weight_{false};
 };
 }  // namespace mindspore::kernel
 

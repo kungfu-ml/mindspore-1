@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,29 +15,12 @@
 """Gradient explainer."""
 from copy import deepcopy
 
-from mindspore import nn
 from mindspore.train._utils import check_value_type
-from ...._operators import reshape, sqrt, Tensor
-from ..attribution import Attribution
-from .backprop_utils import compute_gradients
-from ...._utils import abs_max, unify_inputs, unify_targets
+from mindspore.explainer._operators import Tensor
+from mindspore.explainer._utils import abs_max, unify_inputs, unify_targets
 
-
-def _get_hook(bntype, cache):
-    """Provide backward hook function for BatchNorm layer in eval mode."""
-    var, gamma, eps = cache
-    if bntype == "2d":
-        var = reshape(var, (1, -1, 1, 1))
-        gamma = reshape(gamma, (1, -1, 1, 1))
-    elif bntype == "1d":
-        var = reshape(var, (1, -1, 1))
-        gamma = reshape(gamma, (1, -1, 1))
-
-    def reset_gradient(_, grad_input, grad_output):
-        grad_output = grad_input[0] * gamma / sqrt(var + eps)
-        return grad_output
-
-    return reset_gradient
+from .. import Attribution
+from .backprop_utils import get_bp_weights, GradNet
 
 
 class Gradient(Attribution):
@@ -71,15 +54,15 @@ class Gradient(Attribution):
         >>> import numpy as np
         >>> import mindspore as ms
         >>> from mindspore.explainer.explanation import Gradient
-        >>> from mindspore.train.serialization import load_checkpoint, load_param_into_net
-        >>> # init Gradient with a trained network
-        >>> net = resnet50(10)  # please refer to model_zoo
-        >>> param_dict = load_checkpoint("resnet50.ckpt")
-        >>> load_param_into_net(net, param_dict)
+        >>>
+        >>> # The detail of LeNet5 is shown in model_zoo.official.cv.lenet.src.lenet.py
+        >>> net = LeNet5(10, num_channel=3)
         >>> gradient = Gradient(net)
-        >>> inputs = ms.Tensor(np.random.rand(1, 3, 224, 224), ms.float32)
+        >>> inputs = ms.Tensor(np.random.rand(1, 3, 32, 32), ms.float32)
         >>> label = 5
         >>> saliency = gradient(inputs, label)
+        >>> print(saliency.shape)
+        (1, 1, 32, 32)
     """
 
     def __init__(self, network):
@@ -87,8 +70,7 @@ class Gradient(Attribution):
         self._backward_model = deepcopy(network)
         self._backward_model.set_train(False)
         self._backward_model.set_grad(False)
-        self._hook_bn()
-        self._grad_op = compute_gradients
+        self._grad_net = GradNet(self._backward_model)
         self._aggregation_fn = abs_max
 
     def __call__(self, inputs, targets):
@@ -97,26 +79,24 @@ class Gradient(Attribution):
         inputs = unify_inputs(inputs)
         targets = unify_targets(targets)
 
-        gradient = self._grad_op(self._backward_model, *inputs, targets)
+        weights = get_bp_weights(self._backward_model, *inputs, targets)
+        gradient = self._grad_net(*inputs, weights)
         saliency = self._aggregation_fn(gradient)
         return saliency
 
-    def _hook_bn(self):
-        """Hook BatchNorm layer for `self._backward_model.`"""
-        for _, cell in self._backward_model.cells_and_names():
-            if isinstance(cell, nn.BatchNorm2d):
-                cache = (cell.moving_variance, cell.gamma, cell.eps)
-                cell.register_backward_hook(_get_hook("2d", cache=cache))
-            elif isinstance(cell, nn.BatchNorm1d):
-                cache = (cell.moving_variance, cell.gamma, cell.eps)
-                cell.register_backward_hook(_get_hook("1d", cache=cache))
-
     @staticmethod
     def _verify_data(inputs, targets):
-        """Verify the validity of the parsed inputs."""
+        """
+        Verify the validity of the parsed inputs.
+
+        Args:
+            inputs (Tensor): The inputs to be explained.
+            targets (Tensor, int): The label of interest. It should be a 1D or 0D tensor, or an integer.
+          If it is a 1D tensor, its length should be the same as `inputs`.
+        """
         check_value_type('inputs', inputs, Tensor)
         if len(inputs.shape) != 4:
-            raise ValueError('Argument inputs must be 4D Tensor')
+            raise ValueError(f'Argument inputs must be 4D Tensor. But got {len(inputs.shape)}D Tensor.')
         check_value_type('targets', targets, (Tensor, int))
         if isinstance(targets, Tensor):
             if len(targets.shape) > 1 or (len(targets.shape) == 1 and len(targets) != len(inputs)):

@@ -1,6 +1,6 @@
 # This is the Python adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
 #
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -86,7 +86,6 @@ convert_object_map = {
     T.floordiv:     multitype_ops.floordiv,
     T.mod:          multitype_ops.mod,
     T.pow:          multitype_ops.pow_,
-    T.matmul:       F.dot,
     T.lshift:       NO_IMPLEMENT,
     T.rshift:       NO_IMPLEMENT,
     T.and_:         multitype_ops.logical_and,
@@ -94,7 +93,7 @@ convert_object_map = {
     T.xor:          NO_IMPLEMENT,
     T.pos:          multitype_ops.uadd,
     T.neg:          multitype_ops.negative,
-    T.invert:       NO_IMPLEMENT,
+    T.invert:       F.logical_not,
     T.not_:         multitype_ops.logical_not,
     T.eq:           multitype_ops.equal,
     T.ne:           multitype_ops.not_equal,
@@ -122,7 +121,7 @@ convert_object_map = {
     T.next:         M.ms_next,
     T.hasnext:      M.hasnext,
 
-    T.make_tuple:   F.make_tuple,
+    T.MakeTuple:   F.make_tuple,
     T.make_dict:    F.make_dict,
     T.make_list:    F.make_list,
     T.make_slice:   F.make_slice,

@@ -13,6 +13,7 @@
 # limitations under the License.
 # ============================================================================
 """Define dataset graph related operations."""
+import json
 from importlib import import_module
 
 from mindspore import log as logger
@@ -32,7 +33,13 @@ class DatasetGraph:
             DatasetGraph, a object of lineage_pb2.DatasetGraph.
         """
         dataset_package = import_module('mindspore.dataset')
-        dataset_dict = dataset_package.serialize(dataset)
+        try:
+            dataset_dict = dataset_package.serialize(dataset)
+        except (TypeError, OSError) as exc:
+            logger.warning("Summary can not collect dataset graph, there is an error in dataset internal, "
+                           "detail: %s.", str(exc))
+            return None
+
         dataset_graph_proto = lineage_pb2.DatasetGraph()
         if not isinstance(dataset_dict, dict):
             logger.warning("The dataset graph serialized from dataset object is not a dict. "
@@ -124,6 +131,11 @@ class DatasetGraph:
             if value:
                 replace_value_list = list(map(lambda x: "" if x is None else x, value))
                 message.mapStrList[key].strValue.extend(replace_value_list)
+        elif isinstance(value, dict):
+            try:
+                message.mapStr[key] = json.dumps(value)
+            except TypeError as exo:
+                logger.warning("Transform the value of parameter %r to string failed. Detail: %s.", key, str(exo))
         elif value is None:
             message.mapStr[key] = "None"
         else:

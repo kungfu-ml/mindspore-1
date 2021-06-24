@@ -54,22 +54,22 @@ class ProfilingManager {
   Status PluginInit() const;
   void PluginUnInit() const;
   Status CallMsprofReport(NotNull<ReporterData *> reporter_data) const;
-  struct MsprofCallback &GetMsprofCallback() {
-    return prof_cb_;
-  }
+  const struct MsprofCallback &GetMsprofCallback() { return prof_cb_; }
   void SetMsprofCtrlCallback(MsprofCtrlCallback func) { prof_cb_.msprofCtrlCallback = func; }
   void SetMsprofReporterCallback(MsprofReporterCallback func) { prof_cb_.msprofReporterCallback = func; }
   void SetMsprofSetDeviceCallback(MsprofSetDeviceCallback func) { prof_cb_.msprofSetDeviceCallback = func; }
   Status GetProfConf(NotNull<MsprofGeOptions *> prof);
+  void SetHcclEnabledBefProfilingEnabled() { hccl_enabled_bef_profiling_enabled_ = true; }
 
  protected:
   ProfilingManager();
   ~ProfilingManager() {}
 
  private:
-  bool ProfStartUp(NotNull<MsprofGeOptions *> prof_conf);
+  bool ProfStartUp(NotNull<MsprofGeOptions *> prof_conf) const;
   uint32_t device_id_;
   MsprofCallback prof_cb_;
+  bool hccl_enabled_bef_profiling_enabled_;
 };
 
 Status RegProfCtrlCallback(MsprofCtrlCallback func);

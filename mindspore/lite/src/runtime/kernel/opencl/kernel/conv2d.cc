@@ -23,6 +23,7 @@
 #include "schema/ops_generated.h"
 #include "src/common/utils.h"
 #include "src/runtime/kernel/opencl/utils.h"
+#include "src/runtime/kernel/opencl/kernel/depthwise_conv2d.h"
 #include "src/runtime/kernel/opencl/kernel/fullconnection.h"
 #include "src/runtime/kernel/opencl/kernel/winograd.h"
 #include "src/runtime/kernel/opencl/cl/conv2d.cl.inc"
@@ -36,7 +37,7 @@ using mindspore::schema::ActivationType_RELU;
 using mindspore::schema::ActivationType_RELU6;
 using mindspore::schema::ActivationType_SIGMOID;
 using mindspore::schema::ActivationType_TANH;
-using mindspore::schema::PrimitiveType_Conv2D;
+using mindspore::schema::PrimitiveType_Conv2DFusion;
 using mindspore::schema::PrimitiveType_FullConnection;
 
 namespace mindspore::kernel {
@@ -255,7 +256,7 @@ void Conv2DOpenCLKernel::InitFilter() {
     size_t height = KH_ * KW_ * UP_ROUND(CI_, CI_TILE);
     size_t dtype = use_fp16_ ? CL_HALF_FLOAT : CL_FLOAT;
     size = width * height * CO_TILE * sizeof_FLT_;
-    packed_filter_ = allocator->Malloc(size, {width, height, dtype});
+    packed_filter_ = allocator->Malloc({width, height, dtype});
   } else {
     size = UP_DIV(CO_SLICES_, Ogroup) * KH_ * KW_ * CI_SLICES_ * Ogroup * CI_TILE * CO_TILE * sizeof_FLT_;
     packed_filter_ = allocator->Malloc(size);
@@ -283,6 +284,7 @@ void Conv2DOpenCLKernel::InitFilter() {
   }
 
   FreeDequantedWeight();
+  FreeTmpWeight(in_tensors_.at(kWeightIndex)->data_c());
 }
 
 void Conv2DOpenCLKernel::InitBias() {
@@ -319,6 +321,7 @@ void Conv2DOpenCLKernel::InitBias() {
     }
   }
   allocator->UnmapBuffer(packed_bias_);
+  FreeTmpWeight(in_tensors_.at(kBiasIndex)->data_c());
 }
 
 void Conv2DOpenCLKernel::SetConstArgs() {
@@ -345,6 +348,9 @@ void Conv2DOpenCLKernel::SetGlobalLocal() {
   size_t global_w = UP_DIV(OW_, block_size_.W);
   size_t global_c = UP_DIV(CO_SLICES_, block_size_.C);
   int local_max = filter_type_ == MemType::IMG ? 64 : 128;
+  if (ocl_runtime_->DeviceComputeUnits() > 16) {
+    local_max = 256;
+  }
   const int local_c_max = 16;
   const int OH_threshold = 100;
   const int OW_threshold = 100;
@@ -418,28 +424,23 @@ bool UseFcReplaceConv(const std::vector<lite::Tensor *> &inputs, const std::vect
   return hw_is_1 && attr_valid;
 }
 
-OpParameter *CreateFcParam(const ConvParameter *conv_param) {
+OpParameter *CreateFcParam(const ConvParameter *conv_param, const std::vector<lite::Tensor *> &inputs) {
   auto fc_param = static_cast<MatMulParameter *>(malloc(sizeof(MatMulParameter)));
   if (fc_param == nullptr) {
     MS_LOG(ERROR) << "Create FullConnection kernel param failed.";
     return nullptr;
   }
   fc_param->op_parameter_.type_ = PrimitiveType_FullConnection;
+  fc_param->op_parameter_.infer_flag_ = true;
   fc_param->a_transpose_ = false;
   fc_param->b_transpose_ = true;
   fc_param->act_type_ = conv_param->act_type_;
+  fc_param->has_bias_ = inputs.size() == 3;
   return reinterpret_cast<OpParameter *>(fc_param);
 }
 
 bool UseWinograd4x4To6x6(const ConvParameter *param, const std::vector<lite::Tensor *> &inputs,
                          const std::vector<lite::Tensor *> &outputs) {
-  // not use winograd on adreno gpu
-  lite::opencl::OpenCLRuntimeWrapper runtime_wrap;
-  lite::opencl::OpenCLRuntime *runtime = runtime_wrap.GetInstance();
-  if (runtime->GetGpuInfo().type == lite::opencl::GpuType::ADRENO) {
-    return false;
-  }
-
   if (!(inputs.size() == 2 || inputs.size() == 3) || outputs.empty()) {
     return false;
   }
@@ -476,17 +477,35 @@ bool UseWinograd4x4To6x6(const ConvParameter *param, const std::vector<lite::Ten
   return attr_valid && shape_valid && channel_good && hw_good;
 }
 
-kernel::LiteKernel *OpenCLConvolutionKernelCreator(const std::vector<lite::Tensor *> &inputs,
-                                                   const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                                   const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                                   const mindspore::lite::PrimitiveC *primitive) {
-  kernel::OpenCLKernel *kernel;
-  OpParameter *real_param;
+kernel::LiteKernel *OpenCLConv2DCreator(const std::vector<lite::Tensor *> &inputs,
+                                        const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
+                                        const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
+  MS_ASSERT(!inputs.empty());
+  MS_ASSERT(!outputs.empty());
+  MS_ASSERT(opParameter);
   auto *conv_param = reinterpret_cast<ConvParameter *>(opParameter);
-  if (UseFcReplaceConv(inputs, outputs, conv_param)) {
-    auto *fc_param = CreateFcParam(conv_param);
-    kernel = new (std::nothrow) FullConnectionOpenCLKernel(fc_param, inputs, outputs);
-    real_param = fc_param;
+  int input_channel = conv_param->input_channel_;
+  int output_channel = conv_param->output_channel_;
+  int group = conv_param->group_;
+
+  // case 1: depthwise conv2d
+  if (group == input_channel && group == output_channel) {
+    return OpenCLKernelCreator<DepthwiseConv2dOpenCLKernel>(inputs, outputs, opParameter, ctx, desc);
+  }
+
+  // case 2: group conv2d
+  if (group != 1) {
+    MS_LOG(ERROR) << "OpenCL doesn't support group conv2d.";
+    free(conv_param);
+    return nullptr;
+  }
+
+  // case 3: common conv2d
+  kernel::OpenCLKernel *kernel = nullptr;
+  bool infer_shape_done = opParameter->infer_flag_;
+  if (infer_shape_done && UseFcReplaceConv(inputs, outputs, conv_param)) {
+    auto *fc_param = CreateFcParam(conv_param, inputs);
+    kernel = new (std::nothrow) FullConnectionOpenCLKernel(fc_param, inputs, outputs, ctx);
     if (kernel == nullptr) {
       MS_LOG(ERROR) << "Create FullConnection kernel failed.";
       free(fc_param);
@@ -497,30 +516,35 @@ kernel::LiteKernel *OpenCLConvolutionKernelCreator(const std::vector<lite::Tenso
       MS_LOG(INFO) << "use FullConnection to replace Convolution.";
     }
   } else {
-    if (UseWinograd4x4To6x6(conv_param, inputs, outputs)) {
+    if (infer_shape_done && UseWinograd4x4To6x6(conv_param, inputs, outputs)) {
       MS_LOG(DEBUG) << "use Winograd algorithm.";
-      kernel = new (std::nothrow) WinogradOpenCLKernel(reinterpret_cast<OpParameter *>(conv_param), inputs, outputs);
+      kernel =
+        new (std::nothrow) WinogradOpenCLKernel(reinterpret_cast<OpParameter *>(conv_param), inputs, outputs, ctx);
     } else {
-      kernel = new (std::nothrow) Conv2DOpenCLKernel(reinterpret_cast<OpParameter *>(conv_param), inputs, outputs);
+      kernel = new (std::nothrow) Conv2DOpenCLKernel(reinterpret_cast<OpParameter *>(conv_param), inputs, outputs, ctx);
     }
-    real_param = reinterpret_cast<OpParameter *>(conv_param);
     if (kernel == nullptr) {
       MS_LOG(ERROR) << "Create Convolution kernel failed.";
       free(conv_param);
       return nullptr;
     }
   }
-
-  int ret = kernel->CheckSpecs();
-  if (ret != mindspore::lite::RET_OK) {
+  if (!infer_shape_done) {
+    StoreTmpWeight(inputs.at(kWeightIndex));
+    if (inputs.size() > kBiasIndex) {
+      StoreTmpWeight(inputs.at(kBiasIndex));
+    }
+    MS_LOG(WARNING) << "kernel don't infer shape yet!";
+    return kernel;
+  }
+  if (kernel->CheckSpecs() != RET_OK || kernel->OpenCLKernel::CheckSpecs() != RET_OK) {
     MS_LOG(ERROR) << "Init Convolution kernel failed.";
     delete kernel;
-    free(real_param);
     return nullptr;
   }
   return kernel;
 }
 
-REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_Conv2D, OpenCLConvolutionKernelCreator)
-REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_Conv2D, OpenCLConvolutionKernelCreator)
+REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_Conv2DFusion, OpenCLConv2DCreator)
+REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_Conv2DFusion, OpenCLConv2DCreator)
 }  // namespace mindspore::kernel

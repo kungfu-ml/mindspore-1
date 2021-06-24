@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import os
 import pytest
 
 import mindspore.dataset as ds
+
 from mindspore.mindrecord import FileWriter
 
 CV_FILE_NAME = "./imagenet.mindrecord"
@@ -200,7 +201,7 @@ def test_minddataset_invalidate_num_shards():
         for _ in data_set.create_dict_iterator(num_epochs=1):
             num_iter += 1
     try:
-        assert 'Input shard_id is not within the required interval of (0 to 0).' in str(error_info.value)
+        assert 'Input shard_id is not within the required interval of [0, 0].' in str(error_info.value)
     except Exception as error:
         os.remove(CV_FILE_NAME)
         os.remove("{}.db".format(CV_FILE_NAME))
@@ -220,7 +221,7 @@ def test_minddataset_invalidate_shard_id():
         for _ in data_set.create_dict_iterator(num_epochs=1):
             num_iter += 1
     try:
-        assert 'Input shard_id is not within the required interval of (0 to 0).' in str(error_info.value)
+        assert 'Input shard_id is not within the required interval of [0, 0].' in str(error_info.value)
     except Exception as error:
         os.remove(CV_FILE_NAME)
         os.remove("{}.db".format(CV_FILE_NAME))
@@ -240,7 +241,7 @@ def test_minddataset_shard_id_bigger_than_num_shard():
         for _ in data_set.create_dict_iterator(num_epochs=1):
             num_iter += 1
     try:
-        assert 'Input shard_id is not within the required interval of (0 to 1).' in str(error_info.value)
+        assert 'Input shard_id is not within the required interval of [0, 1].' in str(error_info.value)
     except Exception as error:
         os.remove(CV_FILE_NAME)
         os.remove("{}.db".format(CV_FILE_NAME))
@@ -252,7 +253,7 @@ def test_minddataset_shard_id_bigger_than_num_shard():
         for _ in data_set.create_dict_iterator(num_epochs=1):
             num_iter += 1
     try:
-        assert 'Input shard_id is not within the required interval of (0 to 1).' in str(error_info.value)
+        assert 'Input shard_id is not within the required interval of [0, 1].' in str(error_info.value)
     except Exception as error:
         os.remove(CV_FILE_NAME)
         os.remove("{}.db".format(CV_FILE_NAME))
@@ -272,14 +273,15 @@ def test_cv_minddataset_partition_num_samples_equals_0():
         for partition_id in range(num_shards):
             data_set = ds.MindDataset(CV_FILE_NAME, columns_list, num_readers,
                                       num_shards=num_shards,
-                                      shard_id=partition_id, num_samples=0)
+                                      shard_id=partition_id, num_samples=-1)
             num_iter = 0
             for _ in data_set.create_dict_iterator(num_epochs=1):
                 num_iter += 1
-    with pytest.raises(Exception) as error_info:
+
+    with pytest.raises(ValueError) as error_info:
         partitions(5)
     try:
-        assert 'num_samples should be a positive integer value, but got num_samples: 0.' in str(error_info.value)
+        assert 'num_samples exceeds the boundary between 0 and 9223372036854775807(INT64_MAX)' in str(error_info.value)
     except Exception as error:
         os.remove(CV_FILE_NAME)
         os.remove("{}.db".format(CV_FILE_NAME))
@@ -287,6 +289,37 @@ def test_cv_minddataset_partition_num_samples_equals_0():
     else:
         os.remove(CV_FILE_NAME)
         os.remove("{}.db".format(CV_FILE_NAME))
+
+
+def test_mindrecord_exception():
+    """tutorial for exception scenario of minderdataset + map would print error info."""
+
+    def exception_func(item):
+        raise Exception("Error occur!")
+
+    create_cv_mindrecord(1)
+    columns_list = ["data", "file_name", "label"]
+    with pytest.raises(RuntimeError, match="The corresponding data files"):
+        data_set = ds.MindDataset(CV_FILE_NAME, columns_list, shuffle=False)
+        data_set = data_set.map(operations=exception_func, input_columns=["data"], num_parallel_workers=1)
+        num_iter = 0
+        for _ in data_set.create_dict_iterator(num_epochs=1, output_numpy=True):
+            num_iter += 1
+    with pytest.raises(RuntimeError, match="The corresponding data files"):
+        data_set = ds.MindDataset(CV_FILE_NAME, columns_list, shuffle=False)
+        data_set = data_set.map(operations=exception_func, input_columns=["file_name"], num_parallel_workers=1)
+        num_iter = 0
+        for _ in data_set.create_dict_iterator(num_epochs=1, output_numpy=True):
+            num_iter += 1
+    with pytest.raises(RuntimeError, match="The corresponding data files"):
+        data_set = ds.MindDataset(CV_FILE_NAME, columns_list, shuffle=False)
+        data_set = data_set.map(operations=exception_func, input_columns=["label"], num_parallel_workers=1)
+        num_iter = 0
+        for _ in data_set.create_dict_iterator(num_epochs=1, output_numpy=True):
+            num_iter += 1
+    os.remove(CV_FILE_NAME)
+    os.remove("{}.db".format(CV_FILE_NAME))
+
 
 if __name__ == '__main__':
     test_cv_lack_json()
@@ -301,3 +334,4 @@ if __name__ == '__main__':
     test_minddataset_invalidate_shard_id()
     test_minddataset_shard_id_bigger_than_num_shard()
     test_cv_minddataset_partition_num_samples_equals_0()
+    test_mindrecord_exception()

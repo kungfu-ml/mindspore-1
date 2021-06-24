@@ -17,13 +17,13 @@
 #include "utils/log_adapter.h"
 #include "acl/acl.h"
 
-namespace mindspore::api {
-std::weak_ptr<AclEnvGuard> AclEnvGuard::global_acl_env_;
+namespace mindspore {
+std::shared_ptr<AclEnvGuard> AclEnvGuard::global_acl_env_;
 std::mutex AclEnvGuard::global_acl_env_mutex_;
 
 AclEnvGuard::AclEnvGuard(std::string_view cfg_file) {
   errno_ = aclInit(cfg_file.data());
-  if (errno_ != ACL_ERROR_NONE) {
+  if (errno_ != ACL_ERROR_NONE && errno_ != ACL_ERROR_REPEAT_INITIALIZE) {
     MS_LOG(ERROR) << "Execute aclInit Failed";
     return;
   }
@@ -32,7 +32,7 @@ AclEnvGuard::AclEnvGuard(std::string_view cfg_file) {
 
 AclEnvGuard::~AclEnvGuard() {
   errno_ = aclFinalize();
-  if (errno_ != ACL_ERROR_NONE) {
+  if (errno_ != ACL_ERROR_NONE && errno_ != ACL_ERROR_REPEAT_FINALIZE) {
     MS_LOG(ERROR) << "Finalize acl failed";
   }
   MS_LOG(INFO) << "Acl finalize success";
@@ -42,13 +42,16 @@ std::shared_ptr<AclEnvGuard> AclEnvGuard::GetAclEnv(std::string_view cfg_file) {
   std::shared_ptr<AclEnvGuard> acl_env;
 
   std::lock_guard<std::mutex> lock(global_acl_env_mutex_);
-  acl_env = global_acl_env_.lock();
+  acl_env = global_acl_env_;
   if (acl_env != nullptr) {
     MS_LOG(INFO) << "Acl has been initialized, skip.";
+    if (!cfg_file.empty()) {
+      MS_LOG(WARNING) << "Dump config file option " << cfg_file << " is ignored.";
+    }
   } else {
     acl_env = std::make_shared<AclEnvGuard>(cfg_file);
     aclError ret = acl_env->GetErrno();
-    if (ret != ACL_ERROR_NONE) {
+    if (ret != ACL_ERROR_NONE && ret != ACL_ERROR_REPEAT_INITIALIZE) {
       MS_LOG(ERROR) << "Execute aclInit Failed";
       return nullptr;
     }
@@ -57,4 +60,4 @@ std::shared_ptr<AclEnvGuard> AclEnvGuard::GetAclEnv(std::string_view cfg_file) {
   }
   return acl_env;
 }
-}  // namespace mindspore::api
+}  // namespace mindspore

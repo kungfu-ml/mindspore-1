@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,6 @@
 #include <vector>
 
 #include "proto/example.pb.h"
-#include "./securec.h"
 #include "minddata/dataset/core/config_manager.h"
 #include "minddata/dataset/core/global_context.h"
 #include "minddata/dataset/engine/data_schema.h"
@@ -34,7 +33,6 @@
 #include "minddata/dataset/engine/db_connector.h"
 #include "minddata/dataset/engine/execution_tree.h"
 #include "minddata/dataset/engine/jagged_connector.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/random.h"
 #include "minddata/dataset/util/status.h"
 #include "minddata/dataset/util/task_manager.h"
@@ -44,11 +42,7 @@
 namespace mindspore {
 namespace dataset {
 TFReaderOp::Builder::Builder()
-    : builder_device_id_(0),
-      builder_num_devices_(1),
-      builder_total_rows_(0),
-      builder_equal_rows_per_shard_(false),
-      builder_sampler_(nullptr) {
+    : builder_device_id_(0), builder_num_devices_(1), builder_total_rows_(0), builder_equal_rows_per_shard_(false) {
   std::shared_ptr<ConfigManager> config_manager = GlobalContext::config_manager();
   builder_num_workers_ = config_manager->num_parallel_workers();
   builder_worker_connector_size_ = config_manager->worker_connector_size();
@@ -107,7 +101,7 @@ Status TFReaderOp::Builder::ValidateInputs() const {
     err_msg += accumulated_filenames;
   }
 
-  return err_msg.empty() ? Status::OK() : Status(StatusCode::kUnexpectedError, __LINE__, __FILE__, err_msg);
+  return err_msg.empty() ? Status::OK() : Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__, err_msg);
 }
 
 Status TFReaderOp::Builder::Build(std::shared_ptr<TFReaderOp> *out_tf_reader_op) {
@@ -122,8 +116,7 @@ Status TFReaderOp::Builder::Build(std::shared_ptr<TFReaderOp> *out_tf_reader_op)
   std::shared_ptr<TFReaderOp> new_tf_reader_op = std::make_shared<TFReaderOp>(
     builder_num_workers_, builder_worker_connector_size_, builder_rows_per_buffer_, builder_total_rows_,
     builder_dataset_files_list_, std::move(builder_data_schema_), builder_op_connector_size_, builder_columns_to_load_,
-    builder_shuffle_files_, builder_num_devices_, builder_device_id_, builder_equal_rows_per_shard_,
-    std::move(builder_sampler_));
+    builder_shuffle_files_, builder_num_devices_, builder_device_id_, builder_equal_rows_per_shard_);
 
   RETURN_IF_NOT_OK(new_tf_reader_op->Init());
   *out_tf_reader_op = std::move(new_tf_reader_op);
@@ -134,8 +127,8 @@ TFReaderOp::TFReaderOp(int32_t num_workers, int32_t worker_connector_size, int64
                        int64_t total_num_rows, std::vector<std::string> dataset_files_list,
                        std::unique_ptr<DataSchema> data_schema, int32_t op_connector_size,
                        std::vector<std::string> columns_to_load, bool shuffle_files, int32_t num_device,
-                       int32_t device_id, bool equal_rows_per_shard, std::shared_ptr<SamplerRT> sampler)
-    : ParallelOp(num_workers, op_connector_size, std::move(sampler)),
+                       int32_t device_id, bool equal_rows_per_shard)
+    : ParallelOp(num_workers, op_connector_size),
       device_id_(device_id),
       num_devices_(num_device),
       rows_per_buffer_(rows_per_buffer),
@@ -239,12 +232,12 @@ Status TFReaderOp::operator()() {
   RETURN_IF_NOT_OK(io_block_queue_wait_post_.Register(tree_->AllTasks()));
 
   // launch one thread, responsible for filling mIOBlockQueue
-  RETURN_IF_NOT_OK(tree_->LaunchWorkers(1, std::bind(&TFReaderOp::WaitToFillIOBlockQueue, this)));
+  RETURN_IF_NOT_OK(tree_->LaunchWorkers(1, std::bind(&TFReaderOp::WaitToFillIOBlockQueue, this), "", id()));
 
   // launch num_workers_ worker threads, responsible for pulling from the IOBlockQueue and reading
   // data from disk into buffers
   RETURN_IF_NOT_OK(
-    tree_->LaunchWorkers(num_workers_, std::bind(&TFReaderOp::WorkerEntry, this, std::placeholders::_1)));
+    tree_->LaunchWorkers(num_workers_, std::bind(&TFReaderOp::WorkerEntry, this, std::placeholders::_1), "", id()));
 
   // must be called after launching workers. workers can't be spawned after this post,
   // so workers have to be kept alive until the end of the program
@@ -596,9 +589,15 @@ Status TFReaderOp::LoadFile(const std::string &filename, const int64_t start_off
     if (start_offset == kInvalidOffset || (rows_total >= start_offset && rows_total < end_offset)) {
       dataengine::Example tf_file;
       if (!tf_file.ParseFromString(serialized_example)) {
-        std::string errMsg = "Invalid file, failed to parse tfrecord file : " + serialized_example;
+        std::string errMsg = "Invalid file, failed to parse tfrecord file : " + filename;
+        MS_LOG(DEBUG) << errMsg + ", details of string: " << serialized_example;
         RETURN_STATUS_UNEXPECTED(errMsg);
       }
+      int32_t num_columns = data_schema_->NumColumns();
+      TensorRow newRow(num_columns, nullptr);
+      std::vector<std::string> file_path(num_columns, filename);
+      newRow.setPath(file_path);
+      new_tensor_table->push_back(std::move(newRow));
       RETURN_IF_NOT_OK(LoadExample(&tf_file, &new_tensor_table, rows_read));
       rows_read++;
     }
@@ -629,9 +628,6 @@ Status TFReaderOp::LoadFile(const std::string &filename, const int64_t start_off
 Status TFReaderOp::LoadExample(const dataengine::Example *tf_file, std::unique_ptr<TensorQTable> *tensor_table,
                                int64_t row) {
   int32_t num_columns = data_schema_->NumColumns();
-  TensorRow newRow(num_columns, nullptr);
-  (*tensor_table)->push_back(std::move(newRow));
-
   for (int32_t col = 0; col < num_columns; ++col) {
     const ColDescriptor current_col = data_schema_->column(col);
     const dataengine::Features &example_features = tf_file->features();
@@ -1023,12 +1019,6 @@ int64_t TFReaderOp::CountTotalRowsSectioned(const std::vector<std::string> &file
   return rows_read;
 }
 
-// Visitor accept method for NodePass
-Status TFReaderOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<TFReaderOp>(), modified);
-}
-
 Status TFReaderOp::ComputeColMap() {
   // Construct the column name map for this operator (base class field)
   if (column_name_id_map_.empty()) {
@@ -1038,38 +1028,6 @@ Status TFReaderOp::ComputeColMap() {
   } else {
     MS_LOG(WARNING) << "Column name map is already set!";
   }
-  return Status::OK();
-}
-
-// Brief If a cache has been added into the ascendant tree over this tf reader, then the cache will be executing
-// a sampler for fetching the data.  As such, any options in the tf reader need to be reset to its defaults so
-// that this tf reader will produce the full set of data into the cache.
-void TFReaderOp::MakeSimpleProducer() {
-  device_id_ = 0;
-  num_devices_ = 1;
-  total_rows_ = 0;
-  shuffle_files_ = false;
-  equal_rows_per_shard_ = false;
-}
-
-// During tree prepare phase, operators may have specific post-operations to perform depending on
-// their role.
-Status TFReaderOp::PrepareNodePostAction() {
-  // Run common code from super class before adding TFReaderOp specific handling
-  RETURN_IF_NOT_OK(ParallelOp::PrepareNodePostAction());
-
-  // Now that the sampler has been saved for the cache, we need to adjust the TFReaderOp to turn it into
-  // a simpler producer of all data (no shuffling or sharding or anything)
-  if (!BitTest(tree_->PrepareFlags(), ExecutionTree::kDePrepCache)) {
-    // This sanity check had been delayed until now in the prepare loop.
-    // If we are not in a cache path, then we can validate the file-based sharding config.
-    // If we are in a cache path, there is no file-based sharding so the check is not correct in that
-    // situation.
-    if (!equal_rows_per_shard_ && dataset_files_list_.size() < static_cast<uint32_t>(num_devices_)) {
-      RETURN_STATUS_UNEXPECTED("Invalid file, not enough tfrecord files provided.\n");
-    }
-  }
-
   return Status::OK();
 }
 

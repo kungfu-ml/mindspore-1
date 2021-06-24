@@ -18,6 +18,8 @@
 #include "src/runtime/kernel/opencl/utils.h"
 #include "include/errorcode.h"
 #include "nnacl/fp32/activation_fp32.h"
+#include "nnacl/scale.h"
+#include "src/common/prim_inner.h"
 
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
@@ -47,7 +49,6 @@ std::pair<bool, FusionEltwiseParameter *> CheckSupportOrCreateParam(
   LiteKernel *node, bool create_param = false,
   const std::map<lite::Tensor *, FusionEltwiseParameter *> &replace_map = {}) {
   MS_ASSERT(node);
-  MS_ASSERT(param);
   PrimitiveType node_type = node->Type();
   auto operator_ = static_cast<const EltwiseOperator>(node_type);
   auto *op_parameter = reinterpret_cast<OpenCLKernel *>(node)->GetParameter();
@@ -61,12 +62,18 @@ std::pair<bool, FusionEltwiseParameter *> CheckSupportOrCreateParam(
       param = reinterpret_cast<FusionEltwiseParameter *>(eltwise->GetParameter());
       eltwise->ClearParameter();
     }
-  } else if (IsArithmetic(node_type)) {
-    auto act_type =
-      static_cast<ActivationType>(reinterpret_cast<ArithmeticParameter *>(op_parameter)->activation_type_);
+  } else if (IsArithmetic(node_type) || node_type == schema::PrimitiveType_ScaleFusion) {
+    auto *arith_param = reinterpret_cast<ArithmeticParameter *>(op_parameter);
+    auto *scale_param = reinterpret_cast<ScaleParameter *>(op_parameter);
+    auto act_type = static_cast<ActivationType>(
+      node_type == schema::PrimitiveType_ScaleFusion ? scale_param->activation_type_ : arith_param->activation_type_);
     EltwiseOperator act_operator = Activation2Operator(act_type);
-    support =
-      node->in_tensors().size() == 2 && SupportedOperators.count(operator_) && SupportedOperators.count(act_operator);
+    support = SupportedOperators.count(operator_) && SupportedOperators.count(act_operator);
+    if (node_type == schema::PrimitiveType_ScaleFusion) {
+      support = support && node->in_tensors().size() == 3 && scale_param->axis_ == -1;
+    } else {
+      support = support && (node->in_tensors().size() == 2);
+    }
     if (create_param) {
       param = new (std::nothrow) FusionEltwiseParameter(operator_, node->name(), node->in_tensors(), replace_map);
       MS_ASSERT(param);
@@ -80,12 +87,6 @@ std::pair<bool, FusionEltwiseParameter *> CheckSupportOrCreateParam(
     }
   } else if (IsArithmeticSelf(node_type)) {
     support = node->in_tensors().size() == 1 && SupportedOperators.count(operator_);
-    if (create_param) {
-      param = new (std::nothrow) FusionEltwiseParameter(operator_, node->name(), node->in_tensors(), replace_map);
-      MS_ASSERT(param);
-    }
-  } else if (node_type == schema::PrimitiveType_Scale) {
-    support = node->in_tensors().size() == 3 && SupportedOperators.count(operator_);
     if (create_param) {
       param = new (std::nothrow) FusionEltwiseParameter(operator_, node->name(), node->in_tensors(), replace_map);
       MS_ASSERT(param);
@@ -142,16 +143,11 @@ bool IsEltwiseAndOperatorSupported(LiteKernel *node) {
 }
 
 int FusionEltwiseOpenCLKernel::Prepare() {
-  static std::set<std::string> code_map;
   std::string source = Codegen();
-  code_map.insert(source);
-  //  std::cout << name() << "\n" << source;
-
-  std::string program_name = "FusionEltwise" + std::to_string(code_map.size());
+  std::string program_name = "FusionEltwise\n" + source;
   std::string kernel_name = "FusionEltwise";
   ocl_runtime_->LoadSource(program_name, source);
   ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name);
-
   InitWeights();
   SetGlobalLocal();
   SetConstArgs();
@@ -182,7 +178,6 @@ int FusionEltwiseOpenCLKernel::InitWeights() {
       if (IsScalar(tensor->shape())) {
         float value = (tensor->data_type() == kNumberTypeFloat16) ? *(reinterpret_cast<float16_t *>(tensor->data_c()))
                                                                   : *(reinterpret_cast<float32_t *>(tensor->data_c()));
-        //        std::cout << "value=" << value << std::endl;
         scalar_weights_.push_back(value);
       } else {
         auto tensor_info = GpuTensorInfo(tensor);
@@ -384,7 +379,7 @@ std::string FusionEltwiseOpenCLKernel::CodegenCore(FusionEltwiseParameter *param
       code << cl_prefix << "FLT4 " << exp0 << " =  exp(" + var0 + ");\n";
       code << cl_prefix << "FLT4 " << exp1 << " =  exp(-" + var0 + ");\n";
       code << cl_prefix << "FLT4 " << out_name << " =  (" << exp0 << " - " << exp1 << ") / (" << exp0 << " + " << exp1
-           << "));\n";
+           << ");\n";
     }
   }
 
@@ -393,20 +388,22 @@ std::string FusionEltwiseOpenCLKernel::CodegenCore(FusionEltwiseParameter *param
 
 std::string FusionEltwiseOpenCLKernel::GetFormatVarName(std::string name) {
   if (var_names_.count(name)) {
-    return name;
-  }
-  if (name.empty()) {
-    name = "_var_" + std::to_string(var_names_.size());
+    return simplify_var_name_ ? var_names_[name] : name;
   } else {
-    char c = name.front();
-    if (c != '_' && !std::isalpha(c)) {
-      name = '_' + name;
+    if (name.empty()) {
+      name = "_var_" + std::to_string(var_names_.size());
+    } else {
+      char c = name.front();
+      if (c != '_' && !std::isalpha(c)) {
+        name = '_' + name;
+      }
+      std::replace_if(
+        name.begin(), name.end(), [](char c) { return !std::isalnum(c); }, '_');
     }
-    std::replace_if(
-      name.begin(), name.end(), [](char c) { return !std::isalnum(c); }, '_');
+    auto new_name = "tmp" + std::to_string(var_names_.size());
+    var_names_.emplace(name, new_name);
+    return simplify_var_name_ ? new_name : name;
   }
-  var_names_.insert(name);
-  return name;
 }
 
 int FusionEltwiseOpenCLKernel::GetTensorIdx(lite::Tensor *in_tensor) {
@@ -419,7 +416,7 @@ int FusionEltwiseOpenCLKernel::GetTensorIdx(lite::Tensor *in_tensor) {
       MS_ASSERT(in_kernel);
       MS_ASSERT(in_kernel->in_tensors().size());
       MS_ASSERT(in_kernel->out_tensors().size());
-      if (in_kernel->Type() == schema::PrimitiveType_ToFormat) {
+      if (static_cast<int>(in_kernel->Type()) == lite::PRIM_TO_FORMAT) {
         if (in_tensor == in_kernel->in_tensors().front()) {
           return std::find(in_tensors_.begin(), in_tensors_.end(), in_kernel->out_tensors().front()) -
                  in_tensors_.begin();

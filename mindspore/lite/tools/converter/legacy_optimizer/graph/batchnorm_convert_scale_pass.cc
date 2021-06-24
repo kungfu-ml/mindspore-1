@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ namespace {
 constexpr const float EPS = 1e-8;
 constexpr const float EPS_DEFAULT_FLOAT = 1e-8;
 constexpr const float POW_NUM = 0.5;
-constexpr const int32_t NCHW_DIM_C = 1;
+constexpr uint32_t kQuadrupleNum = 4;
 }  // namespace
 
 STATUS BatchNormConvertScalePass::Run(MetaGraphT *graph) {
@@ -52,6 +52,11 @@ STATUS BatchNormConvertScalePass::Run(MetaGraphT *graph) {
       continue;
     }
 
+    auto input_index = node->inputIndex.at(0);
+    if (graph->allTensors.at(input_index)->dims.empty()) {
+      MS_LOG(WARNING) << "The shape of input tensor is uncertain.";
+      return RET_OK;
+    }
     auto status = GenNewScaleTensor(graph, node);
     if (status != RET_OK) {
       MS_LOG(ERROR) << "GenNewScaleTensor failed: " << status;
@@ -68,15 +73,20 @@ STATUS BatchNormConvertScalePass::Run(MetaGraphT *graph) {
 STATUS BatchNormConvertScalePass::ConvertBNToScale(MetaGraphT *graph, const std::unique_ptr<CNodeT> &bnNode) {
   MS_ASSERT(graph != nullptr);
   MS_ASSERT(bnNode != nullptr);
-  bnNode->primitive->value.type = schema::PrimitiveType_Scale;
-  std::unique_ptr<ScaleT> scaleParam(new (std::nothrow) ScaleT());
+  bnNode->primitive->value.type = schema::PrimitiveType_ScaleFusion;
+  std::unique_ptr<ScaleFusionT> scaleParam(new (std::nothrow) ScaleFusionT());
   if (scaleParam == nullptr) {
     MS_LOG(ERROR) << "new scaleParam failed";
     return RET_ERROR;
   }
-  scaleParam->axis = NCHW_DIM_C;
-  bnNode->primitive->value.value = scaleParam.release();
+  //  after fusion bn must NHWC
   auto input0 = bnNode->inputIndex.at(0);
+  if (graph->allTensors.at(input0)->dims.size() == kQuadrupleNum) {
+    scaleParam->axis = -1;
+  } else {
+    scaleParam->axis = 1;
+  }
+  bnNode->primitive->value.value = scaleParam.release();
   bnNode->inputIndex.clear();
   bnNode->inputIndex.push_back(input0);
   graph->allTensors.emplace_back(std::move(newScaleWeightTensor));
@@ -98,7 +108,7 @@ STATUS BatchNormConvertScalePass::GenNewScaleTensor(MetaGraphT *graph, const std
   }
   newScaleWeightTensor->dataType = bnMeanTensor->dataType;
   newScaleWeightTensor->format = bnMeanTensor->format;
-  newScaleWeightTensor->refCount = schema::NodeType::NodeType_ValueNode;
+  newScaleWeightTensor->refCount = NodeType_ValueNode;
   newScaleWeightTensor->dims = bnMeanTensor->dims;
   auto weightShapeSize = GetShapeSize(*bnMeanTensor);
   newScaleWeightTensor->data.resize(weightShapeSize * sizeof(float));
@@ -121,7 +131,7 @@ STATUS BatchNormConvertScalePass::GenNewScaleTensor(MetaGraphT *graph, const std
   newScaleBiasTensor->dataType = bnMeanTensor->dataType;
   newScaleBiasTensor->format = bnMeanTensor->format;
 
-  newScaleBiasTensor->refCount = schema::NodeType::NodeType_ValueNode;
+  newScaleBiasTensor->refCount = NodeType_ValueNode;
   newScaleBiasTensor->dims = bnMeanTensor->dims;
   weightShapeSize = GetShapeSize(*bnMeanTensor);
   newScaleBiasTensor->data.resize(weightShapeSize * sizeof(float));

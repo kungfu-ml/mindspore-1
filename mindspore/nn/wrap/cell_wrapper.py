@@ -13,9 +13,12 @@
 # limitations under the License.
 # ============================================================================
 """Cell_wrapper."""
+from types import FunctionType, MethodType
+
 from mindspore.parallel._utils import (_get_device_num, _get_gradients_mean,
                                        _get_parallel_mode)
 from mindspore.context import ParallelMode
+from mindspore._checkparam import Validator as validator
 from ...common import dtype as mstype
 from ...common.parameter import Parameter, ParameterTuple
 from ...ops import composite as C
@@ -78,6 +81,9 @@ class WithLossCell(Cell):
     Outputs:
         Tensor, a scalar tensor with shape :math:`()`.
 
+    Raises:
+        TypeError: If dtype of `data` or `label` is neither float16 nor float32.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -137,6 +143,9 @@ class WithGradCell(Cell):
     Outputs:
         list, a list of Tensors with identical shapes as trainable weights.
 
+    Raises:
+        TypeError: If `sens` is not one of None, Tensor, Scalar or Tuple.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -174,6 +183,101 @@ class WithGradCell(Cell):
         return grads
 
 
+class ForwardValueAndGrad(Cell):
+    r"""
+    Network training package class.
+
+    Including the network and a gradient function. The resulting Cell is trained with input '\*inputs'.
+    The backward graph will be created in the gradient function to calculating gradient.
+
+    Args:
+        network (Cell): The training network.
+        weights (ParameterTuple): The parameters of the training network that need to calculate the gradient.
+        get_all (bool): If True, get all the gradients with respect to inputs. Default: False.
+        get_by_list (bool): If True, get all the gradients with respect to Parameter variables.
+            If get_all and get_by_list are both False, get the gradient with respect to first input.
+            If get_all and get_by_list are both True, get the gradients with respect to inputs and Parameter variables
+            at the same time in the form of ((gradients with respect to inputs),
+            (gradients with respect to parameters)). Default: False.
+        sens_param (bool): Whether to append sensitivity (gradient with respect to output) as input.
+            If sens_param is False, a 'ones_like(outputs)' sensitivity will be attached automatically.
+            Default: False.
+            If the sens_param is True, a sensitivity (gradient with respect to output) needs to be transferred through
+            the input parameter.
+
+    Inputs:
+        - **(\*inputs)** (Tuple(Tensor...)) - Tuple of inputs with shape :math:`(N, \ldots)`.
+        - **(sens)** - A sensitivity (gradient with respect to output) as the input of backpropagation.
+            If network has single output, the sens is a tensor.
+            If network has multiple outputs, the sens is the tuple(tensor).
+
+    Outputs:
+        - **forward value** - The result of network forward running.
+        - **gradients** (tuple(tensor)) - The gradients of network parameters and inputs.
+
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
+
+    Examples:
+        >>> class Net(nn.Cell):
+        ...    def __init__(self):
+        ...        super(Net, self).__init__()
+        ...        self.weight = Parameter(Tensor(np.ones([2, 2]).astype(np.float32)), name="weight")
+        ...        self.matmul = P.MatMul()
+        ...
+        ...    def construct(self, x):
+        ...        out = self.matmul(x, self.weight)
+        ...        return out
+        ...
+        >>> net = Net()
+        >>> criterion = nn.SoftmaxCrossEntropyWithLogits()
+        >>> net_with_criterion = nn.WithLossCell(net, criterion)
+        >>> weight = ParameterTuple(net.trainable_params())
+        >>> train_network = nn.ForwardValueAndGrad(net_with_criterion, weights=weight, get_all=True, get_by_list=True)
+        >>> inputs = Tensor(np.ones([1, 2]).astype(np.float32))
+        >>> labels = Tensor(np.zeros([1, 2]).astype(np.float32))
+        >>> result = train_network(inputs, labels)
+        >>> print(result)
+        (Tensor(shape=[1], dtype=Float32, value=[0.00000000e+00]), ((Tensor(shape=[1, 2], dtype=Float32, value=
+        [[1.00000000e+00, 1.00000000e+00]]), Tensor(shape=[1, 2], dtype=Float32, value=
+        [[0.00000000e+00, 0.00000000e+00]])), (Tensor(shape=[2, 2], dtype=Float32, value=
+        [[5.00000000e-01, 5.00000000e-01],
+         [5.00000000e-01, 5.00000000e-01]]),)))
+    """
+
+    def __init__(self, network, weights=None, get_all=False, get_by_list=False, sens_param=False):
+        super(ForwardValueAndGrad, self).__init__(auto_prefix=False)
+        if not isinstance(network, (Cell, FunctionType, MethodType)):
+            raise TypeError(f"The type of training network should be cell, function type or method type, "
+                            f"but got '{type(network)}'")
+        if not isinstance(get_all, bool):
+            raise TypeError(f"The type of get_all should be bool, but got '{type(get_all)}'")
+        if not isinstance(get_by_list, bool):
+            raise TypeError(f"The type of get_by_list should be bool, but got '{type(get_by_list)}'")
+        if get_by_list and not isinstance(weights, ParameterTuple):
+            raise TypeError(f"When get_by_list is set to True, the parameters of training network should be "
+                            f"ParameterTuple type, but got '{type(weights)}'")
+        self.network = network
+        if isinstance(network, Cell):
+            self.network.set_grad()
+        self.weights = weights
+        self.get_all = get_all
+        self.get_by_list = get_by_list
+        self.sens_param = sens_param
+        self.grad = C.GradOperation(get_all=self.get_all, get_by_list=self.get_by_list, sens_param=self.sens_param)
+
+    def construct(self, *inputs):
+        grad_inputs = inputs
+        if self.sens_param:
+            inputs = inputs[:-1]
+        loss = self.network(*inputs)
+        if self.get_by_list:
+            grads = self.grad(self.network, self.weights)(*grad_inputs)
+        else:
+            grads = self.grad(self.network)(*grad_inputs)
+        return loss, grads
+
+
 class TrainOneStepCell(Cell):
     r"""
     Network training package class.
@@ -192,6 +296,9 @@ class TrainOneStepCell(Cell):
 
     Outputs:
         Tensor, a scalar Tensor with shape :math:`()`.
+
+    Raises:
+        TypeError: If `sens` is not a number.
 
     Supported Platforms:
         ``Ascend`` ``GPU``
@@ -227,7 +334,6 @@ class TrainOneStepCell(Cell):
         super(TrainOneStepCell, self).__init__(auto_prefix=False)
         self.network = network
         self.network.set_grad()
-        self.network.add_flags(defer_inline=True)
         self.weights = optimizer.parameters
         self.optimizer = optimizer
         self.grad = C.GradOperation(get_by_list=True, sens_param=True)
@@ -238,9 +344,9 @@ class TrainOneStepCell(Cell):
         if self.parallel_mode in (ParallelMode.DATA_PARALLEL, ParallelMode.HYBRID_PARALLEL):
             self.reducer_flag = True
         if self.reducer_flag:
-            mean = _get_gradients_mean()
-            degree = _get_device_num()
-            self.grad_reducer = DistributedGradReducer(self.weights, mean, degree)
+            self.mean = _get_gradients_mean()
+            self.degree = _get_device_num()
+            self.grad_reducer = DistributedGradReducer(self.weights, self.mean, self.degree)
 
     def construct(self, *inputs):
         weights = self.weights
@@ -248,7 +354,8 @@ class TrainOneStepCell(Cell):
         sens = P.Fill()(P.DType()(loss), P.Shape()(loss), self.sens)
         grads = self.grad(self.network, weights)(*inputs, sens)
         grads = self.grad_reducer(grads)
-        return F.depend(loss, self.optimizer(grads))
+        loss = F.depend(loss, self.optimizer(grads))
+        return loss
 
 
 class GetNextSingleOp(Cell):
@@ -291,7 +398,7 @@ class _VirtualDatasetCell(Cell):
     """
     Wrap the network with virtual dataset to convert data parallel layout to model parallel layout.
 
-    _VirtualDataset is a virtual Primitive, it does not exist in the final executing graph. Inputs and outpus
+    _VirtualDataset is a virtual Primitive, it does not exist in the final executing graph. Inputs and outputs
     of _VirtualDataset are distributed in data parallel pattern, tensor redistribution Primitives is inserted
     dynamically during the graph compile process.
 
@@ -366,6 +473,9 @@ class WithEvalCell(Cell):
         Tuple, containing a scalar loss Tensor, a network output Tensor of shape :math:`(N, \ldots)`
         and a label Tensor of shape :math:`(N, \ldots)`.
 
+    Raises:
+        TypeError: If `add_cast_fp32` is not a bool.
+
     Supported Platforms:
         ``Ascend`` ``GPU``
 
@@ -380,7 +490,7 @@ class WithEvalCell(Cell):
         super(WithEvalCell, self).__init__(auto_prefix=False)
         self._network = network
         self._loss_fn = loss_fn
-        self.add_cast_fp32 = add_cast_fp32
+        self.add_cast_fp32 = validator.check_value_type("add_cast_fp32", add_cast_fp32, [bool], self.cls_name)
 
     def construct(self, data, label):
         outputs = self._network(data)

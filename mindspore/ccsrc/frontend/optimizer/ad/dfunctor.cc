@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -168,11 +168,28 @@ void DFunctor::BackPropagateSwitchLayer(const CNodePtr &cnode_morph, const CNode
   }
 }
 
+static bool HasSideEffectBackProp(const CNodePtr &cnode) {
+  if (IsPrimitiveCNode(cnode)) {
+    const auto &prim = GetCNodePrimitive(cnode);
+    MS_EXCEPTION_IF_NULL(prim);
+    auto bprop_flag = GetPrimitiveFlag(prim, GRAPH_FLAG_SIDE_EFFECT_BACKPROP);
+    return bprop_flag;
+  }
+  return false;
+}
+
 void DFunctor::BackPropagate(const CNodePtr &cnode_morph, const CNodePtr &k_app, const AdjointPtr &node_adjoint) {
   auto bprop =
     k_graph_->NewCNode({NewValueNode(prim::kPrimTupleGetItem), k_app, NewValueNode(static_cast<int64_t>(1))});
   // Call with delimited continuation dout.
-  auto bprop_app = tape_->NewCNode({bprop, node_adjoint->dout()});
+  CNodePtr bprop_app;
+  if (HasSideEffectBackProp(cnode_morph)) {
+    // as MapMorphism is called recursively, so the order of bprop_app should reversed as visited order.
+    bprop_app = tape_->NewCNodeInFront({bprop, node_adjoint->dout()});
+    tape_->set_flag(mindspore::kFuncGraphFlagReAutoMonad, true);
+  } else {
+    bprop_app = tape_->NewCNode({bprop, node_adjoint->dout()});
+  }
   node_adjoint->RegisterDoutUser(bprop_app, 1);
   // Special case for switch_layer
   if (IsPrimitiveCNode(cnode_morph, prim::kPrimSwitchLayer)) {
@@ -358,10 +375,10 @@ void DFunctor::ReplaceEquivdout(const CNodePtr &cnode, const CNodePtr &cnode_mor
   if (inputs_value.empty()) {
     return;
   }
-  if (inputs_value.size() != paras.size()) {
-    MS_LOG(EXCEPTION) << "Parameter size:" << paras.size() << " is not equal to inputs size:" << inputs_value.size();
+  if (inputs_value.size() > paras.size()) {
+    MS_LOG(EXCEPTION) << "Parameter size:" << paras.size() << " but inputs size:" << inputs_value.size();
   }
-  for (size_t i = 0; i < paras.size(); i++) {
+  for (size_t i = 0; i < inputs_value.size(); i++) {
     auto para_ref_size = manager->node_users()[paras[i]].size();
     auto input_value = inputs_value[i];
     if (para_ref_size > 0 && input_value.first != nullptr) {
@@ -387,9 +404,6 @@ void DFunctor::ReplaceEquivdout(const CNodePtr &cnode, const CNodePtr &cnode_mor
   auto out_node = c_input->cast<ValueNodePtr>();
   MS_EXCEPTION_IF_NULL(out_node);
   out_node->set_value(GenNewTensor(manager, out_node, out_node->value(), need_replace_forward));
-  // clear resource
-  fg->ClearAllManagerInfo();
-  func_graph->ClearAllManagerInfo();
 }
 
 bool DFunctor::IsFreeMorphism(const AnfNodePtr &node) {
@@ -415,7 +429,7 @@ bool DFunctor::IsFreeMorphism(const AnfNodePtr &node) {
 }
 
 void DFunctor::MapFreeMorphism() {
-  // Handle cnode not attached to output, that might be refered in other functions.
+  // Handle cnode not attached to output, that might be referred in other functions.
   for (auto &node : primal_graph_->nodes()) {
     if (!IsFreeMorphism(node)) {
       continue;
@@ -522,7 +536,10 @@ FuncGraphPtr DFunctor::KUserDefined(const FuncGraphPtr &primal) {
       MS_LOG(EXCEPTION) << "User defined Cell bprop " << primal->ToString() << " in scope "
                         << primal->output()->scope()->name() << " does not support Parameter data type.";
     }
-    auto fg = g_k_prims.KUserDefinedCellBprop(bprop_graph);
+    bprop_graph->set_flag(mindspore::kFuncGraphFlagBackPropEntry, true);
+    bprop_graph->set_flag(mindspore::kFuncGraphFlagReAutoMonad, true);
+
+    auto fg = g_k_prims.KUserDefinedCellBprop(bprop_graph, primal);
     if (fg == nullptr) {
       MS_LOG(EXCEPTION) << "Failed to expand user defined Cell bprop " << primal->ToString() << " in scope "
                         << primal->output()->scope()->name() << ".";
@@ -553,8 +570,9 @@ AnfNodePtr DFunctor::MapPrimitiveToK(const CNodePtr &primitive_user, size_t inde
   // Map Primitive to K
   auto value_node = primal->cast<ValueNodePtr>();
   auto prim = GetValueNode<PrimitivePtr>(value_node);
-  if (prim->Hash() == prim::kPrimStopGradient->Hash() && prim->name() == prim::kPrimStopGradient->name()) {
-    MS_LOG(DEBUG) << "Meet a kPrimStopGradient " << prim->ToString() << ".";
+  if ((prim->Hash() == prim::kPrimStopGradient->Hash() && prim->name() == prim::kPrimStopGradient->name()) ||
+      (prim->Hash() == prim::kPrimUpdateState->Hash() && prim->name() == prim::kPrimUpdateState->name())) {
+    MS_LOG(DEBUG) << "Should stop gradient for " << prim->ToString();
     need_cut_ = true;
   }
   auto k_prim = g_k_prims.KPrimitive(primitive_user, value_node, resources_);
@@ -748,7 +766,10 @@ void DFunctor::CallDoutHoleOnTape() {
     }
   }
 }
+
 FuncGraphPtr DFunctor::k_graph() { return k_graph_; }
+
+FuncGraphPtr DFunctor::tape() { return tape_; }
 
 void DFunctor::BroadCastStopFlag() {
   // As stop set expanding, all directly or indirectly stopped CNode will be cut off
@@ -759,7 +780,8 @@ void DFunctor::BroadCastStopFlag() {
         auto cnode = node->cast<CNodePtr>();
         if (!cnode->stop_gradient()) {
           // Cut off the cnode only when it's not referred any more
-          if (IsPrimitiveCNode(cnode, prim::kPrimStopGradient) || AllReferencesStopped(cnode)) {
+          if (IsPrimitiveCNode(cnode, prim::kPrimStopGradient) || IsPrimitiveCNode(cnode, prim::kPrimUpdateState) ||
+              AllReferencesStopped(cnode)) {
             MS_LOG(DEBUG) << "Set stop gradient flag for " << cnode->ToString() << ".";
             cnode->set_stop_gradient(true);
             // The stop set changed, more cut required
@@ -786,27 +808,169 @@ bool DFunctor::AllReferencesStopped(const CNodePtr &node) {
   return true;
 }
 
-// To replace the primal graph with k graph
-void DFunctor::EliminatePrimalGraph() {
-  auto k_vnode = NewValueNode(k_graph_);
-  auto idx0 = NewValueNode(SizeToLong(0));
-  auto imm0 = std::make_shared<Int64Imm>(0);
-  idx0->set_abstract(std::make_shared<abstract::AbstractScalar>(imm0));
-  auto manager = primal_graph_->manager();
-  auto users = primal_graph_->func_graph_cnodes_index();
-  for (auto &it : users) {
-    auto cnode = it.first->first->cast<CNodePtr>();
-    auto index = it.first->second;
-    auto vnode = cnode->inputs()[index];
-    if (index != 0) {
-      MS_LOG(DEBUG) << "Primal is used but not called, at {" << cnode->DebugString(3) << "/" << index << "}";
+CNodePtr GetJUser(const NodeUsersMap &node_user_map, const CNodePtr &cnode, int index) {
+  auto it = node_user_map.find(cnode);
+  if (it == node_user_map.end()) {
+    MS_LOG(EXCEPTION) << "J CNode not used {" << cnode->DebugString(2) << "/" << index << "}";
+  }
+  auto &j_users = it->second;
+  auto size = j_users.size();
+  if (size != 1) {
+    MS_LOG(EXCEPTION) << "Wrong J CNode use size " << size << " {" << cnode->DebugString(2) << "/" << index << "}";
+  }
+  return j_users.begin()->first->cast<CNodePtr>();
+}
+
+static std::vector<std::pair<CNodePtr, CNodePtr>> FindPrimalJPair(const FuncGraphManagerPtr &manager,
+                                                                  const FuncGraphPtr &primal_graph) {
+  std::vector<std::pair<CNodePtr, CNodePtr>> primal_j_pair;
+  std::map<FuncGraphPtr, std::pair<CNodePtr, int>> primal_users_map;
+  const auto &node_user_map = manager->node_users();
+  // Search primal graph user cnodes.
+  for (auto &entry : primal_graph->func_graph_cnodes_index()) {
+    auto cnode = entry.first->first->cast<CNodePtr>();
+    auto index = entry.first->second;
+    if (index == 0) {
+      // To find real calling.
+      auto fg = cnode->func_graph();
+      MS_EXCEPTION_IF_NULL(fg);
+      auto iter = primal_users_map.find(fg);
+      if (iter != primal_users_map.end()) {
+        iter->second.second++;
+        continue;
+      }
+      primal_users_map[fg] = std::make_pair(cnode, 1);
+    } else if (IsPrimitive(cnode->inputs().at(0), prim::kPrimJ)) {
+      // To find J user.
+      auto j_user = GetJUser(node_user_map, cnode, index);
+      primal_j_pair.push_back({nullptr, j_user});
+    }
+  }
+
+  for (auto &[primal_user, j_user] : primal_j_pair) {
+    // Check if J operation has relevant primal call in the same graph
+    auto graph = j_user->func_graph();
+    auto iter = primal_users_map.find(graph);
+    if (iter == primal_users_map.end()) {
+      MS_LOG(WARNING) << "J operation has no relevant primal call in the same graph. Func graph: " << graph->ToString()
+                      << ", J user: " << j_user->DebugString();
       continue;
     }
-    cnode->set_input(0, k_vnode);  // Replace primal graph with k graph
-    auto construct_wrapper = cnode->func_graph();
-    TraceGuard trace_guard(std::make_shared<TraceGradFpropApp>(cnode->debug_info()));
-    auto getitem0 = construct_wrapper->NewCNode({NewValueNode(prim::kPrimTupleGetItem), cnode, idx0});
-    manager->Replace(cnode, getitem0);
+
+    auto primal_count_pair = iter->second;
+    // Check input size.
+    auto primal = primal_count_pair.first;
+    if (primal->size() != j_user->size()) {
+      MS_LOG(WARNING) << "Input size incorrect, the input size of primal " << primal->DebugString() << " is "
+                      << primal->size() << ", and J user " << j_user->DebugString() << " is " << j_user->size();
+      continue;
+    }
+    if (primal_count_pair.second != 1) {
+      MS_LOG(WARNING) << "It is recommended to call the forward network only once.";
+      MS_LOG(INFO) << "There is more than one primal call for J operation in the same graph. Func graph: "
+                   << graph->ToString() << ", primal call: " << primal->DebugString()
+                   << ", J user: " << j_user->DebugString() << ", trace: " << trace::DumpSourceLines(primal);
+      continue;
+    }
+
+    primal_user = primal;
+    MS_LOG(DEBUG) << "Primal_J pair is found, where primal is: " << primal->DebugString()
+                  << " and J user is: " << j_user->DebugString();
+  }
+  return primal_j_pair;
+}
+
+static void RemovePrimalUpdateStates(const FuncGraphManagerPtr &manager, const CNodePtr &primal_call) {
+  auto &node_users = manager->node_users();
+  auto iter = node_users.find(primal_call);
+  if (iter == node_users.end()) {
+    // Skip if user of primal_call not found.
+    return;
+  }
+  // Find UpdateState nodes after the primal call.
+  std::vector<CNodePtr> update_states;
+  for (auto &user : iter->second) {
+    auto &user_node = user.first;
+    if (IsPrimitiveCNode(user_node, prim::kPrimUpdateState)) {
+      update_states.emplace_back(user_node->cast<CNodePtr>());
+    }
+  }
+  // Remove UpdateStates by replace them with their monad input.
+  for (auto &update_state : update_states) {
+    auto &input_monad = update_state->inputs().at(1);
+    manager->Replace(update_state, input_monad);
+  }
+}
+
+static bool CopyMonadArguments(const CNodePtr &primal_user, const CNodePtr &j_user) {
+  auto &primal_inputs = primal_user->inputs();
+  auto &j_user_inputs = j_user->inputs();
+  bool has_monad = false;
+  for (size_t i = 1; i < primal_inputs.size(); ++i) {
+    auto &input = primal_inputs.at(i);
+    if (HasAbstractMonad(input)) {
+      // Copy monad input from primal to j_user.
+      j_user->set_input(i, input);
+      has_monad = true;
+    } else if (input != j_user_inputs.at(i)) {
+      // Skip if there are different non-monad inputs.
+      return false;
+    }
+  }
+  return has_monad;
+}
+
+//
+// To replace the primal graph with k graph.
+// Convert:
+//   x = primal(args, u0)
+//   u1 = update_state(u0, x)
+//   ...
+//   tuple = K(args, u1)
+//   u2 = update_state(u1, tuple)
+//   ...
+// To:
+//   tuple = K(args, u0)
+//   x = get_item(tuple, 0)
+//   ...
+//   tuple = K(args, u0)
+//   u2 = update_state(u0, tuple)
+//   ...
+//
+void DFunctor::EliminatePrimalGraph() {
+  // Find primal user and paired J user cnodes.
+  auto manager = primal_graph_->manager();
+  MS_EXCEPTION_IF_NULL(manager);
+  auto prim_j_pair = FindPrimalJPair(manager, primal_graph_);
+  for (auto &[primal_user, j_user] : prim_j_pair) {
+    if (primal_user == nullptr || j_user == nullptr) {
+      // Skip if one of them not found.
+      return;
+    }
+
+    // Replace primal graph with k graph.
+    auto k_vnode = NewValueNode(k_graph_);
+    auto primal_abs = primal_user->abstract();
+    primal_user->set_input(0, k_vnode);
+    primal_user->set_abstract(j_user->abstract());
+
+    // If both inputs are same except monads, we copy primal monad args to k graph
+    // so that they can be combined in CSE (common subexpression elimination) pass.
+    const bool has_monad = CopyMonadArguments(primal_user, j_user);
+    // Remove the UpdateState nodes after primal_user if need.
+    if (has_monad) {
+      RemovePrimalUpdateStates(manager, primal_user);
+    }
+
+    // Insert tuple_getitem after primal user cnode.
+    auto construct_wrapper = primal_user->func_graph();
+    auto tuple_getitem = NewValueNode(prim::kPrimTupleGetItem);
+    auto imm0 = std::make_shared<Int64Imm>(0);
+    auto idx0 = NewValueNode(SizeToLong(0));
+    idx0->set_abstract(std::make_shared<abstract::AbstractScalar>(imm0));
+    auto getitem0 = construct_wrapper->NewCNode({tuple_getitem, primal_user, idx0});
+    getitem0->set_abstract(primal_abs);
+    manager->Replace(primal_user, getitem0);
   }
 }
 }  // namespace ad

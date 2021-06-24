@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,11 @@
  * limitations under the License.
  */
 #include "backend/optimizer/common/pass_manager.h"
-
 #include <sys/time.h>
 #include <unordered_set>
 #include <deque>
 #include <string>
 #include <algorithm>
-
 #include "ir/anf.h"
 #include "ir/func_graph.h"
 #include "ir/manager.h"
@@ -28,8 +26,7 @@
 
 namespace mindspore {
 namespace opt {
-static size_t count = 0;
-constexpr size_t kMaxRepassTimes = 9;
+constexpr size_t kMaxRepassTimes = 12;
 const std::vector<PassPtr> &PassManager::Passes() const { return passes_; }
 
 void PassManager::AddPass(const PassPtr &pass) {
@@ -79,6 +76,7 @@ bool PassManager::Run(const FuncGraphPtr &func_graph) const {
     return false;
   }
   bool changed = false;
+  size_t count = 0;
   // run all passes
   bool change = true;
   while (change) {

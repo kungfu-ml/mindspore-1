@@ -54,7 +54,7 @@ Status WeightedRandomSamplerRT::InitSampler() {
                                  std::to_string(samples_per_buffer_) + ".\n");
 
   if (weights_.size() > static_cast<size_t>(num_rows_)) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid parameter, size of sample weights must be less than or equal to num of data, "
                   "otherwise might cause generated id out of bound or other errors, but got weight size: " +
                     std::to_string(weights_.size()) + ", num of data: " + std::to_string(num_rows_));
@@ -119,7 +119,7 @@ Status WeightedRandomSamplerRT::ResetSampler() {
 // Get the sample ids.
 Status WeightedRandomSamplerRT::GetNextSample(std::unique_ptr<DataBuffer> *out_buffer) {
   if (weights_.size() > static_cast<size_t>(num_rows_)) {
-    return Status(StatusCode::kUnexpectedError, __LINE__, __FILE__,
+    return Status(StatusCode::kMDUnexpectedError, __LINE__, __FILE__,
                   "Invalid parameter, size of sample weights must be less than or equal to num of data, "
                   "otherwise might cause generated id out of bound or other errors, but got weight size: " +
                     std::to_string(weights_.size()) + ", num of data: " + std::to_string(num_rows_));
@@ -192,6 +192,25 @@ void WeightedRandomSamplerRT::SamplerPrint(std::ostream &out, bool show_all) con
     SamplerRT::SamplerPrint(out, show_all);
     // Then add our own info if any
   }
+}
+
+Status WeightedRandomSamplerRT::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["sampler_name"] = "WeightedRandomSampler";
+  args["weights"] = weights_;
+  args["num_samples"] = num_samples_;
+  args["replacement"] = replacement_;
+  if (this->HasChildSampler()) {
+    std::vector<nlohmann::json> children_args;
+    for (auto child : child_) {
+      nlohmann::json child_arg;
+      RETURN_IF_NOT_OK(child->to_json(&child_arg));
+      children_args.push_back(child_arg);
+    }
+    args["child_sampler"] = children_args;
+  }
+  *out_json = args;
+  return Status::OK();
 }
 }  // namespace dataset
 }  // namespace mindspore

@@ -66,7 +66,7 @@ enum class CacheServiceState : int8_t {
 /// \param rc[in] Status object
 /// \param reply[in/out] pointer to pre-allocated protobuf object
 inline void Status2CacheReply(const Status &rc, CacheReply *reply) {
-  reply->set_rc(static_cast<int32_t>(rc.get_code()));
+  reply->set_rc(static_cast<int32_t>(rc.StatusCode()));
   reply->set_msg(rc.ToString());
 }
 /// \brief Generate the unix socket file we use on both client/server side given a tcp/ip port number
@@ -90,9 +90,6 @@ enum CachePoolPolicy : int8_t { kOnNode, kPreferred, kLocal, kInterleave, kNone 
 using worker_id_t = int32_t;
 using numa_id_t = int32_t;
 using cpu_id_t = int32_t;
-
-/// Return the default spill dir for cache
-inline std::string DefaultSpillDir() { return kDefaultPathPrefix; }
 
 /// Return the default log dir for cache
 inline std::string DefaultLogDir() { return kDefaultPathPrefix + std::string("/log"); }

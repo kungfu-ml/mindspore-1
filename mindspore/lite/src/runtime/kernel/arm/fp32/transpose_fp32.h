@@ -20,28 +20,39 @@
 #include <vector>
 #include "include/errorcode.h"
 #include "nnacl/fp32/transpose_fp32.h"
+#include "nnacl/transpose.h"
 #include "src/lite_kernel.h"
 #include "src/kernel_registry.h"
 
 namespace mindspore::kernel {
+
+typedef void (*TransposeFunc)(const void *src, void *dst, int batch, int plane, int channel, int thread_num,
+                              int task_id);
+
 class TransposeCPUKernel : public LiteKernel {
  public:
   explicit TransposeCPUKernel(OpParameter *param, const std::vector<lite::Tensor *> &inputs,
-                              const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                              const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(param, inputs, outputs, ctx, primitive) {}
+                              const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(param, inputs, outputs, ctx) {}
   ~TransposeCPUKernel() override;
 
   int Init() override;
   int ReSize() override;
   int Run() override;
+  int RunImpl(int task_id);
 
  protected:
+  void GetNHNCTransposeFunc(lite::Tensor *in_tensor, lite::Tensor *out_tensor, TransposeParameter *param);
   float *in_data_ = nullptr;
   float *out_data_ = nullptr;
   int *out_shape_ = nullptr;
   int *dim_size_ = nullptr;
   int *position_ = nullptr;
+  TransposeParameter *param_ = nullptr;
+  TransposeFunc NHNCTransposeFunc_ = nullptr;
+  int thread_count_ = 0;
+  int nhnc_param_[3];
+  int dims_ = 0;
 };
 }  // namespace mindspore::kernel
 

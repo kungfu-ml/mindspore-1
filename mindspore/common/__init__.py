@@ -14,18 +14,20 @@
 # ============================================================================
 """Top-level reference to dtype of common module."""
 from . import dtype
+from . import monad
 from .api import ms_function
 from .dtype import *
 from .parameter import Parameter, ParameterTuple
-from .tensor import MetaTensor, Tensor, RowTensor, SparseTensor
+from .tensor import Tensor, RowTensor, SparseTensor
 from .seed import set_seed, get_seed
 
 
 __all__ = dtype.__all__
 __all__.extend([
-    "MetaTensor", "Tensor", "RowTensor", "SparseTensor",  # tensor
+    "Tensor", "RowTensor", "SparseTensor",  # tensor
     'ms_function',  # api
     'Parameter', 'ParameterTuple',  # parameter
     "dtype",
+    'monad',
     "set_seed", "get_seed"  # random seed
     ])

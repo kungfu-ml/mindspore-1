@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include <utility>
 #include <map>
 #include <set>
+#include <unordered_set>
 
 #ifdef DEBUG
 #include <stack>
@@ -56,17 +57,18 @@ class EvalResult : public Base {
 
  private:
   AbstractBasePtr abstract_;
+  // Attribute related to PrimEvaluator;
   AttrValueMapPtr attribute_;
 };
-
 using EvalResultPtr = std::shared_ptr<EvalResult>;
+
 // Superclass for AnfNodeConfig and VirtualConfig.
 class Config : public Base {
  public:
   Config() = default;
   ~Config() override = default;
   MS_DECLARE_PARENT(Config, Base);
-  virtual EvalResultPtr GetEvaluatedValue() = 0;
+  virtual EvalResultPtr ObtainEvalResult() = 0;
 };
 
 // Config will be stored in AnalysisCache
@@ -94,7 +96,7 @@ class AnfNodeConfig : public Config {
   ~AnfNodeConfig() override = default;
   MS_DECLARE_PARENT(AnfNodeConfig, Config);
 
-  EvalResultPtr GetEvaluatedValue() override;
+  EvalResultPtr ObtainEvalResult() override;
 
   AnalysisContextPtr context() const { return context_; }
 
@@ -144,7 +146,7 @@ class VirtualConfig : public Config {
 
   ~VirtualConfig() override = default;
   MS_DECLARE_PARENT(VirtualConfig, Config);
-  EvalResultPtr GetEvaluatedValue() override {
+  EvalResultPtr ObtainEvalResult() override {
     return std::make_shared<EvalResult>(abstract_, std::make_shared<AttrValueMap>());
   }
 
@@ -157,12 +159,12 @@ class AnalysisCache {
  public:
   AnalysisCache() = default;
   ~AnalysisCache() = default;
-  void Clear() { cache_.clear(); }
+  void Clear() { analysis_cache_map_.clear(); }
   void set_value(const AnfNodeConfigPtr &conf, const EvalResultPtr &arg);
   EvalResultPtr GetValue(const AnfNodeConfigPtr &conf);
 
  private:
-  std::unordered_map<AnfNodeConfigPtr, EvalResultPtr, AnfNodeConfigHasher, AnfNodeConfigEqual> cache_;
+  std::unordered_map<AnfNodeConfigPtr, EvalResultPtr, AnfNodeConfigHasher, AnfNodeConfigEqual> analysis_cache_map_;
 };
 
 using PrimEvaluatorMap = std::unordered_map<PrimitivePtr, EvaluatorPtr, PrimitiveHasher, PrimitiveEqual>;
@@ -174,7 +176,6 @@ struct AnalysisResult {
   AnalysisContextPtr context;
 };
 
-using EvalTraceRevIter = std::list<std::pair<EvaluatorPtr, AbstractBasePtrList>>::reverse_iterator;
 struct PartialAppHasher {
   std::size_t operator()(const std::pair<AbstractFunctionPtr, AbstractBasePtrList> &p) const {
     auto h1 = std::hash<AbstractFunctionPtr>{}(p.first);
@@ -185,7 +186,9 @@ struct PartialAppHasher {
 class AnalysisEngine : public std::enable_shared_from_this<AnalysisEngine> {
  public:
   AnalysisEngine(const PrimEvaluatorMap &prim_evaluator_map, const FuncGraphManagerPtr &func_graph_manager)
-      : cache_(AnalysisCache()), prim_constructors_(prim_evaluator_map), func_graph_manager_(func_graph_manager) {
+      : analysis_cache_(AnalysisCache()),
+        prim_constructors_(prim_evaluator_map),
+        func_graph_manager_(func_graph_manager) {
     function_call_depth_ = 0;
     forward_count_ = 0;
   }
@@ -194,7 +197,7 @@ class AnalysisEngine : public std::enable_shared_from_this<AnalysisEngine> {
   // func_graph: The func_graph to analyze.
   // args_spec_list: The abstracted arguments for the func_graph. Must be a tuple of AbstractBase.
   AnalysisResult Run(const FuncGraphPtr &func_graph, const AbstractBasePtrList &args_spec_list);
-  EvalResultPtr GetEvaluatedValue(const AnfNodeConfigPtr &conf);
+  EvalResultPtr ObtainEvalResultWithCache(const AnfNodeConfigPtr &conf);
   // Return the Evaluator for the given function.
   EvaluatorPtr GetEvaluatorFor(const AbstractFunctionPtr &fn);
 
@@ -204,7 +207,7 @@ class AnalysisEngine : public std::enable_shared_from_this<AnalysisEngine> {
   EvalResultPtr Execute(const AbstractFunctionPtr &fn, const AbstractBasePtrList &args_spec_list);
   void Clear();
   void ClearEvaluatorCache();
-  AnalysisCache &cache() { return cache_; }
+  AnalysisCache &analysis_cache() { return analysis_cache_; }
   AnfNodeConfigPtr MakeConfig(const AnfNodePtr &node, const AnalysisContextPtr &context) {
     return std::make_shared<AnfNodeConfig>(shared_from_this(), node, context);
   }
@@ -222,19 +225,10 @@ class AnalysisEngine : public std::enable_shared_from_this<AnalysisEngine> {
 
   // Set the analysis result for orig to the result for new.
   // This sets an entry in anfnode_config_map from orig to new.
-  EvalResultPtr ForwardConfig(const AnfNodeConfigPtr &orig_conf, const AnfNodeConfigPtr new_conf) {
-    // Use anfnode_config_map_[orig_conf] = new_conf will require AnfNodeConfig provide copy constructor.
-    (void)anfnode_config_map_.emplace(orig_conf, new_conf);
-    MS_LOG(DEBUG) << "Forward orig_conf: " << orig_conf->node()->DebugString()
-                  << ", to new_conf: " << new_conf->node()->DebugString();
-    forward_count_++;
-    auto res = GetEvaluatedValue(new_conf);
-    forward_count_--;
-    return res;
-  }
+  EvalResultPtr ForwardConfig(const AnfNodeConfigPtr &orig_conf, const AnfNodeConfigPtr new_conf);
   const PrimEvaluatorMap &PrimConstructors() const { return prim_constructors_; }
 
-  AnalysisCache cache_;
+  AnalysisCache analysis_cache_;
   std::unordered_map<PrimitivePyPtr, EvaluatorPtr> prim_py_evaluators_;
 
   void ResetFunctionCallDepth() { function_call_depth_ = 0; }
@@ -253,6 +247,33 @@ class AnalysisEngine : public std::enable_shared_from_this<AnalysisEngine> {
   void CheckNoStackInSameFuncGraph(const AnfNodeConfigPtr &conf);
 
  private:
+  // Should compare Args based on value other than pointer;
+  struct EvaluatorArgs {
+    EvaluatorArgs(const EvaluatorPtr &eval, const AbstractBasePtrList &args) : evaluator_(eval), args_(args) {}
+    bool operator==(const EvaluatorArgs &other) const {
+      if (evaluator_ != other.evaluator_) {
+        return false;
+      }
+      if (AbstractBasePtrListDeepEqual(args_, other.args_)) {
+        return true;
+      }
+      return false;
+    }
+    bool operator!=(const EvaluatorArgs &other) { return !(*this == other); }
+
+    EvaluatorPtr evaluator_;
+    AbstractBasePtrList args_;
+  };
+  using EvalTraceRevIter = std::list<EvaluatorArgs>::reverse_iterator;
+  struct EvaluatorArgsHasher {
+    std::size_t operator()(const EvaluatorArgs &eval_args) const {
+      return hash_combine(std::hash<EvaluatorPtr>{}(eval_args.evaluator_), AbstractBasePtrListHash(eval_args.args_));
+    }
+  };
+  struct EvaluatorArgsEqual {
+    bool operator()(const EvaluatorArgs &lhs, const EvaluatorArgs &rhs) const { return lhs == rhs; }
+  };
+
   void SetUndeterminedFlag(const EvaluatorPtr &evaluator);
   EvaluatorPtr HandleNestedRecursion(const std::vector<EvaluatorPtr> &evaluators, const EvaluatorPtr &eval,
                                      const AbstractBasePtrList &args_spec_list, const EvalTraceRevIter &it,
@@ -266,9 +287,9 @@ class AnalysisEngine : public std::enable_shared_from_this<AnalysisEngine> {
     constructors_app_;
   AnfNodeConfigMap anfnode_config_map_;
   // Use a list to trace multiple evaluators.
-  std::list<std::pair<EvaluatorPtr, AbstractBasePtrList>> eval_trace_;
+  std::list<EvaluatorArgs> eval_trace_;
   std::map<EvaluatorPtr, EvaluatorPtr> multi_poss_;
-  std::set<std::pair<EvaluatorPtr, AbstractBasePtrList>> continued_evals_;
+  std::unordered_set<EvaluatorArgs, EvaluatorArgsHasher, EvaluatorArgsEqual> continued_evals_;
 
   AnalysisContextPtr Run(const FuncGraphPtr &func_graph, const AnalysisContextPtr &context,
                          const ConfigPtrList &args_conf_list);
@@ -310,8 +331,6 @@ AbstractBasePtr FromValue(const T &value, bool broaden = false) {
 }
 
 EvalResultPtr EvalOnePrim(const PrimitivePtr &p, const AbstractBasePtrList &arg_specs);
-
-AbstractBasePtr CppInferShape(const PrimitivePtr &prim, const AbstractBasePtrList &args_spec_list);
 }  // namespace abstract
 }  // namespace mindspore
 

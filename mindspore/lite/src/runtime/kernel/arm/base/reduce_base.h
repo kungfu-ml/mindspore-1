@@ -26,9 +26,8 @@ namespace mindspore::kernel {
 class ReduceBaseCPUKernel : public LiteKernel {
  public:
   ReduceBaseCPUKernel(OpParameter *param, const std::vector<lite::Tensor *> &inputs,
-                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                      const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(param, inputs, outputs, ctx, primitive) {}
+                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(param, inputs, outputs, ctx) {}
   virtual ~ReduceBaseCPUKernel() = default;
 
   int Init() override;
@@ -39,7 +38,7 @@ class ReduceBaseCPUKernel : public LiteKernel {
   int CheckParameters();
 
  protected:
-  int axes_[REDUCE_MAX_AXES_NUM];
+  int axes_[MAX_SHAPE_SIZE];
   int num_axes_;
   int mode_;
   bool reduce_to_end_;

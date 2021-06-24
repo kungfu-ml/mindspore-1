@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,8 +60,8 @@ AbstractBasePtr InferImplSqrtGrad(const AnalysisEnginePtr &, const PrimitivePtr 
   return out->Broaden();
 }
 
-AbstractBasePtr InferImplTensorAdd(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                   const AbstractBasePtrList &args_spec_list) {
+AbstractBasePtr InferImplAdd(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                             const AbstractBasePtrList &args_spec_list) {
   // Inputs: two tensors.
   const std::string op_name = primitive->name();
   CheckArgsSize(op_name, args_spec_list, 2);
@@ -86,6 +86,10 @@ AbstractBasePtr InferImplSquare(const AnalysisEnginePtr &, const PrimitivePtr &p
   // Inputs: one tensor.
   const std::string op_name = primitive->name();
   CheckArgsSize(op_name, args_spec_list, 1);
+  auto ref = dyn_cast<abstract::AbstractRef>(args_spec_list[0]);
+  if (ref != nullptr) {
+    return ref->CloneAsTensor();
+  }
   return args_spec_list[0]->Broaden();
 }
 
@@ -121,8 +125,10 @@ AbstractBasePtr InferImplEqual(const AnalysisEnginePtr &, const PrimitivePtr &pr
   return ret;
 }
 
-AbstractBasePtr InferImplReduceSum(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
-                                   const AbstractBasePtrList &args_spec_list) {
+// To reduce code repeat, use InferImplReduceFunc. Currently registered with ReduceMean, ReduceSum,
+// ReduceAll, ReduceAny, ReduceMax, ReduceMin.
+AbstractBasePtr InferImplReduceFunc(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                    const AbstractBasePtrList &args_spec_list) {
   const std::string op_name = primitive->name();
   CheckArgsSize(op_name, args_spec_list, 1);
   auto input_x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
@@ -317,6 +323,7 @@ AbstractBasePtr InferImplLinSpace(const AnalysisEnginePtr &, const PrimitivePtr 
     std::make_shared<AbstractTensor>(start->element(), std::make_shared<Shape>(shape, min_shape, max_shape));
   return ret;
 }
+
 AbstractBasePtr InferImplAddN(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
                               const AbstractBasePtrList &args_spec_list) {
   const std::string op_name = primitive->name();
@@ -325,6 +332,163 @@ AbstractBasePtr InferImplAddN(const AnalysisEnginePtr &, const PrimitivePtr &pri
   }
   auto input = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
   return input->Broaden();
+}
+
+AbstractBasePtr InferImplMatMul(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                const AbstractBasePtrList &args_spec_list) {
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  auto x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  MS_EXCEPTION_IF_NULL(x);
+  MS_EXCEPTION_IF_NULL(x->shape());
+  auto y = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(y);
+  MS_EXCEPTION_IF_NULL(y->shape());
+  auto x_shp = x->shape()->shape();
+  auto y_shp = y->shape()->shape();
+  if (x_shp.size() != 2 || y_shp.size() != 2) {
+    MS_LOG(EXCEPTION) << "MatMul inputs should have the same dimension size and equal to 2.";
+  }
+  ValuePtr transpose_a_ptr = primitive->GetAttr("transpose_a");
+  ValuePtr transpose_b_ptr = primitive->GetAttr("transpose_b");
+  bool transpose_a = GetValue<bool>(transpose_a_ptr);
+  bool transpose_b = GetValue<bool>(transpose_b_ptr);
+  ShapeVector x_min_shape = x->shape()->min_shape();
+  ShapeVector x_max_shape = x->shape()->max_shape();
+  ShapeVector y_min_shape = y->shape()->min_shape();
+  ShapeVector y_max_shape = y->shape()->max_shape();
+  (void)CheckMinMaxShape(x_shp, &x_min_shape, &x_max_shape);
+  (void)CheckMinMaxShape(y_shp, &y_min_shape, &y_max_shape);
+  // Additional check for dynamic shape
+  // Last infer will be real shape values
+  bool x_not_dyn = std::all_of(x_shp.begin(), x_shp.end(), [](int64_t value) { return value != Shape::SHP_ANY; });
+  bool y_not_dyn = std::all_of(y_shp.begin(), y_shp.end(), [](int64_t value) { return value != Shape::SHP_ANY; });
+  if (x_not_dyn && y_not_dyn) {
+    auto x_col = x_shp[(transpose_a ? 0 : 1)];
+    auto y_row = y_shp[(transpose_b ? 1 : 0)];
+    if (x_col != y_row) {
+      MS_LOG(EXCEPTION) << "MatMul shape error, got x_col: " << x_col << ", y_row: " << y_row
+                        << ". In MatMul x_col and y_row should be equal.";
+    }
+  }
+  ShapeVector ret_shape;
+  ShapeVector ret_min_shape;
+  ShapeVector ret_max_shape;
+  auto make_shape = [&transpose_a, &transpose_b](ShapeVector &output, const ShapeVector xshp,
+                                                 const ShapeVector yshp) -> void {
+    output.push_back(xshp[(transpose_a ? 1 : 0)]);
+    output.push_back(yshp[(transpose_b ? 0 : 1)]);
+    return;
+  };
+  make_shape(ret_shape, x_shp, y_shp);
+  make_shape(ret_min_shape, x_min_shape, y_min_shape);
+  make_shape(ret_max_shape, x_max_shape, y_max_shape);
+  TypePtr x_type = x->element()->GetTypeTrack();
+  if (x_type->type_id() == TypeId::kNumberTypeInt8) {
+    x_type = kInt32;
+  }
+  return std::make_shared<AbstractTensor>(x_type, std::make_shared<Shape>(ret_shape, ret_min_shape, ret_max_shape));
+}
+
+AbstractBasePtr InferImplBatchMatMul(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                                     const AbstractBasePtrList &args_spec_list) {
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  auto x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  MS_EXCEPTION_IF_NULL(x);
+  MS_EXCEPTION_IF_NULL(x->shape());
+  auto y = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(y);
+  MS_EXCEPTION_IF_NULL(y->shape());
+  auto x_shp = x->shape()->shape();
+  auto y_shp = y->shape()->shape();
+  if (x_shp.size() != y_shp.size() || x_shp.size() < 3) {
+    MS_LOG(EXCEPTION)
+      << "BatchMatMul input x, y should have the same dimension size and should be greater or equal to 3.";
+  }
+  ValuePtr transpose_a_ptr = primitive->GetAttr("transpose_a");
+  ValuePtr transpose_b_ptr = primitive->GetAttr("transpose_b");
+  bool transpose_a = GetValue<bool>(transpose_a_ptr);
+  bool transpose_b = GetValue<bool>(transpose_b_ptr);
+  ShapeVector x_min_shape = x->shape()->min_shape();
+  ShapeVector x_max_shape = x->shape()->max_shape();
+  ShapeVector y_min_shape = y->shape()->min_shape();
+  ShapeVector y_max_shape = y->shape()->max_shape();
+  (void)CheckMinMaxShape(x_shp, &x_min_shape, &x_max_shape);
+  (void)CheckMinMaxShape(y_shp, &y_min_shape, &y_max_shape);
+  // Additional check for dynamic shape
+  // Last infer will be real shape values
+  bool x_not_dyn = std::all_of(x_shp.begin(), x_shp.end(), [](int64_t value) { return value != Shape::SHP_ANY; });
+  bool y_not_dyn = std::all_of(y_shp.begin(), y_shp.end(), [](int64_t value) { return value != Shape::SHP_ANY; });
+  if (x_not_dyn && y_not_dyn) {
+    size_t offset = x_shp.size() - 2;
+    auto x_col = x_shp[offset + (transpose_a ? 0 : 1)];
+    auto y_row = y_shp[offset + (transpose_b ? 1 : 0)];
+    if (x_col != y_row) {
+      MS_LOG(EXCEPTION) << "BatchMatMul shape error, got x_col: " << x_col << ", y_row: " << y_row
+                        << ". In BatchMatMul x_col and y_row should be equal.";
+    }
+  }
+  ShapeVector ret_shape;
+  ShapeVector ret_min_shape;
+  ShapeVector ret_max_shape;
+  auto make_shape = [&transpose_a, &transpose_b](ShapeVector &output, const ShapeVector xshp,
+                                                 const ShapeVector yshp) -> void {
+    for (size_t i = 0; i < xshp.size() - 2; i++) {
+      if (xshp[i] != yshp[i]) {
+        if (xshp[i] > 0 && yshp[i] > 0) {
+          MS_LOG(EXCEPTION) << "BatchMatMul input x, y are different at index " << i << ".";
+        }
+        output.push_back(Shape::SHP_ANY);
+      } else {
+        output.push_back(xshp[i]);
+      }
+    }
+    size_t offset = xshp.size() - 2;
+    output.push_back(xshp[offset + (transpose_a ? 1 : 0)]);
+    output.push_back(yshp[offset + (transpose_b ? 0 : 1)]);
+    return;
+  };
+  make_shape(ret_shape, x_shp, y_shp);
+  make_shape(ret_min_shape, x_min_shape, y_min_shape);
+  make_shape(ret_max_shape, x_max_shape, y_max_shape);
+  TypePtr x_type = x->element()->GetTypeTrack();
+  if (x_type->type_id() == TypeId::kNumberTypeInt8) {
+    x_type = kInt32;
+  }
+  return std::make_shared<AbstractTensor>(x_type, std::make_shared<Shape>(ret_shape, ret_min_shape, ret_max_shape));
+}
+
+AbstractBasePtr InferImplLess(const AnalysisEnginePtr &, const PrimitivePtr &primitive,
+                              const AbstractBasePtrList &args_spec_list) {
+  const std::string op_name = primitive->name();
+  CheckArgsSize(op_name, args_spec_list, 2);
+  auto x = CheckArg<AbstractTensor>(op_name, args_spec_list, 0);
+  MS_EXCEPTION_IF_NULL(x);
+  MS_EXCEPTION_IF_NULL(x->shape());
+  ShapeVector x_shape = x->shape()->shape();
+  ShapeVector x_shape_min = x->shape()->min_shape().empty() ? x_shape : x->shape()->min_shape();
+  ShapeVector x_shape_max = x->shape()->max_shape().empty() ? x_shape : x->shape()->max_shape();
+
+  auto y = CheckArg<AbstractTensor>(op_name, args_spec_list, 1);
+  MS_EXCEPTION_IF_NULL(y);
+  MS_EXCEPTION_IF_NULL(y->shape());
+  ShapeVector y_shape = y->shape()->shape();
+  ShapeVector y_shape_min = y->shape()->min_shape().empty() ? y_shape : y->shape()->min_shape();
+  ShapeVector y_shape_max = y->shape()->max_shape().empty() ? y_shape : y->shape()->max_shape();
+
+  auto out_shape = BroadcastShape(x_shape, y_shape);
+  if (out_shape.empty()) {
+    MS_LOG(EXCEPTION) << "BroadcastShape fail: " << args_spec_list[0]->ToString() << ","
+                      << args_spec_list[1]->ToString();
+  }
+  auto out_shape_min = BroadcastShape(x_shape_min, y_shape_min);
+  auto out_shape_max = BroadcastShape(x_shape_max, y_shape_max);
+
+  auto output_type = std::make_shared<Bool>();
+  auto ret =
+    std::make_shared<AbstractTensor>(output_type, std::make_shared<Shape>(out_shape, out_shape_min, out_shape_max));
+  return ret;
 }
 }  // namespace abstract
 }  // namespace mindspore

@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,11 +16,6 @@
 import argparse
 import os
 import random
-
-from src.cnn_direction_model import CNNDirectionModel
-from src.config import config1 as config
-from src.dataset import create_dataset_train
-
 import numpy as np
 
 import mindspore as ms
@@ -35,13 +30,17 @@ from mindspore.train.callback import ModelCheckpoint, CheckpointConfig, LossMoni
 from mindspore.train.model import Model, ParallelMode
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
+from src.cnn_direction_model import CNNDirectionModel
+from src.config import config1 as config
+from src.dataset import create_dataset_train
+
 parser = argparse.ArgumentParser(description='Image classification')
 parser.add_argument('--run_distribute', type=bool, default=False, help='Run distribute')
 parser.add_argument('--device_num', type=int, default=1, help='Device num.')
-
 parser.add_argument('--dataset_path', type=str, default=None, help='Dataset path')
 parser.add_argument('--device_target', type=str, default='Ascend', help='Device target')
 parser.add_argument('--pre_trained', type=str, default=None, help='Pretrained checkpoint path')
+parser.add_argument('--is_save_on_master', type=int, default=1, help='save ckpt on master or all rank')
 
 args_opt = parser.parse_args()
 
@@ -71,8 +70,17 @@ if __name__ == '__main__':
         context.set_auto_parallel_context(device_num=rank_size, parallel_mode=ParallelMode.DATA_PARALLEL)
         init()
 
+    args_opt.rank_save_ckpt_flag = 0
+    if args_opt.is_save_on_master:
+        if rank_id == 0:
+            args_opt.rank_save_ckpt_flag = 1
+    else:
+        args_opt.rank_save_ckpt_flag = 1
+
     # create dataset
-    dataset = create_dataset_train(args_opt.dataset_path + "/ocr_pos.mindrecord0", config=config)
+    dataset_name = config.dataset_name
+    dataset = create_dataset_train(args_opt.dataset_path +  "/" + dataset_name +
+                                   ".mindrecord0", config=config, dataset_name=dataset_name)
     step_size = dataset.get_dataset_size()
 
     # define net
@@ -99,10 +107,11 @@ if __name__ == '__main__':
     loss_cb = LossMonitor()
     cb = [time_cb, loss_cb]
     if config.save_checkpoint:
-        config_ck = CheckpointConfig(save_checkpoint_steps=2500,
-                                     keep_checkpoint_max=config.keep_checkpoint_max)
-        ckpt_cb = ModelCheckpoint(prefix="cnn_direction_model", directory=ckpt_save_dir, config=config_ck)
-        cb += [ckpt_cb]
+        if args_opt.rank_save_ckpt_flag == 1:
+            config_ck = CheckpointConfig(save_checkpoint_steps=config.save_checkpoint_steps,
+                                         keep_checkpoint_max=config.keep_checkpoint_max)
+            ckpt_cb = ModelCheckpoint(prefix="cnn_direction_model", directory=ckpt_save_dir, config=config_ck)
+            cb += [ckpt_cb]
 
     # train model
     model.train(config.epoch_size, dataset, callbacks=cb, dataset_sink_mode=False)

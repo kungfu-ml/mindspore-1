@@ -53,6 +53,9 @@ void BnupdateEltwiseEltwiseFusionPass::MatchBnupdateAddRelu(const CNodePtr &cnod
   auto add = relu_input->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(add);
   auto tuple_getitem = add->input(1);
+  std::vector<int64_t> add_output_used_num;
+  add_output_used_num.emplace_back(SizeToLong(manager->node_users()[add].size()));
+  AnfAlgo::SetNodeAttr(kAttrOutputUsedNum, MakeValue(add_output_used_num), add);
   MS_EXCEPTION_IF_NULL(tuple_getitem);
   if (tuple_getitem->isa<CNode>() && AnfAlgo::GetCNodeName(tuple_getitem) == prim::kPrimTupleGetItem->name()) {
     auto getitem = tuple_getitem->cast<CNodePtr>();
@@ -60,10 +63,6 @@ void BnupdateEltwiseEltwiseFusionPass::MatchBnupdateAddRelu(const CNodePtr &cnod
     auto bnupdate = getitem->input(1);
     MS_EXCEPTION_IF_NULL(bnupdate);
     if (bnupdate->isa<CNode>() && AnfAlgo::GetCNodeName(bnupdate) == kBNTrainingUpdateOpName) {
-      if (cnode->size() == ELTWISE_DOUBLE_IN_INPUT_SIZE &&
-          IsDepend(kernel_graph, cnode->input(2), {relu_input, bnupdate})) {
-        return;
-      }
       std::vector<int64_t> output_used_num(AnfAlgo::GetOutputTensorNum(bnupdate), 0);
       for (auto out_getitem : manager->node_users()[bnupdate]) {
         MS_EXCEPTION_IF_NULL(out_getitem.first);
@@ -96,7 +95,7 @@ void BnupdateEltwiseEltwiseFusionPass::MatchSingleFusionPattern(const session::K
         AnfAlgo::GetFusionType(cnode) == kernel::FusionType::ELEMWISE && CheckEltwiseInputAndOutputSize(cnode)) {
       auto eltwise_input = cnode->input(1);
       MS_EXCEPTION_IF_NULL(eltwise_input);
-      if (eltwise_input->isa<CNode>() && AnfAlgo::CheckPrimitiveType(eltwise_input, prim::kPrimTensorAdd)) {
+      if (eltwise_input->isa<CNode>() && AnfAlgo::CheckPrimitiveType(eltwise_input, prim::kPrimAdd)) {
         MatchBnupdateAddRelu(cnode, eltwise_input, kernel_graph, candidate_fusion);
       }
     }

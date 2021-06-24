@@ -15,9 +15,9 @@
 from mindspore.ops import Primitive
 from mindspore.ops import operations as P
 
-add = P.TensorAdd()
+add = P.Add()
 sub = P.Sub()
-make_tuple = Primitive('make_tuple')
+make_tuple = Primitive('MakeTuple')
 four2five = Primitive('Four2Five')
 five2four = Primitive('Five2Four')
 transdata = Primitive("TransData")

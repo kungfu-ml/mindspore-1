@@ -40,16 +40,16 @@ class DynCreator {
  public:
   ~DynCreator() = default;
 
-  // creat static singleton dyn_creator instance
+  // create static singleton dyn_creator instance
   static DynCreator &Instance() {
     static DynCreator fac = DynCreator();
     return fac;
   }
   // register
-  void Regist(std::string name, CreatFn func) { (void)Function_map_.insert(std::make_pair(name, func)); }
+  void Register(std::string name, CreatFn func) { (void)Function_map_.insert(std::make_pair(name, func)); }
   // creator
-  OperatorInfoPtr Creat(const std::string &name, const Shapes &shape_in, const Shapes &shape_out,
-                        const PrimitiveAttrs &attrs, size_t count) {
+  OperatorInfoPtr Create(const std::string &name, const Shapes &shape_in, const Shapes &shape_out,
+                         const PrimitiveAttrs &attrs, size_t count) {
     std::string op_name = name + std::to_string(count);
     auto iter = Function_map_.find(name);
     if (iter == Function_map_.end()) {
@@ -67,7 +67,7 @@ class DynCreator {
 class RegisterAction {
  public:
   RegisterAction(const std::string &name, CreatFn creatfn) : name_(name) {
-    DynCreator::Instance().Regist(name, creatfn);
+    DynCreator::Instance().Register(name, creatfn);
   }
   ~RegisterAction() = default;
 
@@ -77,7 +77,7 @@ class RegisterAction {
 
 // operator register
 REGISTER(MatMulInfo);
-REGISTER(GeluInfo);
+REGISTER(GeLUInfo);
 REGISTER(VirtualDatasetInfo);
 REGISTER(BatchParallelInfo);
 REGISTER(TanhInfo);
@@ -86,7 +86,7 @@ REGISTER(LogSoftmaxInfo);
 REGISTER(ActivationInfo);
 REGISTER(SoftmaxCrossEntropyWithLogitsInfo);
 REGISTER(SubInfo);
-REGISTER(TensorAddInfo);
+REGISTER(AddInfo);
 REGISTER(BiasAddInfo);
 REGISTER(MulInfo);
 REGISTER(DivInfo);
@@ -140,7 +140,7 @@ REGISTER(ReLU6Info);
 REGISTER(ReLUV2Info);
 REGISTER(SoftplusInfo);
 REGISTER(SoftsignInfo);
-REGISTER(GatherV2Info);
+REGISTER(GatherInfo);
 REGISTER(SparseGatherV2Info);
 REGISTER(SqrtInfo);
 REGISTER(SigmoidInfo);
@@ -180,14 +180,14 @@ REGISTER(UniformCandidateSamplerInfo);
 REGISTER(UnsortedSegmentSumInfo);
 REGISTER(UnsortedSegmentMinInfo);
 REGISTER(UnsortedSegmentMaxInfo);
-REGISTER(GatherV2PInfo);
+REGISTER(GatherPInfo);
 REGISTER(EmbeddingLookupInfo);
 REGISTER(TileInfo);
 REGISTER(BroadcastToInfo);
 REGISTER(StridedSliceInfo);
 REGISTER(SliceInfo);
 REGISTER(DropoutInfo);
-REGISTER(PackInfo);
+REGISTER(StackInfo);
 REGISTER(ConcatInfo);
 REGISTER(SplitInfo);
 REGISTER(UniqueInfo);

@@ -184,7 +184,7 @@ class ValueDictionary : public Value {
     buffer << ") values:(";
     for (const auto &value : values) {
       MS_EXCEPTION_IF_NULL(value);
-      buffer << value->DumpText() << ", ";
+      buffer << value->ToString() << ", ";
     }
     buffer << ")";
     return buffer.str();
@@ -252,6 +252,42 @@ class AnyValue : public Value {
   abstract::AbstractBasePtr ToAbstract() override;
 };
 extern const ValuePtr kAnyValue;
+
+class Monad : public Value {
+ public:
+  ~Monad() override = default;
+  MS_DECLARE_PARENT(Monad, Value)
+  abstract::AbstractBasePtr ToAbstract() override = 0;
+
+ protected:
+  explicit Monad(TypePtr type) : Value(type) {}
+};
+
+class UMonad : public Monad {
+ public:
+  UMonad() : Monad(kUMonadType) {}
+  ~UMonad() override = default;
+  MS_DECLARE_PARENT(UMonad, Monad)
+  std::size_t hash() const override { return tid(); }
+  bool operator==(const Value &other) const override;
+  abstract::AbstractBasePtr ToAbstract() override;
+  std::string ToString() const override { return "U"; }
+};
+using UMonadPtr = std::shared_ptr<UMonad>;
+extern const ValuePtr kUMonad;
+
+class IOMonad : public Monad {
+ public:
+  IOMonad() : Monad(kIOMonadType) {}
+  ~IOMonad() override = default;
+  MS_DECLARE_PARENT(IOMonad, Monad)
+  std::size_t hash() const override { return tid(); }
+  bool operator==(const Value &other) const override;
+  abstract::AbstractBasePtr ToAbstract() override;
+  std::string ToString() const override { return "IO"; }
+};
+using IOMonadPtr = std::shared_ptr<IOMonad>;
+extern const ValuePtr kIOMonad;
 
 template <>
 inline const char *GetValue(const ValuePtr &value) {

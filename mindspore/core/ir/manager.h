@@ -1,7 +1,7 @@
 /**
  * This is the C++ adaptation and derivative work of Myia (https://github.com/mila-iqia/myia/).
  *
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -301,6 +301,7 @@ class FuncGraphManager : public std::enable_shared_from_this<FuncGraphManager> {
     if (is_manage_) {
       RemoveRoots();
     }
+    Clear();
   }
 
   void Reset();
@@ -314,6 +315,7 @@ class FuncGraphManager : public std::enable_shared_from_this<FuncGraphManager> {
   void MaybeDropFuncGraphs(const FuncGraphSet &func_graphs, bool ignore_users = false);
   bool Replace(const AnfNodePtr &old_node, const AnfNodePtr &new_node);
   void SetEdge(const AnfNodePtr &node, int index, const AnfNodePtr &value);
+  void AddEdge(const AnfNodePtr &node, const AnfNodePtr &value);
   void MoveAllCNodeDropGraph(FuncGraphPtr source, FuncGraphPtr target, const ScopePtr &scope);
 
   FuncGraphTransaction Transact();
@@ -358,6 +360,8 @@ class FuncGraphManager : public std::enable_shared_from_this<FuncGraphManager> {
   std::shared_ptr<ParentComputer> func_graph_parent_;
 
  private:
+  // Erase OneGraph From Manager
+  void EraseOneGraph(FuncGraph *fg);
   void AddIntoManaged(const FuncGraphPtr &fg);
   void ProcessEdge(AnfNodePtr node, int index, AnfNodePtr inp, EdgeProcessDirection direction);
   void ProcessInputs(const AnfNodePtr &node, EdgeProcessDirection direction);
@@ -369,8 +373,8 @@ class FuncGraphManager : public std::enable_shared_from_this<FuncGraphManager> {
   void DropEdge(AnfNodePtr node, int index, AnfNodePtr input);
   void MoveAllNodes(FuncGraphPtr source, FuncGraphPtr target);
 
-  FuncGraphSet roots_;        // managed roots
-  FuncGraphSet func_graphs_;  // managed func graphs
+  FuncGraphSet roots_;        // Managed roots.
+  FuncGraphSet func_graphs_;  // Managed func graphs.
 
   std::shared_ptr<Signals> signals_;
 
@@ -406,8 +410,10 @@ class FuncGraphTransaction {
   // replace old_node with new_node
   bool Replace(const AnfNodePtr &old_node, const AnfNodePtr &new_node);
 
-  // set esge, i.e., declare setting node.inputs[key] to value.
+  // set edge, i.e., declare setting node.inputs[key] to value.
   void SetEdge(const AnfNodePtr &src_node, int k, const AnfNodePtr &v);
+  // Add edge, i.e., append value to node.inputs.
+  void AddEdge(const AnfNodePtr &src_node, const AnfNodePtr &v);
 
   // commit all changes
   void Commit();
@@ -454,8 +460,20 @@ struct ArgsOfSetEdge {
   }
 };
 
+// args for add edge
+struct ArgsOfAddEdge {
+  CNodePtr root_node;
+  AnfNodePtr new_node;
+  bool operator==(const ArgsOfAddEdge &other) const { return &other == this; }
+
+  friend std::ostream &operator<<(std::ostream &os, const ArgsOfAddEdge &other) {
+    os << "[ArgsOfAddEdge]";
+    return os;
+  }
+};
+
 struct Change {
-  enum OpName { kTxSetParams, kTxSetEdge, kTxAddParam };
+  enum OpName { kTxSetParams, kTxSetEdge, kTxAddParam, kTxAddEdge };
   OpName op;
   Any args;
   Change(OpName name, const Any &para) : op(name), args(para) {}

@@ -25,13 +25,12 @@
 #include <algorithm>
 #include "ir/func_graph.h"
 #include "mindspore/core/base/core_ops.h"
+#include "utils/utils.h"
 
 namespace mindspore {
 namespace opt {
 namespace {
 constexpr auto kGradientsFlag = "Gradients";
-constexpr auto kAttrRecompute = "recompute";
-constexpr auto kAttrNoRecompute = "no_recompute";
 bool IsBpropNode(const AnfNodePtr &node) {
   MS_EXCEPTION_IF_NULL(node);
   if (!node->isa<CNode>()) {
@@ -46,8 +45,7 @@ bool WithRecomputedScope(const AnfNodePtr &node) {
     return false;
   }
   auto full_name_with_scope = node->fullname_with_scope();
-  return full_name_with_scope.find(kAttrRecompute) == 0 &&
-         full_name_with_scope.find(kAttrNoRecompute) == full_name_with_scope.npos;
+  return full_name_with_scope.find(kAttrRecompute) == 0;
 }
 
 bool HasRecomputeCNodeAttr(const AnfNodePtr &node) {
@@ -295,6 +293,17 @@ void SetRecomputedAttr(const FuncGraphPtr &graph, const std::vector<CNodePtr> &o
   }
 }
 
+CNodePtr CreateNewRecomputedNode(const FuncGraphPtr &graph, const CNodePtr &origin_node,
+                                 const std::vector<AnfNodePtr> &new_inputs) {
+  auto recomputed_node = graph->NewCNode(new_inputs);
+  MS_EXCEPTION_IF_NULL(recomputed_node);
+  recomputed_node->AddAttr("duplicated", MakeValue(true));
+  recomputed_node->AddAttr(kAttrNeedCseAfterRecompute, MakeValue(true));
+  recomputed_node->set_abstract(origin_node->abstract());
+  recomputed_node->set_scope(origin_node->scope());
+  return recomputed_node;
+}
+
 CNodePtr NewRecomputedNode(const FuncGraphPtr &graph, const CNodePtr &origin_node,
                            const std::vector<AnfNodePtr> &first_target_inputs,
                            const std::unordered_set<CNodePtr> &recomputed_origin_nodes,
@@ -338,11 +347,7 @@ CNodePtr NewRecomputedNode(const FuncGraphPtr &graph, const CNodePtr &origin_nod
     depend_node->set_abstract(first_input->abstract());
     new_inputs[1] = depend_node;
   }
-  auto recomputed_node = graph->NewCNode(new_inputs);
-  MS_EXCEPTION_IF_NULL(recomputed_node);
-  recomputed_node->AddAttr("duplicated", MakeValue(true));
-  recomputed_node->set_abstract(origin_node->abstract());
-  recomputed_node->set_scope(origin_node->scope());
+  auto recomputed_node = CreateNewRecomputedNode(graph, origin_node, new_inputs);
   origin_to_recomputed_nodes->insert(std::make_pair(origin_node, recomputed_node));
   return recomputed_node;
 }
@@ -416,6 +421,12 @@ void InsertRecomputedNodes(const FuncGraphPtr &graph) {
     // Begin duplicate origin recomputed nodes with each target node.
     DuplicateRecomputedNodes(graph, target_nodes, origin_recomputed_nodes, first_target_inputs,
                              &origin_to_recomputed_nodes);
+  }
+  // Set need cse attr for doing cse after recompute.
+  for (const auto &node : orders) {
+    if (WithRecomputedScope(node)) {
+      node->AddAttr(kAttrNeedCseAfterRecompute, MakeValue(true));
+    }
   }
 }
 }  // namespace opt

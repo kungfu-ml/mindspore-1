@@ -15,6 +15,7 @@ In order to facilitate developers to enjoy the benefits of MindSpore framework, 
 - [Official](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official)
     - [Computer Vision](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv)
         - [Image Classification](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv)
+            - [DenseNet](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/densenet/README.md)
             - [GoogleNet](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/googlenet/README.md)
             - [ResNet50[benchmark]](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/cv/resnet/README.md)
             - [ResNet50_Quant](https://gitee.com/mindspore/mindspore/blob/master/model_zoo/official/cv/resnet50_quant/README.md)
@@ -52,6 +53,7 @@ In order to facilitate developers to enjoy the benefits of MindSpore framework, 
         - [Transformer](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/nlp/transformer/README.md)
     - [Recommender Systems](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/recommend)
         - [DeepFM](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/recommend/deepfm/README.md)
+        - [NAML](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/recommend/naml/README.md)
         - [Wide&Deep[benchmark]](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/recommend/wide_and_deep/README.md)
     - [Graph Neural Networks](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/gnn)
         - [BGCF](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/official/gnn/bgcf/README.md)
@@ -76,9 +78,12 @@ In order to facilitate developers to enjoy the benefits of MindSpore framework, 
         - [AutoDis](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/recommend/autodis/README.md)
     - [Audio](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/audio)
         - [FCN-4](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/audio/fcn-4/README.md)
+        - [DeepSpeech2](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/audio/deepspeech2/README.md)
+        - [Wavenet](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/audio/wavenet/README.md)
     - [High Performance Computing](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/hpc)
         - [GOMO](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/hpc/ocean_model/README.md)
         - [Molecular_Dynamics](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/hpc/molecular_dynamics/README.md)
+        - [SPONGE](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/research/hpc/sponge/README.md)
 
 - [Community](https://gitee.com/mindspore/mindspore/tree/master/model_zoo/community)
 

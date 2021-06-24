@@ -31,8 +31,14 @@
 #include "src/executor.h"
 #include "src/tensor.h"
 #include "src/tensorlist.h"
-#if SUPPORT_GPU
-#include "src/runtime/opencl/opencl_runtime.h"
+#if SUPPORT_NPU
+#include "src/runtime/agent/npu/npu_manager.h"
+#include "src/runtime/agent/npu/optimizer/npu_pass_manager.h"
+#endif
+#if GPU_OPENCL
+#include "src/runtime/gpu/opencl/opencl_runtime.h"
+#elif GPU_VULKAN
+#include "src/runtime/gpu/vulkan/vulkan_runtime.h"
 #endif
 
 namespace mindspore {
@@ -127,8 +133,14 @@ class LiteSession : public session::LiteSession {
   Executor *executor_ = nullptr;
   Model *model_ = nullptr;
   std::atomic<bool> is_running_ = false;
-#if SUPPORT_GPU && !SUPPORT_TRAIN
-  opencl::OpenCLRuntimeWrapper ocl_runtime_wrap_;
+#if SUPPORT_NPU
+  NPUManager *npu_manager_ = nullptr;
+  NPUPassManager *npu_pass_manager_ = nullptr;
+#endif
+#if GPU_OPENCL && !SUPPORT_TRAIN
+  opencl::OpenCLRuntimeWrapper *opencl_runtime_wrapper_{nullptr};
+#elif GPU_VULKAN && !SUPPORT_TRAIN
+  gpu::GpuRuntimeWrapper<vulkan::VulkanRuntime> *vk_runtime_wrap_{nullptr};
 #endif
 };
 }  // namespace lite

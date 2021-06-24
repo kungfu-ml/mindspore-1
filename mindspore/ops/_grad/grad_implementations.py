@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # ============================================================================
 
 """bprop primitives"""
+from mindspore.ops import _constants
 from ..operations import _grad_ops as G
 from .. import functional as F
 from .. import operations as P
@@ -50,31 +51,31 @@ def bprop_relu_grad_grad(x, y, out, dout):
     return dy, F.zeros_like(y)
 
 
-@bprops.register("scalar_add")
+@bprops.register(_constants.kScalarAdd)
 def bprop_scalar_add(x, y, out, dout):
     """Backpropagator for primitive `scalar_add`."""
     return dout, dout
 
 
-@bprops.register("scalar_mul")
+@bprops.register(_constants.kScalarMul)
 def bprop_scalar_mul(x, y, out, dout):
     """Backpropagator for primitive `scalar_mul`."""
     return dout*y, dout*x
 
 
-@bprops.register("scalar_sub")
+@bprops.register(_constants.kScalarSub)
 def bprop_scalar_sub(x, y, out, dout):
     """Backpropagator for primitive `scalar_sub`."""
     return dout, -dout
 
 
-@bprops.register("scalar_div")
+@bprops.register(_constants.kScalarDiv)
 def bprop_scalar_div(x, y, out, dout):
     """Backpropagator for primitive `scalar_div`."""
     return dout/y, (-dout) * (out/y)
 
 
-@bprops.register("scalar_pow")
+@bprops.register(_constants.kScalarPow)
 def bprop_scalar_pow(x, y, out, dout):
     """Backpropagator for primitive `scalar_pow`."""
     return dout * (y * (x ** (y-1))), dout * (F.scalar_log(x) * out)
@@ -86,13 +87,13 @@ def bprop_scalar_exp(x, out, dout):
     return (dout * out,)
 
 
-@bprops.register("scalar_uadd")
+@bprops.register(_constants.kScalarUadd)
 def bprop_scalar_uadd(x, out, dout):
     """Backpropagator for primitive `scalar_uadd`."""
     return (dout,)
 
 
-@bprops.register("scalar_usub")
+@bprops.register(_constants.kScalarUsub)
 def bprop_scalar_usub(x, out, dout):
     """Backpropagator for primitive `scalar_usub`."""
     return (-dout,)
@@ -140,7 +141,7 @@ def bprop_scalar_cast(x, t, out, dout):
     return F.scalar_cast(dout, F.typeof(x)), t
 
 
-@bprops.register("tuple_getitem")
+@bprops.register(_constants.kTupleGetItem)
 def bprop_tuple_getitem(data, idx, out, dout):
     """Backpropagator for primitive `tuple_getitem`."""
     return F.tuple_setitem(C.zeros_like(data), idx, dout), C.zeros_like(idx)
@@ -186,12 +187,6 @@ def bprop_scalar_to_array(x, out, dout):
 def bprop_array_to_scalar(x, out, dout):
     """Backpropagator for primitive `array_to_scalar`."""
     return (F.scalar_to_array(dout),)
-
-
-@bprops.register("dot")
-def bprop_dot(x, y, out, dout):
-    """Backpropagator for primitive `dot`."""
-    return F.dot(dout, F.transpose(y, (1, 0))), F.dot(F.transpose(x, (1, 0)), dout)
 
 
 @bprops.register("reshape")
@@ -266,19 +261,27 @@ def bprop_bool_and(x, y, out, dout):
     return C.zeros_like(x), C.zeros_like(y)
 
 
-@bprops.register("ControlDepend")
-def bprop_control_depend(x, y, out, dout):
-    """Backpropagator for primitive `Control_depend`."""
-    return C.zeros_like(x), C.zeros_like(y)
-
-@bprops.register("switch")
+@bprops.register("Switch")
 def bprop_switch(cond, tb, fb, out, dout):
     """Backpropagator for primitive `switch`."""
     return C.zeros_like(cond), F.switch(cond, dout, C.zeros_like(tb)), \
-            F.switch(cond, C.zeros_like(fb), dout)
+        F.switch(cond, C.zeros_like(fb), dout)
+
 
 def _fprop_switch_layer(index, layers):
     """Backpropagator for primitive `switch_layer`."""
     def _bprop_switch_layer(dout):
         return dout, C.zeros_like(index), ()
     return F.switch_layer(index, layers), _bprop_switch_layer
+
+
+@bprops.register("UpdateState")
+def bprop_update_state(u_monad, x, out, dout):
+    """Backpropagator for primitive `UpdateState`."""
+    return C.zeros_like(u_monad), C.zeros_like(x)
+
+
+@bprops.register("Load")
+def bprop_load(param, u_monad, out, dout):
+    """Backpropagator for primitive `load`."""
+    return dout, C.zeros_like(u_monad)

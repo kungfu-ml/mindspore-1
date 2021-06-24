@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/engine/cache/cache_client.h"
 #include "minddata/dataset/engine/cache/cache_fbb.h"
 namespace mindspore {
@@ -223,7 +223,7 @@ Status CreateCacheRequest::Prepare() {
     rq_.add_buf_data(fbb.GetBufferPointer(), fbb.GetSize());
     return Status::OK();
   } catch (const std::bad_alloc &e) {
-    return Status(StatusCode::kOutOfMemory, __LINE__, __FILE__);
+    return Status(StatusCode::kMDOutOfMemory, __LINE__, __FILE__);
   }
 }
 
@@ -277,7 +277,7 @@ Status CacheSchemaRequest::SerializeCacheSchemaRequest(const std::unordered_map<
     rq_.add_buf_data(fbb.GetBufferPointer(), fbb.GetSize());
     return Status::OK();
   } catch (const std::bad_alloc &e) {
-    return Status(StatusCode::kOutOfMemory, __LINE__, __FILE__);
+    return Status(StatusCode::kMDOutOfMemory, __LINE__, __FILE__);
   }
 }
 
@@ -333,7 +333,9 @@ Status ListSessionsRequest::PostReply() {
     current_info.stats = stats;  // fixed length struct.  = operator is safe
     session_info_list_.push_back(current_info);
   }
-
+  server_cfg_.num_workers = msg->num_workers();
+  server_cfg_.log_level = msg->log_level();
+  server_cfg_.spill_dir = msg->spill_dir()->str();
   return Status::OK();
 }
 

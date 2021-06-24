@@ -19,6 +19,7 @@ import mindspore.nn as nn
 from mindspore import context
 from mindspore.common.tensor import Tensor
 from mindspore.ops import operations as P
+from mindspore.ops import _constants as Constants
 from mindspore.graph_utils.python_pass import registe_pass, unregiste_pass, set_renorm, gen_new_parameter,\
     cancel_new_parameter, set_reopt
 from mindspore.common.api import _generate_pip_args
@@ -273,12 +274,12 @@ def test_newparameter_pattern():
         new_para_0 = NewParameter("Merlin", default_tensor0)
         new_para_1 = NewParameter("Arthur", default_tensor1)
         target_0 = Call(P.MatMul(), [new_para_0, new_para_1])
-        target = Call("make_tuple", [target_0])
+        target = Call("MakeTuple", [target_0])
         return pattern, target
     transformed_repr = get_func_graph(softmax_model, inputs).get_return().expanded_str(5)
     unregiste_pass(softmax_addn_pass)
     assert "MatMul" in transformed_repr
-    assert "make_tuple" in transformed_repr
+    assert "MakeTuple" in transformed_repr
     assert "Softmax" not in transformed_repr
 
 def test_imm_target():
@@ -295,13 +296,13 @@ def test_imm_target():
         x = Any()
         pattern = Call(P.Softmax(), [x])
         imm = Imm(0)
-        target_0 = Call("make_tuple", [pattern])
-        target = Call("tuple_getitem", [target_0, imm])
+        target_0 = Call("MakeTuple", [pattern])
+        target = Call(Constants.kTupleGetItem, [target_0, imm])
         return pattern, target
     transformed_repr = get_func_graph(softmax_model, inputs).get_return().expanded_str(5)
     unregiste_pass(softmax_pass)
-    assert "make_tuple" in transformed_repr
-    assert "tuple_getitem" in transformed_repr
+    assert "MakeTuple" in transformed_repr
+    assert Constants.kTupleGetItem in transformed_repr
     assert "Softmax" in transformed_repr
 
 def test_gen_new_parameter():
@@ -322,7 +323,7 @@ def test_gen_new_parameter():
         softmax = P.Softmax()
         pattern = Call(softmax, [x])
 
-        target = Call("make_tuple", [pattern, new_para])
+        target = Call("MakeTuple", [pattern, new_para])
         return pattern, target
     transformed_repr = get_func_graph(softmax_model, inputs).get_return().expanded_str(5)
     assert "Merlin" in transformed_repr

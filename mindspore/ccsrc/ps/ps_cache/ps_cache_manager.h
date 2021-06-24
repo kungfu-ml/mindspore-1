@@ -29,9 +29,9 @@
 #include "backend/kernel_compiler/kernel.h"
 #include "utils/shape_utils.h"
 #include "ir/tensor.h"
-#include "ps/ps.h"
-#include "ps/common.h"
+#include "ps/constants.h"
 #include "ps/worker.h"
+#include "ps/ps_context.h"
 #include "ps/ps_cache/ps_data/ps_data_prefetch.h"
 #include "ps/ps_cache/embedding_hash_map.h"
 #include "ps/ps_cache/ps_cache_factory.h"
@@ -40,6 +40,7 @@ namespace mindspore {
 namespace ps {
 constexpr size_t kHostCacheScaleFactor = 10;
 constexpr size_t kMaxThreadNum = 16;
+constexpr size_t kMinIdsPerThread = 10000;
 using mindspore::kernel::Address;
 
 struct HashTableInfo {
@@ -53,7 +54,8 @@ struct HashTableInfo {
 };
 
 struct EmbeddingDeviceCache {
-  EmbeddingDeviceCache(size_t batch_elements, size_t cache_vocab_size) {
+  EmbeddingDeviceCache(size_t batch_elements, size_t cache_vocab_size)
+      : hash_swap_index_addr_(nullptr), hash_swap_value_addr_(nullptr) {
     device_to_host_index = std::make_unique<int[]>(batch_elements);
     device_to_host_ids = std::make_unique<int[]>(batch_elements);
     host_to_device_index = std::make_unique<int[]>(batch_elements);
@@ -124,8 +126,11 @@ class PsCacheManager {
   const size_t &QueryHashTableSize(const std::string &param_name) const;
   bool IsHashTable(const std::string &param_name) { return hash_tables_.count(param_name) != 0; }
   void set_batch_elements(size_t batch_elements) { batch_elements_ = batch_elements; }
+  void set_rank_id(int rank_id) { rank_id_ = rank_id; }
   bool initialized_ps_cache() const { return initialized_ps_cache_; }
-  void DoProcessData(uint32_t device_id, void *context);
+  size_t vocab_cache_size() const { return vocab_cache_size_; }
+  int cache_indices_lower_bound() const;
+  void DoProcessData(uint32_t device_id, const void *context);
   void IncreaseGraphStep(const std::string &channel_name);
   void SyncEmbeddingTable();
   void Finalize();
@@ -144,24 +149,24 @@ class PsCacheManager {
   void InitDataChannel();
   void AllocMemForHashTable();
   void SetLocalIdRank();
-  void ProcessDataTask(uint32_t device_id, void *context);
+  void ProcessDataTask(uint32_t device_id, const void *context);
   bool ProcessData();
   bool ParseData(const int *batch_ids, const size_t batch_ids_len, int *hash_index);
   bool WaitGraphRun();
   bool ParseDeviceData(size_t id, bool *need_swap_device_to_host, bool *need_swap_host_to_device, int *hash_index);
   bool ParseHostDataHostToDevice(size_t id);
   bool ParseHostDataDeviceToHost();
-  bool HashSwapDeviceOut(int *swap_out_index, ::ps::SArray<float> *swap_out_data, const HashTableInfo &hash_info);
-  bool HashSwapDeviceIn(int *swap_in_ids, int *swap_in_index, const HashTableInfo &hash_info, size_t key);
+  bool HashSwapDeviceOut(int *swap_out_index, std::vector<float> *swap_out_data, const HashTableInfo &hash_info);
+  bool HashSwapDeviceIn(const int *swap_in_ids, const int *swap_in_index, const HashTableInfo &hash_info, size_t key);
   bool HashSwapHostToDevice(const HashTableInfo &hash_info);
   bool HashSwapDeviceToHost(const HashTableInfo &hash_info);
   bool HashSwapHostToServer(size_t key, const HashTableInfo &hash_info);
   bool HashSwapServerToHost(size_t key, const HashTableInfo &hash_info);
-  bool InsertHostHashTable(size_t embedding_size, size_t insert_indices_size, int *insert_indices, float *insert_data,
-                           float *hash_table_addr);
+  bool InsertHostHashTable(size_t embedding_size, size_t insert_indices_size, const int *insert_indices,
+                           const float *insert_data, float *hash_table_addr);
   bool LookUpHostHashTable(size_t embedding_size, size_t indices_lens, const float *hash_table_addr,
                            const int *indices_addr, float *output_addr);
-  bool UpdataEmbeddingTable(const ::ps::SArray<float> &swap_out_data, int *swap_out_ids, size_t key);
+  bool UpdataEmbeddingTable(const std::vector<float> &swap_out_data, int *const swap_out_ids, size_t key);
   void LookUpTableTask(size_t indices_lens, size_t outer_dim_size, size_t first_dim_size, const float *input_addr,
                        const int *indices_addr, float *output_addr);
   bool CheckFinishInsertInitInfo() const;
@@ -169,6 +174,11 @@ class PsCacheManager {
   void DumpStatisticsInfo(size_t each_print_step = 1000);
   bool SyncHostEmbeddingTable();
   bool SyncDeviceEmbeddingTable();
+  bool CheckCacheHitOrOutRangeTask(const int *batch_ids, const size_t batch_ids_len, int *hash_index, bool *in_device,
+                                   bool *out_range, size_t *hash_hit_count);
+  bool CheckCacheHitOrOutRange(const int *batch_ids, const size_t batch_ids_len, int *hash_index, bool *in_device,
+                               bool *out_range);
+  bool ResetEmbeddingHashMap();
 
   bool initialized_ps_cache_{false};
   std::string channel_name_;
@@ -186,15 +196,20 @@ class PsCacheManager {
   std::shared_ptr<EmbeddingHostCache> embedding_host_cache_;
 
   size_t vocab_size_{0};
-  size_t cache_vocab_size_{0};
-  size_t host_cache_vocab_size_{0};
+  size_t vocab_cache_size_{0};
+  size_t host_vocab_cache_size_{0};
   size_t batch_elements_{0};
   PsCacheStatisticsInfo statistics_info_;
-  std::pair<size_t, size_t> range_bound_;
+  std::pair<int, int> emb_table_slice_bounds_;
+  std::pair<int, int> cache_indices_bounds_;
+  int vocab_cache_size_diff_{0};
+  int rank_id_{0};
   std::atomic_bool finish_insert_init_info_{false};
   std::atomic_bool finish_init_parameter_server_{false};
   std::atomic_bool running_{false};
   bool finish_embedding_table_sync_{false};
+  bool device_need_wait_graph_{false};
+  bool host_need_wait_graph_{false};
 };
 
 static PsCacheManager &ps_cache_instance = PsCacheManager::GetInstance();

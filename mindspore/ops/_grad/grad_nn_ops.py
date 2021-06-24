@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 # ============================================================================
 
 """Define the grad rules of neural network related operations."""
-import numpy as np
+import os
 from mindspore.ops import _selected_grad_ops as SG
 from mindspore.ops.primitive import constexpr
 from mindspore.common.tensor import Tensor
@@ -27,6 +27,8 @@ from ..composite.multitype_ops.zeros_like_impl import zeros_like
 from ..operations import _grad_ops as G
 from ..operations import _inner_ops as inner
 from ... import context
+
+env_force_bprop_seq = os.getenv("ENV_FORCE_BPROP_SEQ")
 
 
 @bprop_getters.register(P.BiasAdd)
@@ -55,6 +57,8 @@ def get_bprop_conv2d(self):
 
     def bprop(x, w, out, dout):
         dx = input_grad(dout, w, get_shape(x))
+        if env_force_bprop_seq == '1':
+            x = F.depend(x, dx)
         dw = filter_grad(dout, x, get_shape(w))
         return dx, dw
 
@@ -85,20 +89,21 @@ def get_bprop_conv3d(self):
 @bprop_getters.register(nps.Conv3DTranspose)
 def get_bprop_conv3d_transpose(self):
     """Grad definition for `Conv3DTranspose` operation."""
+    stride = (self.stride[2], self.stride[3], self.stride[4])
+    dilation = (self.dilation[2], self.dilation[3], self.dilation[4])
     input_grad = nps.Conv3D(
         out_channel=self.in_channel, kernel_size=self.kernel_size, mode=self.mode, pad_mode="pad",
-        pad=self.pad, stride=self.stride, dilation=self.dilation, group=self.group, data_format=self.data_format
+        pad=self.pad_list, stride=stride, dilation=dilation, group=self.group, data_format=self.data_format
     )
     filter_grad = G.Conv3DBackpropFilter(
         out_channel=self.in_channel, kernel_size=self.kernel_size, mode=self.mode, pad_mode="pad",
-        pad=self.pad, stride=self.stride, dilation=self.dilation, group=self.group, data_format=self.data_format
+        pad=self.pad_list, stride=self.stride, dilation=self.dilation, group=self.group, data_format=self.data_format
     )
-    input_size = self.input_size
 
     def bprop(x, w, out, dout):
         dx = input_grad(dout, w)
         dw = filter_grad(dout, x, F.shape(w))
-        return dx, dw, zeros_like(input_size)
+        return dx, dw, zeros_like(out)
 
     return bprop
 
@@ -162,17 +167,19 @@ def get_bprop_extract_image_patches(self):
 def get_bprop_depthwise_conv2d_native(self):
     """Grad definition for `DepthwiseConv2dNative` operation."""
     input_grad = G.DepthwiseConv2dNativeBackpropInput(
-        self.channel_multiplier, self.kernel_size, self.pad_mode, self.pad, self.pads, self.mode, self.stride,
+        self.channel_multiplier, self.kernel_size, self.pad_mode, self.pad, self.pad_list, self.mode, self.stride,
         self.dilation, self.group
     )
     filter_grad = G.DepthwiseConv2dNativeBackpropFilter(
-        self.channel_multiplier, self.kernel_size, self.pad_mode, self.pad, self.pads, self.mode, self.stride,
+        self.channel_multiplier, self.kernel_size, self.pad_mode, self.pad, self.pad_list, self.mode, self.stride,
         self.dilation, self.group
     )
     get_shape = P.Shape()
 
     def bprop(x, w, out, dout):
         dx = input_grad(get_shape(x), w, dout)
+        if env_force_bprop_seq == '1':
+            x = F.depend(x, dx)
         dw = filter_grad(x, get_shape(w), dout)
         return dx, dw
 
@@ -183,9 +190,9 @@ def get_bprop_depthwise_conv2d_native(self):
 def get_bprop_max_pool_with_argmax(self):
     """Grad definition for `MaxPoolWithArgmax` operation."""
     maxpool_grad = G.MaxPoolGradWithArgmax(
-        ksize=self.ksize,
+        kernel_size=self.kernel_size,
         strides=self.strides,
-        padding=self.padding)
+        pad_mode=self.pad_mode)
 
     def bprop(x, out, dout):
         dx = maxpool_grad(x, dout[0], out[1])
@@ -198,9 +205,9 @@ def get_bprop_max_pool_with_argmax(self):
 def get_bprop_max_pool_grad_grad(self):
     """Grad definition for `MaxPoolGrad` operation."""
     maxpool_grad_grad = G.MaxPoolGradGrad(
-        ksize=self.ksize,
+        kernel_size=self.kernel_size,
         strides=self.strides,
-        padding=self.padding)
+        pad_mode=self.pad_mode)
 
     def bprop(x1, x2, grad, out, dout):
         dx1 = zeros_like(x1)
@@ -215,9 +222,9 @@ def get_bprop_max_pool_grad_grad(self):
 def get_bprop_max_pool_grad_grad_grad(self):
     """Grad definition for `MaxPoolGradGrad` operation."""
     maxpool_grad = G.MaxPoolGrad(
-        ksize=self.ksize,
+        kernel_size=self.kernel_size,
         strides=self.strides,
-        padding=self.padding)
+        pad_mode=self.pad_mode)
 
     def bprop(x1, x2, grad, out, dout):
         dx1 = zeros_like(x1)
@@ -232,9 +239,9 @@ def get_bprop_max_pool_grad_grad_grad(self):
 def get_bprop_max_pool_grad(self):
     """Grad definition for `MaxPool` operation."""
     maxpool_grad = G.MaxPoolGrad(
-        ksize=self.ksize,
+        kernel_size=self.kernel_size,
         strides=self.strides,
-        padding=self.padding,
+        pad_mode=self.pad_mode,
         data_format=self.format)
 
     def bprop(x, out, dout):
@@ -244,149 +251,69 @@ def get_bprop_max_pool_grad(self):
     return bprop
 
 
-def _windowed_output_size(input_size, ksize, stride, padding):
-    """
-    helper func for AvgPoolGrad
-    """
+@bprop_getters.register(P.MaxPool3D)
+def get_bprop_max_pool3d_grad(self):
+    """Grad definition for `MaxPool3D` operation."""
+    max_pool3d_grad = G.MaxPool3DGrad(
+        kernel_size=self.kernel_size,
+        strides=self.strides,
+        pad_mode=self.pad_mode,
+        data_format=self.data_format)
 
-    tmp_output = 0
-    tmp_pad_need = 0
-    tmp_pad_before = 0
-    tmp_pad_after = 0
-    if padding == 'VALID':
-        tmp_output = (input_size - ksize + stride) // stride
-        tmp_pad_before = 0
-        tmp_pad_after = 0
-    elif padding == 'SAME':
-        tmp_output = (input_size + stride - 1) // stride
-        tmp_pad_need = max(0, (tmp_output - 1) * stride + ksize - input_size)
-        tmp_pad_before = tmp_pad_need // 2
-        tmp_pad_after = tmp_pad_need - tmp_pad_before
-    return tmp_output, tmp_pad_before, tmp_pad_after
+    def bprop(x, out, dout):
+        dx = max_pool3d_grad(x, out, dout)
+        return (dx,)
+
+    return bprop
 
 
-@constexpr
-def _get_mean_matrix(x_shape, ksize, stride, padding, x_dtype):
-    """
-    helper func for AvgPoolGrad.
+@bprop_getters.register(G.MaxPool3DGrad)
+def get_bprop_max_pool3d_grad_grad(self):
+    """Grad definition for `MaxPool3Grad` operation."""
+    max_pool3d_grad_grad = G.MaxPool3DGradGrad(
+        kernel_size=self.kernel_size,
+        strides=self.strides,
+        pad_mode=self.pad_mode,
+        data_format=self.data_format)
 
-    `assist_input_matrix` is a 2d matrix with input_shape after padding,
-    the value of element which is padded is 0, else are 1.
-    For each element of output, it is mapped for slide window: `[h*h_stride : h*h_stride + h_ksize,
-    w*w_stride : w*w_stride + w_ksize]` of `assist_input_matrix`, so the sum of slide window is the
-    number of input that assosiate with output element.
-    """
+    def bprop(x, y, grad, out, dout):
+        dgrad = max_pool3d_grad_grad(x, y, dout)
+        return zeros_like(x), zeros_like(y), dgrad
 
-    n_input, c_input, h_input, w_input = x_shape
-    h_ksize, w_ksize = ksize[2], ksize[3]
-    h_stride, w_stride = stride[2], stride[3]
-    n_output = n_input
-    c_output = c_input
-    h_output, w_output = 0, 0
-    pad_top, pad_bottom, pad_left, pad_right = 0, 0, 0, 0
-    h_output, pad_top, pad_bottom = _windowed_output_size(h_input, h_ksize,
-                                                          h_stride, padding)
-    w_output, pad_left, pad_right = _windowed_output_size(w_input, w_ksize,
-                                                          w_stride, padding)
-
-    output_size = n_output * c_output * h_output * w_output
-    output_shape = (n_output, c_output, h_output, w_output)
-    output = np.array([0.0] * output_size)
-    output = np.reshape(output, output_shape)
-
-    in_shape_after_padding_2d = (h_input + pad_top + pad_bottom, w_input + pad_left + pad_right)
-    assist_input_matrix = np.ones(in_shape_after_padding_2d).astype(np.float32)
-    if pad_top > 0:
-        assist_input_matrix[:pad_top, :] = 0
-    if pad_bottom > 0:
-        assist_input_matrix[-pad_bottom:, :] = 0
-    if pad_left > 0:
-        assist_input_matrix[:, :pad_left] = 0
-    if pad_right > 0:
-        assist_input_matrix[:, -pad_right:] = 0
-
-    for h in range(h_output):
-        for w in range(w_output):
-            curr_input = assist_input_matrix[h*h_stride : h*h_stride + h_ksize, w*w_stride : w*w_stride + w_ksize]
-            curr_sum = np.sum(curr_input)
-            if curr_sum > 0:
-                output[:, :, h, w] = 1. / curr_sum
-    return Tensor(output, x_dtype)
+    return bprop
 
 
-@constexpr
-def _get_kernel_matrix(x_shape_nchw, kernel_matrix_shape, padding, x_dtype):
-    kernel_matrix = np.ones(kernel_matrix_shape)
-    return Tensor(kernel_matrix, x_dtype)
+@bprop_getters.register(G.MaxPool3DGradGrad)
+def get_bprop_max_pool3d_grad_grad_grad(self):
+    """Grad definition for `MaxPool3GradGrad` operation."""
+
+    max_pool3d_grad = G.MaxPool3DGrad(
+        kernel_size=self.kernel_size,
+        strides=self.strides,
+        pad_mode=self.pad_mode,
+        data_format=self.data_format)
+
+    def bprop(x, y, grad, out, dout):
+        dgrad = max_pool3d_grad(x, y, dout)
+        return zeros_like(x), zeros_like(y), dgrad
+
+    return bprop
 
 
 @bprop_getters.register(P.AvgPool)
 def get_bprop_avg_pool_grad(self):
     """Grad definition for `AvgPool` operation."""
+    avgpool_grad = G.AvgPoolGrad(
+        kernel_size=self.kernel_size,
+        strides=self.strides,
+        pad_mode=self.pad_mode,
+        data_format=self.format)
 
-    # the parameter of AvgPoolGrad in GPU and TBE/CPU is not same
-    if self.target == "GPU":
-        avgpool_grad_gpu = G.AvgPoolGradGpu(
-                        ksize=self.ksize,
-                        strides=self.strides,
-                        padding=self.padding,
-                        data_format=self.format)
+    def bprop(x, out, dout):
+        dx = avgpool_grad(x, out, dout)
+        return (dx,)
 
-        def bprop_gpu(x, out, dout):
-            dx = avgpool_grad_gpu(x, out, dout)
-            return (dx,)
-
-        bprop_fn = bprop_gpu
-
-    elif self.target == "CPU":
-        avgpool_grad_cpu = G.AvgPoolGradCpu(
-            ksize=self.ksize,
-            strides=self.strides,
-            padding=self.padding,
-            data_format=self.format)
-
-        def bprop_cpu(x, out, dout):
-            dx = avgpool_grad_cpu(x, out, dout)
-            return (dx,)
-
-        bprop_fn = bprop_cpu
-
-    elif self.target == "GE":
-        avgpool_grad_ge = G.AvgPoolGrad(
-                        ksize=self.ksize,
-                        strides=self.strides,
-                        padding=self.padding)
-        shape_op = P.Shape()
-
-        def bprop_ge(x, out, dout):
-            dx = avgpool_grad_ge(shape_op(x), dout)
-            return (dx,)
-
-        bprop_fn = bprop_ge
-
-    else:
-        avgpool_grad_vm = G.AvgPoolGradVm(
-                        ksize=self.ksize,
-                        strides=self.strides,
-                        padding=self.padding)
-        k_size_nchw = avgpool_grad_vm.ksize
-        stride_nchw = avgpool_grad_vm.strides
-        padding = self.padding
-
-        def bprop_vm(x, out, dout):
-            x_shape_nchw = F.shape(x)
-            x_dtype = F.dtype(x)
-            kernel_matrix_shape = (1, x_shape_nchw[1],
-                                   k_size_nchw[2],
-                                   k_size_nchw[3])
-            mean_matrix = _get_mean_matrix(x_shape_nchw, k_size_nchw, stride_nchw, padding, x_dtype)
-            kernel_matrix = _get_kernel_matrix(x_shape_nchw, kernel_matrix_shape, padding, x_dtype)
-            dx = avgpool_grad_vm(x_shape_nchw, dout, mean_matrix, kernel_matrix)
-            return (dx,)
-
-        bprop_fn = bprop_vm
-
-    return bprop_fn
+    return bprop
 
 
 @bprop_getters.register(P.DropoutGenMask)
@@ -406,6 +333,58 @@ def get_bprop_dropout_do_mask(self):
 
     def bprop(x, y, keep_prob, out, dout):
         return (do_mask(dout, y, keep_prob), zeros_like(y), zeros_like(keep_prob))
+
+    return bprop
+
+
+@bprop_getters.register(P.Mish)
+def get_bprop_mish(self):
+    """Grad definition for `Mish` operation."""
+    tanh = P.Tanh()
+    tanh_grad = SG.TanhGrad()
+    softplus = P.Softplus()
+    softplus_grad = G.SoftplusGrad()
+
+    def bprop(x, out, dout):
+        dx1 = tanh(softplus(x))
+        dx2 = softplus_grad(tanh_grad(dx1, x * dout), x)
+        dx = (dx1 * dout + dx2)
+        return (dx,)
+
+    return bprop
+
+
+@bprop_getters.register(P.SeLU)
+def get_bprop_selu(self):
+    """Grad definition for `SeLU` operation."""
+    scale = 1.0507009873554804934193349852946
+    elu_grad = G.EluGrad()
+
+    def bprop(x, out, dout):
+        dx = elu_grad(dout, out) * scale
+        return (dx,)
+
+    return bprop
+
+
+@bprop_getters.register(P.MulNoNan)
+def get_bprop_mul_no_nan(self):
+    """Grad definition for `MulNoNan` operation."""
+    mul_no_nan = P.MulNoNan()
+    reduce_sum = P.ReduceSum()
+    reshape = P.Reshape()
+
+    def bprop(x, y, out, dout):
+        x_shape = F.shape(x)
+        y_shape = F.shape(y)
+        dx = mul_no_nan(dout, y)
+        dy = mul_no_nan(x, dout)
+        broadcast_x, broadcast_y = F.broadcast_gradient_args(x_shape, y_shape)
+        if broadcast_x != ():
+            dx = reshape(reduce_sum(dx, broadcast_x), x_shape)
+        if broadcast_y != ():
+            dy = reshape(reduce_sum(dy, broadcast_y), y_shape)
+        return dx, dy
 
     return bprop
 
@@ -623,10 +602,10 @@ def get_bprop_tanh_grad(self):
     return bprop
 
 
-@bprop_getters.register(P.Gelu)
+@bprop_getters.register(P.GeLU)
 def get_bprop_gelu(self):
-    """Grad definition for `Gelu` operation."""
-    input_grad = G.GeluGrad()
+    """Grad definition for `GeLU` operation."""
+    input_grad = G.GeLUGrad()
 
     def bprop(x, out, dout):
         dx = input_grad(dout, x, out)
@@ -635,10 +614,22 @@ def get_bprop_gelu(self):
     return bprop
 
 
-@bprop_getters.register(P.FastGelu)
+@bprop_getters.register(P.Gelu)
+def get_bprop_gelu_2(self):
+    """Grad definition for `GeLU` operation."""
+    input_grad = G.GeLUGrad()
+
+    def bprop(x, out, dout):
+        dx = input_grad(dout, x, out)
+        return (dx,)
+
+    return bprop
+
+
+@bprop_getters.register(P.FastGeLU)
 def get_bprop_fast_gelu(self):
-    """Grad definition for `FastGelu` operation."""
-    input_grad = G.FastGeluGrad()
+    """Grad definition for `FastGeLU` operation."""
+    input_grad = G.FastGeLUGrad()
 
     def bprop(x, out, dout):
         dx = input_grad(dout, x)
@@ -647,43 +638,30 @@ def get_bprop_fast_gelu(self):
     return bprop
 
 
-@bprop_getters.register(P.FusedBatchNorm)
-def get_bprop_fused_batch_norm(self):
-    """Grad definition for `FusedBatchNorm` operation."""
-    input_grad = G.FusedBatchNormGrad(self.epsilon, self.momentum)
-    target_cpu = False
-    if self.target == "CPU":
-        input_grad = G.FusedBatchNormGradCPU(self.epsilon, self.momentum)
-        target_cpu = True
-    def bprop(x, scale, b, mean, variance, out, dout):
-        saved_mean = out[3]
-        saved_variance = out[4]
-        if target_cpu:
-            out = input_grad(dout[0], x, scale, b, saved_mean, saved_variance)
-        else:
-            out = input_grad(dout[0], x, scale, saved_mean, saved_variance)
-        dx = out[0]
-        dscale = out[1]
-        dbias = out[2]
-        return dx, dscale, dbias, zeros_like(mean), zeros_like(variance)
+@bprop_getters.register(P.FastGelu)
+def get_bprop_fast_gelu_2(self):
+    """Grad definition for `FastGeLU` operation."""
+    input_grad = G.FastGeLUGrad()
+
+    def bprop(x, out, dout):
+        dx = input_grad(dout, x)
+        return (dx,)
 
     return bprop
 
+@bprop_getters.register(P.InstanceNorm)
+def get_bprop_instance_norm(self):
+    """Grad definition for `InstanceNorm` operation."""
+    input_grad = G.InstanceNormGrad(self.epsilon, self.momentum)
 
-@bprop_getters.register(P.FusedBatchNormEx)
-def get_bprop_fused_batch_norm_ex(self):
-    """Grad definition for `FusedBatchNormEx` operation."""
-    input_grad = G.FusedBatchNormGradEx(self.epsilon, self.momentum, self.format)
-
-    def bprop(x, scale, b, mean, variance, out, dout):
-        saved_mean = out[3]
-        saved_variance = out[4]
-        reserve = out[5]
-        out = input_grad(dout[0], x, scale, saved_mean, saved_variance, reserve)
+    def bprop(x, gamma, beta, mean, variance, out, dout):
+        saved_mean = out[1]
+        saved_variance = out[2]
+        out = input_grad(dout[0], x, gamma, saved_mean, saved_variance)
         dx = out[0]
-        dscale = out[1]
-        dbias = out[2]
-        return dx, dscale, dbias, zeros_like(mean), zeros_like(variance)
+        dgamma = out[1]
+        dbeta = out[2]
+        return dx, dgamma, dbeta, zeros_like(mean), zeros_like(variance)
 
     return bprop
 
@@ -692,16 +670,18 @@ def get_bprop_fused_batch_norm_ex(self):
 def get_bprop_batch_norm(self):
     """Grad definition for `BatchNorm` operation."""
     is_training = self.is_training
-    input_grad = G.BatchNormGrad(is_training, self.epsilon)
+    input_grad = G.BatchNormGrad(is_training, self.epsilon, self.data_format)
 
     def bprop(x, scale, b, mean, variance, out, dout):
         if is_training:
-            saved_reserve_1 = out[3]
-            saved_reserve_2 = out[4]
+            saved_mean = out[3]
+            saved_variance = out[4]
+            reserve = out[2]
         else:
-            saved_reserve_1 = mean
-            saved_reserve_2 = variance
-        out = input_grad(dout[0], x, scale, saved_reserve_1, saved_reserve_2)
+            saved_mean = mean
+            saved_variance = variance
+            reserve = out[2]
+        out = input_grad(dout[0], x, scale, saved_mean, saved_variance, reserve)
         dx = out[0]
         dscale = out[1]
         dbias = out[2]
@@ -761,6 +741,20 @@ def get_bprop_softmax_cross_entropy_with_logits(self):
     return bprop
 
 
+@bprop_getters.register(P.NLLLoss)
+def get_bprop_nll_loss(self):
+    """Grad definition for `NLLLoss` operation."""
+    nll_loss_grad = G.NLLLossGrad(reduction=self.reduction)
+
+    def bprop(x, target, weight, out, dout):
+        total_weight = out[1]
+        dout_x = dout[0]
+        dx = nll_loss_grad(x, dout_x, target, weight, total_weight)
+        return dx, zeros_like(target), zeros_like(weight)
+
+    return bprop
+
+
 @bprop_getters.register(P.SparseSoftmaxCrossEntropyWithLogits)
 def get_bprop_sparse_softmax_cross_entropy_with_logits(self):
     """Grad definition for `SparseSoftmaxCrossEntropyWithLogits` operation."""
@@ -807,6 +801,7 @@ def _range_op(start, limit, delta, dtype):
     output_tensor = Tensor(list(range(start, limit, delta)), dtype)
     return output_tensor
 
+
 @constexpr
 def _get_1d_shape(in_shape):
     """helper function for Grad TopK"""
@@ -814,6 +809,7 @@ def _get_1d_shape(in_shape):
     for i in in_shape:
         out_shape *= i
     return (out_shape,)
+
 
 @bprop_getters.register(P.TopK)
 def get_bprop_top_kv2(self):
@@ -825,7 +821,6 @@ def get_bprop_top_kv2(self):
     dtype = P.DType()
 
     def bprop(input_x, k, out, dout):
-
         in_shape = shape_op(input_x)
         in_lastdim = in_shape[-1]
 
@@ -886,6 +881,7 @@ def get_bprop_rnnt_loss(self):
     def bprop(acts, labels, act_lens, label_lens, out, dout):
         grad = out[1]
         return grad, zeros_like(labels), zeros_like(act_lens), zeros_like(label_lens)
+
     return bprop
 
 
@@ -974,6 +970,7 @@ def get_bprop_dynamic_rnn(self):
         dh_prev = expand_dims(dh_prev, 0)
         dc_prev = expand_dims(dc_prev, 0)
         return dx, dw, db, (0), dh_prev, dc_prev
+
     return bprop
 
 
@@ -992,6 +989,7 @@ def get_bprop_dynamic_gru_v2(self):
                                                                                     out_h, dy, dout_h[-1], update,
                                                                                     reset, new, hidden_new, None, None)
         return dx, dw_input, dw_hidden, db_input, db_hidden, (0), dh_prev
+
     return bprop
 
 
@@ -1072,6 +1070,8 @@ def get_bprop_conv2d_backprop_input(self):
 
     def bprop(x, w, f_sizes, out, dout):
         dx = input_grad(dout, w)
+        if env_force_bprop_seq == '1':
+            x = F.depend(x, dx)
         dw = filter_grad(x, dout, F.shape(w))
         return dx, dw, zeros_like(f_sizes)
 
@@ -1088,6 +1088,39 @@ def get_bprop_binary_cross_entropy(self):
         return dx, zeros_like(y), zeros_like(weight)
 
     return bprop
+
+
+@bprop_getters.register(P.BCEWithLogitsLoss)
+def get_bprop_ce_with_logits_loss(self):
+    """Grad definition for `BCEWithLogitsLoss` operation."""
+    reduction = self.reduction
+    mul = P.Mul()
+    sigmoid = P.Sigmoid()
+    add = P.Add()
+    sub = P.Sub()
+    size = P.Size()
+    neg = P.Neg()
+    log = P.Log()
+
+    def bprop(predict, target, weight, pos_weight, out, dout):
+        sigmoid_input = sigmoid(predict)
+        if pos_weight is not None:
+            t = mul(target, pos_weight)
+            dx = mul(sub(mul(sub(add(t, 1), target), sigmoid_input), t), dout)
+            grad_target = mul(sub(log(sub(1, sigmoid_input)), mul(pos_weight, log(sigmoid_input))), dout)
+        else:
+            dx = mul((sigmoid_input - target), dout)
+            grad_target = mul(predict, neg(dout))
+        if weight is not None:
+            dx = mul(dx, weight)
+            grad_target = mul(grad_target, weight)
+        if reduction == 'mean':
+            dx = dx / size(dx)
+            grad_target = grad_target / size(target)
+        return dx, grad_target, zeros_like(weight), zeros_like(pos_weight)
+
+    return bprop
+
 
 @bprop_getters.register(P.KLDivLoss)
 def get_bprop_kl_div_loss(self):
@@ -1111,6 +1144,46 @@ def get_bprop_dropout(self):
         dy, _ = dout
         dx = grad(dy, mask)
         return (dx,)
+
+    return bprop
+
+
+@bprop_getters.register(P.Dropout2D)
+def get_bprop_dropout2d(self):
+    """Grad definition for `Dropout2D` operation."""
+    dtype = P.DType()
+    cast = P.Cast()
+    mul = P.Mul()
+    keep_prob = self.keep_prob
+
+    def bprop(x, out, dout):
+        _, mask = dout
+        y = cast(mask, mstype.float32)
+        if keep_prob != 0:
+            y = y * (1 / keep_prob)
+        y = mul(x, y)
+        y = cast(y, dtype(x))
+        return (y,)
+
+    return bprop
+
+
+@bprop_getters.register(P.Dropout3D)
+def get_bprop_dropout3d(self):
+    """Grad definition for `Dropout3D` operation."""
+    dtype = P.DType()
+    cast = P.Cast()
+    mul = P.Mul()
+    keep_prob = self.keep_prob
+
+    def bprop(x, out, dout):
+        _, mask = dout
+        y = cast(mask, mstype.float32)
+        if keep_prob != 0:
+            y = y * (1 / keep_prob)
+        y = mul(x, y)
+        y = cast(y, dtype(x))
+        return (y,)
 
     return bprop
 
@@ -1147,6 +1220,7 @@ def get_bprop_basic_lstm_cell(self):
         dxt, dht = basic_lstm_cell_input_grad(dgate, w)
         dw, db = basic_lstm_cell_weight_grad(F.depend(x, dxt), h, dgate)
         return dxt, dht, dct_1, dw, db
+
     return bprop
 
 

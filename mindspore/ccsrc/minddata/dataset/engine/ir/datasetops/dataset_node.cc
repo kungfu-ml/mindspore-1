@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -143,6 +143,7 @@ Status ValidateDatasetSampler(const std::string &dataset_name, const std::shared
     MS_LOG(ERROR) << err_msg;
     RETURN_STATUS_SYNTAX_ERROR(err_msg);
   }
+  RETURN_IF_NOT_OK(sampler->ValidateParams());
   return Status::OK();
 }
 
@@ -191,28 +192,19 @@ std::shared_ptr<SamplerObj> SelectSampler(int64_t num_samples, bool shuffle, int
   if (shuffle) {
     if (num_shards > 1) {
       // If shuffle enabled, sharding enabled, use distributed random sampler
-      return DistributedSampler(num_shards, shard_id, shuffle, num_samples);
+      return DistributedSampler(num_shards, shard_id, shuffle, num_samples).Parse();
     }
     // If shuffle enabled, sharding disabled, use random sampler
-    return RandomSampler(num_samples >= 0, num_samples);
+    return RandomSampler(num_samples >= 0, num_samples).Parse();
   }
   if (num_shards > 1) {
     // If shuffle disabled, sharding enabled, use distributed sequential sampler
-    return DistributedSampler(num_shards, shard_id, shuffle, num_samples);
+    return DistributedSampler(num_shards, shard_id, shuffle, num_samples).Parse();
   }
   // If shuffle disabled, sharding disabled, use sequential sampler
-  return SequentialSampler(0, num_samples);
+  return SequentialSampler(0, num_samples).Parse();
 }
 
-Status DatasetNode::AddCacheOp(std::vector<std::shared_ptr<DatasetOp>> *node_ops) {
-  if (cache_ != nullptr) {
-    RETURN_IF_NOT_OK(cache_->Build());
-    std::shared_ptr<DatasetOp> cache_op;
-    RETURN_IF_NOT_OK(cache_->CreateCacheOp(num_workers_, &cache_op));
-    node_ops->push_back(cache_op);
-  }
-  return Status::OK();
-}
 // Constructor to initialize the cache
 DatasetNode::DatasetNode(const std::shared_ptr<DatasetCache> &dataset_cache) : DatasetNode() { cache_ = dataset_cache; }
 
@@ -221,15 +213,27 @@ std::shared_ptr<DatasetNode> DatasetNode::SetNumWorkers(int32_t num_workers) {
   return shared_from_this();
 }
 
-DatasetNode::DatasetNode() : cache_(nullptr), parent_(nullptr), children_({}), dataset_size_(-1) {
+std::shared_ptr<DatasetNode> DatasetNode::SetDatasetCache(const std::shared_ptr<DatasetCache> &cache) {
+  cache_ = cache;
+  return shared_from_this();
+}
+
+DatasetNode::DatasetNode()
+    : cache_(nullptr),
+      parent_(nullptr),
+      children_({}),
+      dataset_size_(-1),
+      mappable_(kNotADataSource),
+      nary_op_(false),
+      descendant_of_cache_(false),
+      total_repeats_(-1),
+      num_epochs_(1) {
   // Fetch some default value from config manager
   std::shared_ptr<ConfigManager> cfg = GlobalContext::config_manager();
   num_workers_ = cfg->num_parallel_workers();
   rows_per_buffer_ = cfg->rows_per_buffer();
   connector_que_size_ = cfg->op_connector_size();
   worker_connector_size_ = cfg->worker_connector_size();
-  mappable_ = kNotADataSource;
-  descendant_of_cache_ = false;
 }
 
 std::string DatasetNode::PrintColumns(const std::vector<std::string> &columns) const {
@@ -258,7 +262,7 @@ void DatasetNode::PrintTree(std::ostream &out) const {
 
 void DatasetNode::PrintNode(std::ostream &out, int *level) const {
   const std::string prefix = "+-";
-  const std::string indent = "  ";
+  const std::string indent = "| ";
   out << prefix;
   Print(out);
   for (const auto &c : this->Children()) {
@@ -283,115 +287,320 @@ void DatasetNode::AddChild(std::shared_ptr<DatasetNode> child) {
   }
 }
 
-// Add the input node to be the next child of this node
-// This function is used in doing a deep copy of the IR tree built by parsing the user code.
-// This function assumes we walk the tree in DFS left-to-right.
-// This is a temporary function to be replaced later by a set of better tree operations.
-void DatasetNode::AppendChild(std::shared_ptr<DatasetNode> child) {
-  if (child != nullptr) {
-    if (child->parent_ != nullptr) {
-      MS_LOG(WARNING) << "Adding " + child->Name() + " to " + Name() + " but it already has a parent";
-    }
-    children_.push_back(child);
-    child->parent_ = this;
-  }
+/*
+ * AppendChild(<node>) appending <node> as the last child of this node. The new node must have no parent.
+ *
+ * Input tree:
+ *      ds4
+ *     /   \
+ *   ds3   ds2
+ *     |
+ *    ds1
+ *
+ * ds4->AppendChild(ds6) yields this tree
+ *
+ *      _ ds4 _
+ *     /   |   \
+ *   ds3  ds2  ds6
+ *    |
+ *   ds1
+ *
+ */
+Status DatasetNode::AppendChild(std::shared_ptr<DatasetNode> child) {
+  CHECK_FAIL_RETURN_UNEXPECTED(IsOrphanNode(child), "Node to append must be an orphan node.");
+  CHECK_FAIL_RETURN_UNEXPECTED((IsUnaryOperator() && Children().empty()) || IsNaryOperator(),
+                               "This node must be a unary operator with no child or an n-ary operator");
+  children_.push_back(child);
+  child->parent_ = this;
+  return Status::OK();
 }
 
-// Add a node as a parent, node's parent needs to be empty (future use)
-Status DatasetNode::InsertAbove(std::shared_ptr<DatasetNode> node) {
-  CHECK_FAIL_RETURN_UNEXPECTED(node != nullptr, "Inserted node must not be a null pointer.");
+/*
+ * InsertChildAt(<pos>, <node>) inserts the <node> to be at the <pos> index of the vector of its child nodes.
+ * As in the convention of C++, <pos> starts at position 0.
+ * If the <pos> is a negative number or larger than the size of the vector minus one, an error is raised.
+ */
+Status DatasetNode::InsertChildAt(int32_t pos, std::shared_ptr<DatasetNode> child) {
+  CHECK_FAIL_RETURN_UNEXPECTED(pos > -1 && pos <= children_.size(), "Position must in the range of [0, size]");
+  CHECK_FAIL_RETURN_UNEXPECTED(IsOrphanNode(child), "Node to append must be an orphan node.");
+  CHECK_FAIL_RETURN_UNEXPECTED((IsUnaryOperator() && Children().empty()) || IsNaryOperator(),
+                               "This node must be a unary operator with no child or an n-ary operator");
+  children_.insert(children_.begin() + pos, child);
+  child->parent_ = this;
+  return Status::OK();
+}
 
-  if (node->parent_ != nullptr) {
-    DatasetNode *parent = node->parent_;
-    for (auto i = parent->children_.size() - 1; i >= 0; --i) {
-      if (parent->children_[i] == node) {
-        parent->children_[i] = static_cast<std::shared_ptr<DatasetNode>>(this);
+/*
+ * Insert the input <node> above this node
+ * Input tree:
+ *       ds4
+ *      /   \
+ *     ds3  ds2
+ *      |
+ *     ds1
+ *
+ * Case 1: If we want to insert a new node ds5 between ds4 and ds3, use
+ *           ds3->InsertAbove(ds5)
+ *
+ *       ds4
+ *      /   \
+ *     ds5  ds2
+ *      |
+ *     ds3
+ *      |
+ *     ds1
+ *
+ * Case 2: Likewise, ds2->InsertAbove(ds6) yields
+ *
+ *       ds4
+ *      /   \
+ *     ds3  ds6
+ *      |    |
+ *     ds1  ds2
+ *
+ * Case 3: We can insert a new node between ds3 and ds1 by ds1->InsertAbove(ds7)
+ *
+ *       ds4
+ *      /   \
+ *     ds3  ds2
+ *      |
+ *     ds7
+ *      |
+ *     ds1
+ *
+ * InsertAbove() cannot use on the root node of a tree.
+ */
+Status DatasetNode::InsertAbove(std::shared_ptr<DatasetNode> node) {
+  CHECK_FAIL_RETURN_UNEXPECTED(IsOrphanNode(node), "Node to insert must be an orphan node.");
+  CHECK_FAIL_RETURN_UNEXPECTED(parent_ != nullptr, "This node must not be the root or a node without parent.");
+  auto parent = parent_;
+
+  // The following fields of these three nodes are changed in this function:
+  // 1. parent->children_
+  // 2. node->parent_ and node->children_
+  // 3. this->parent_
+  auto current_node_itr = std::find(parent_->children_.begin(), parent_->children_.end(), shared_from_this());
+  *current_node_itr = node;  // replace me in my parent's children list with the newly inserted node
+  node->parent_ = parent;    // set the newly inserted node's parent ptr to my parent
+  node->children_.push_back(shared_from_this());  // add myself to the newly inserted node's children list
+  parent_ = node.get();                           // set my parent ptr to the newly inserted node
+
+  return Status::OK();
+}
+
+/*
+ * Drop() detaches this node from the tree it is in. Calling Drop() from a standalone node is a no-op.
+ *
+ * Input tree:
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds8 ds5 ds4 ds1
+ *     |     /  \
+ *    ds7  ds3  ds2
+ *
+ * Case 1: When the node has no child and no sibling, Drop() detaches the node from its tree.
+ *
+ *   ds7->Drop() yields the tree below:
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds8 ds5 ds4 ds1
+ *           /  \
+ *         ds3  ds2
+ *
+ * Case 2: When the node has one child and no sibling, Drop() detaches the node from its tree and the node's child
+ *         becomes its parent's child.
+ *
+ *   ds8->Drop() yields the tree below:
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds7 ds5 ds4 ds1
+ *           /  \
+ *         ds3  ds2
+ *
+ * Case 3: When the node has more than one child and no sibling, Drop() detaches the node from its tree and the node's
+ *         children become its parent's children.
+ *
+ *   When the input tree is
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |      |
+ *    ds8    ds4
+ *     |    /   \
+ *    ds7  ds3  ds2
+ *
+ *    ds4->Drop() yields the tree below:
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |     /  \
+ *    ds8  ds3  ds2
+ *     |
+ *    ds7
+ *
+ *   But if ds6 is not an n-ary operator, ds4->Drop() will raise an error because we cannot add the children of an
+ *   n-ary operator (ds4) to a unary operator (ds6).
+ *
+ * Case 4: When the node has no child but has siblings, Drop() detaches the node from its tree and its siblings will be
+ *         squeezed left.
+ *
+ * Input tree:
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds8 ds5 ds4 ds1
+ *     |     /  \
+ *    ds7  ds3  ds2
+ *
+ *   ds5->Drop() yields the tree below:
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |     /  \
+ *    ds8   ds4 ds1
+ *     |    /  \
+ *    ds7 ds3  ds2
+ *
+ * Case 5: When the node has only one child but has siblings, Drop() detaches the node from its tree and the node's
+ *         children become its parent's children.
+ *
+ * Input tree:
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds8 ds5 ds4 ds1
+ *     |      |
+ *    ds7     ds3
+ *
+ *   ds4->Drop() yields the tree below:
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds8 ds5 ds3 ds1
+ *     |
+ *    ds7
+ *
+ * Case 6: When the node has more than one child and more than one sibling, Drop() will raise an error.
+ *         If we want to drop ds4 from the input tree, ds4->Drop() will not work. We will have to do it
+ *         with a combination of Drop(), InsertChildAt()
+ *
+ * Input tree:
+ *       ds10
+ *      /    \
+ *    ds9    ds6
+ *     |   /  |  \
+ *    ds8 ds5 ds4 ds1
+ *     |     /  \
+ *    ds7  ds3  ds2
+ *
+ * If we want to form this tree below:
+ *
+ *       ds10
+ *      /    \
+ *    ds9    ds6_____
+ *     |   /  |   |  \
+ *    ds8 ds5 ds3 ds2 ds1
+ *     |
+ *    ds7
+ *
+ */
+Status DatasetNode::Drop() {
+  CHECK_FAIL_RETURN_UNEXPECTED(parent_ != nullptr, "This node to drop must not be the root or a node without parent.");
+  CHECK_FAIL_RETURN_UNEXPECTED(!(IsNaryOperator() && parent_->IsUnaryOperator()),
+                               "Trying to drop an n-ary operator that is a child of a unary operator");
+  CHECK_FAIL_RETURN_UNEXPECTED(!(children_.size() > 1 && parent_->children_.size() > 1),
+                               "This node to drop must not have more than one child and more than one sibling.");
+  if (parent_->children_.size() == 1) {
+    auto parent = parent_;
+    // Case 2: When the node has one child and no sibling, Drop() detaches the node from its tree and the node's child
+    //         becomes its parent's child.
+    // This is the most common use case.
+    if (children_.size() == 1) {
+      auto child = children_[0];
+      // Move its child to be its parent's child
+      parent->children_[0] = child;
+      child->parent_ = parent;
+    } else if (children_.empty()) {
+      // Case 1: When the node has no child and no sibling, Drop() detaches the node from its tree.
+      // Remove this node from its parent's child
+      parent_->children_.clear();
+    } else if (children_.size() > 1) {
+      // Case 3: When the node has more than one child and no sibling, Drop() detaches the node from its tree and
+      //         the node's children become its parent's children.
+      // Remove this node from its parent's child
+      parent->children_.clear();
+      // Move its child to be its parent's child
+      for (auto &child : children_) {
+        parent->children_.push_back(child);
+        child->parent_ = parent;
       }
     }
-  }
-  children_.push_back(node);
-  node->parent_ = this;
-
-  return Status::OK();
-}
-
-// Insert a node as a child of this node
-// This node's children become the children of the inserted node.
-Status DatasetNode::InsertBelow(std::shared_ptr<DatasetNode> node) {
-  CHECK_FAIL_RETURN_UNEXPECTED(node != nullptr, "Inserted node must not be a null pointer.");
-  CHECK_FAIL_RETURN_UNEXPECTED(node->children_.empty(), "Inserted node must not have any children.");
-  CHECK_FAIL_RETURN_UNEXPECTED(node->parent_ == nullptr, "Inserted node must not have a parent.");
-
-  for (auto child : children_) {
-    node->children_.push_back(child);
-    child->parent_ = node.get();
-  }
-  // Then establish the new parent-child relationship with the new parent.
-  children_.clear();
-  children_.push_back(node);
-  node->parent_ = this;
-  return Status::OK();
-}
-
-// Insert a node as a child next to this node (future use)
-Status DatasetNode::InsertAfter(std::shared_ptr<DatasetNode> node) {
-  CHECK_FAIL_RETURN_UNEXPECTED(parent_ != nullptr, "This node must have a parent.");
-  CHECK_FAIL_RETURN_UNEXPECTED(node->parent_ == nullptr, "Inserted node must not have a parent.");
-  auto size = parent_->children_.size();
-  // Duplicate the last child to increase the size by 1
-  parent_->children_.push_back(parent_->children_[size - 1]);
-  // Shift each child to its right until we found the insertion point, then insert the input node
-  bool found = false;
-  for (auto i = parent_->children_.size() - 2; i >= 0; --i) {
-    if (parent_->children_[i].get() != this) {
-      parent_->children_[i + 1] = parent_->children_[i];
-    } else {
-      parent_->children_[i + 1] = node;
-      node->parent_ = parent_;
-      found = true;
-      break;
-    }
-  }
-  CHECK_FAIL_RETURN_UNEXPECTED(!found, "Insertion point not found.");
-  return Status::OK();
-}
-
-// Remove this node from its parent. Add the child of this node to its parent.
-// for now, this remove is limited to node with a single child or no child
-Status DatasetNode::Remove() {
-  CHECK_FAIL_RETURN_UNEXPECTED(parent_ != nullptr, "Cannot remove root or a node without parent.");
-  CHECK_FAIL_RETURN_UNEXPECTED(children_.size() < 2, "Cannot remove node with more than 1 child.");
-  if (children_.empty()) {  // I am a leaf node, remove me from my parent's children list
-    parent_->children_.erase(std::remove(parent_->children_.begin(), parent_->children_.end(), shared_from_this()),
-                             parent_->children_.end());  // removal using "erase remove idiom"
-  } else {  // replace my position in my parent's children list with my single child
+    // And mark itself as an orphan
+    parent_ = nullptr;
+    children_.clear();
+  } else if (children_.empty() && parent_->children_.size() > 1) {
+    // Case 4: When the node has no child but has siblings, Drop() detaches the node from its tree and its siblings will
+    //         be squeezed left.
+    auto parent = parent_;
+    // Remove this node from its parent's child
+    parent->children_.erase(std::remove(parent->children_.begin(), parent->children_.end(), shared_from_this()),
+                            parent->children_.end());  // removal using "erase remove idiom"
+    // And mark itself as an orphan
+    parent_ = nullptr;
+    children_.clear();
+  } else if (children_.size() == 1 && parent_->children_.size() > 1) {
+    // Case 5: When the node has only one child but has siblings, Drop() detaches the node from its tree and the node's
+    //         children become its parent's children.
     auto itr = std::find(parent_->children_.begin(), parent_->children_.end(), shared_from_this());
     CHECK_FAIL_RETURN_UNEXPECTED(itr != parent_->children_.end(), "I am not in my parent's children list.");
-    children_[0]->parent_ = parent_;  // set my single child's parent ptr to my parent
-    *itr = std::move(children_[0]);   // replace me in my parent's children list with my single child
-    children_.clear();                // release my single child from my children list
+    *itr = children_[0];              // replace this node in its parent's children list with its single child
+    children_[0]->parent_ = parent_;  // set its single child's parent ptr to its parent
+    // And mark itself as an orphan
+    parent_ = nullptr;
+    children_.clear();
+  } else {
+    RETURN_STATUS_UNEXPECTED("Internal error: we should not reach here.");
   }
-  parent_ = nullptr;
   return Status::OK();
 }
 
 // In DFS tree traversal, each node is visited twice. Accept is called on the first visit.
-Status DatasetNode::Accept(IRNodePass *p, bool *modified) {
+Status DatasetNode::Accept(IRNodePass *const p, bool *const modified) {
   // This method will only be called if its derived class does not implement one.
   return p->Visit(shared_from_this(), modified);
 }
 
 // In DFS tree traversal, each node is visited twice. AcceptAfter is called on the second visit
 // after all child nodes are visited.
-Status DatasetNode::AcceptAfter(IRNodePass *p, bool *modified) {
+Status DatasetNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
   // This method will only be called if its derived class does not implement one.
   return p->VisitAfter(shared_from_this(), modified);
 }
 
-Status DatasetNode::GetShardId(int32_t *shard_id) {
-  if (!Children().empty()) {
+Status DatasetNode::GetShardId(int32_t *const shard_id) {
+  if (children_.size() == 1) {
     // Get shard id from the child node
-    return Children()[0]->GetShardId(shard_id);
+    return children_[0]->GetShardId(shard_id);
+  } else if (children_.size() > 1) {
+    // It is okay for dataset to have more than 1 child, GetShardId shouldn't fail in this case.
+    // This is done mostly for cache, which injects cache lookup/merge operators. Cache path will
+    // always be in front of the child_ structure, so we get the dataset size from the last child.
+    return children_.back()->GetShardId(shard_id);
   } else {
     RETURN_STATUS_SYNTAX_ERROR("Get Shard Id failed at source node: " + Name() + "\n");
   }
@@ -410,12 +619,12 @@ Status DatasetNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &siz
     return Status::OK();
   }
   if (children_.size() == 1) {
-    return children_[0]->GetDatasetSize(size_getter, estimate, dataset_size);
+    return children_.front()->GetDatasetSize(size_getter, estimate, dataset_size);
   } else if (children_.size() > 1) {
     // It is okay for dataset to have more than 1 child, GetDatasetSize shouldn't fail in this case.
     // This is done mostly for cache, which injects cache lookup/merge operators. Cache path will
     // always be in front of the child_ structure, so we get the dataset size from the last child.
-    return children_[children_.size() - 1]->GetDatasetSize(size_getter, estimate, dataset_size);
+    return children_.back()->GetDatasetSize(size_getter, estimate, dataset_size);
   } else {
     RETURN_STATUS_UNEXPECTED("Trying to get dataset size from leaf node, missing override");
   }
@@ -427,16 +636,24 @@ Status DatasetNode::ValidateParams() {
   CHECK_FAIL_RETURN_UNEXPECTED(
     num_workers_ > 0 && num_workers_ <= num_threads,
     Name() + "'s num_workers=" + std::to_string(num_workers_) +
-      ", this value is not within the required range of [1, cpu_thread_cnt=" + std::to_string(num_threads) + "].");
+      "(default=8), this value is not within the required range of [1, cpu_thread_cnt=" + std::to_string(num_threads) +
+      "], you can modify num_workers in script like:\n" + Name() + "(data_path, num_parallel_workers=4)");
   return Status::OK();
 }
 
-Status MappableSourceNode::Accept(IRNodePass *p, bool *modified) {
+Status DatasetNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["num_parallel_workers"] = num_workers_;
+  *out_json = args;
+  return Status::OK();
+}
+
+Status MappableSourceNode::Accept(IRNodePass *const p, bool *const modified) {
   return p->Visit(shared_from_base<MappableSourceNode>(), modified);
 }
 
-Status NonMappableSourceNode::Accept(IRNodePass *p, bool *modified) {
-  return p->Visit(shared_from_base<MappableSourceNode>(), modified);
+Status NonMappableSourceNode::Accept(IRNodePass *const p, bool *const modified) {
+  return p->Visit(shared_from_base<NonMappableSourceNode>(), modified);
 }
 
 }  // namespace dataset

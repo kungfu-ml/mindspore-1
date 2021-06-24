@@ -24,6 +24,7 @@
 #include "pybind_api/api_register.h"
 #include "abstract/abstract_value.h"
 #include "utils/shape_utils.h"
+#include "utils/cache_embedding_hashmap_struct.h"
 
 namespace mindspore {
 namespace tensor {
@@ -258,12 +259,90 @@ py::tuple TensorPy::GetPyTupleShape(const Tensor &tensor) {
   return dims;
 }
 
-py::array TensorPy::SyncAsNumpy(const Tensor &tensor) {
+py::tuple TensorPy::GetPyTupleStrides(const Tensor &tensor) {
+  std::vector<ssize_t> shape(tensor.shape().begin(), tensor.shape().end());
+  std::vector<ssize_t> strides = GetStrides(shape, tensor.data().itemsize());
+  py::tuple py_strides(strides.size());
+  for (size_t i = 0; i < strides.size(); ++i) {
+    py_strides[i] = py::int_(strides[i]);
+  }
+  return py_strides;
+}
+
+py::int_ TensorPy::GetPyItemSize(const Tensor &tensor) { return tensor.data().itemsize(); }
+
+py::int_ TensorPy::GetPyNBytes(const Tensor &tensor) { return tensor.data().nbytes(); }
+
+template <typename T>
+void MemCopyFromCacheToHost(void *hashmap_addr, void *host_addr, void *cache_addr, size_t host_max, size_t cache_max,
+                            size_t hashmap_size, size_t col_size) {
+  auto host_data = static_cast<char *>(host_addr);
+  auto cache_data = static_cast<char *>(cache_addr);
+  auto hashmap_data = static_cast<HashmapEntry<T> *>(hashmap_addr);
+  // default param type float
+  const size_t param_type_size = 4;
+  size_t single_col_bytes = param_type_size * col_size;
+  for (size_t i = 0; i < hashmap_size; ++i) {
+    if (!hashmap_data[i].IsEmpty()) {
+      size_t host_offset = single_col_bytes * hashmap_data[i].key_;
+      size_t cache_offset = single_col_bytes * hashmap_data[i].value_;
+      if (cache_offset + single_col_bytes <= cache_max) {
+        auto ret =
+          memcpy_s(host_data + host_offset, host_max - host_offset, cache_data + cache_offset, single_col_bytes);
+        if (ret != 0) {
+          MS_LOG(EXCEPTION) << "Memcpy failed.";
+        }
+      }
+    }
+  }
+  MS_LOG(INFO) << "Memcpy from cache to host success!";
+}
+
+void TensorPy::FlushFromCache(const Tensor &tensor) {
+  py::gil_scoped_release gil_release;
   if (tensor.NeedWait()) {
-    py::gil_scoped_release gil_release;
     tensor.Wait();
   }
   tensor.data_sync();
+
+  if (tensor.cache_enable()) {
+    MS_LOG(INFO) << tensor.ToString() << " is cache enable.";
+    auto hashmap_tensor_ptr = tensor.hashmap_tensor_ptr();
+    auto cache_tensor_ptr = tensor.cache_tensor_ptr();
+    if (hashmap_tensor_ptr != nullptr && cache_tensor_ptr != nullptr) {
+      hashmap_tensor_ptr->data_sync();
+      cache_tensor_ptr->data_sync();
+      auto hashmap_size = hashmap_tensor_ptr->shape_c()[0];
+      auto host_shape = tensor.shape_c();
+      auto cache_shape = cache_tensor_ptr->shape_c();
+      if (host_shape.size() != 2 && host_shape.size() != 2 && host_shape[1] != cache_shape[1]) {
+        MS_LOG(EXCEPTION) << "Got host shape and cache shape invalid."
+                          << "host shape:" << host_shape << ", cache shape:" << cache_shape;
+      }
+      auto host_data_max_size = tensor.Size();
+      auto cache_data_max_size = cache_tensor_ptr->Size();
+      auto hashmap_data_type = hashmap_tensor_ptr->data_type();
+      if (hashmap_data_type == TypeId::kNumberTypeInt32) {
+        MemCopyFromCacheToHost<int32_t>(hashmap_tensor_ptr->data_c(), tensor.data_c(), cache_tensor_ptr->data_c(),
+                                        host_data_max_size, cache_data_max_size, hashmap_size, host_shape[1]);
+      } else if (hashmap_data_type == TypeId::kNumberTypeInt64) {
+        MemCopyFromCacheToHost<int32_t>(hashmap_tensor_ptr->data_c(), tensor.data_c(), cache_tensor_ptr->data_c(),
+                                        host_data_max_size, cache_data_max_size, hashmap_size, host_shape[1]);
+      } else {
+        MS_LOG(ERROR) << "Hashmap dtype only suppotr int32, in64.";
+      }
+    }
+  }
+}
+
+py::array TensorPy::SyncAsNumpy(const Tensor &tensor) {
+  {
+    py::gil_scoped_release gil_release;
+    if (tensor.NeedWait()) {
+      tensor.Wait();
+    }
+    tensor.data_sync();
+  }
   return AsNumpy(tensor);
 }
 
@@ -295,7 +374,7 @@ REGISTER_PYBIND_DEFINE(Tensor, ([](const py::module *m) {
                            .def(py::init<TypePtr, const ShapeVector>(), py::arg("dtype"), py::arg("shape"))
                            .def_property_readonly("dtype", &MetaTensor::Dtype, "Get the MetaTensor's dtype.")
                            .def_property_readonly("shape", &MetaTensor::shape, "Get the MetaTensor's shape.")
-                           .def_property("_param_info", &MetaTensor::param_info, &MetaTensor::set_param_info)
+                           .def_property("param_info", &MetaTensor::param_info, &MetaTensor::set_param_info)
                            .def(py::pickle(
                              [](const MetaTensor &t) {  // __getstate__
                                /* Return a tuple that fully encodes the state of the object */
@@ -323,6 +402,11 @@ REGISTER_PYBIND_DEFINE(Tensor, ([](const py::module *m) {
                                 }),
                                 py::arg("input"), py::arg("dtype"))
                            .def(py::init([](const TypePtr &type_ptr, const py::tuple &shape) {
+                                  auto data_type = type_ptr ? type_ptr->type_id() : TypeId::kNumberTypeFloat64;
+                                  return std::make_shared<Tensor>(data_type, GetShapeFromTuple(shape));
+                                }),
+                                py::arg("dtype"), py::arg("shape"))
+                           .def(py::init([](const TypePtr &type_ptr, const py::list &shape) {
                                   auto data_type = type_ptr ? type_ptr->type_id() : TypeId::kNumberTypeFloat64;
                                   return std::make_shared<Tensor>(data_type, GetShapeFromTuple(shape));
                                 }),
@@ -381,6 +465,40 @@ REGISTER_PYBIND_DEFINE(Tensor, ([](const py::module *m) {
                                  >>> data.size
                                  6
                              )mydelimiter")
+                           .def_property_readonly("_itemsize", TensorPy::GetPyItemSize, R"mydelimiter(
+                             Get the tensor's length of one element in bytes.
+
+                             Returns:
+                                 itemsize, length of one element in bytes.
+
+                             Examples:
+                                 >>> data = mindspore.Tensor(np.ones((2, 1), np.int32))
+                                 >>> data.itemsize
+                                 4
+                             )mydelimiter")
+                           .def_property_readonly("_nbytes", TensorPy::GetPyNBytes, R"mydelimiter(
+                             Get the tensor's total number of bytes.
+
+                             Returns:
+                                 nbytes, total number of bytes taken by the tensor.
+
+                             Examples:
+                                 >>> data = mindspore.Tensor(np.ones((2, 1), np.int32))
+                                 >>> data.nbytes
+                                 4
+                             )mydelimiter")
+                           .def_property_readonly("_strides", TensorPy::GetPyTupleStrides, R"mydelimiter(
+                             Get the tensor's tuple of bytes to step in each dimension
+                             when traversing an array.
+
+                             Returns:
+                                 tuple[int], the strides of the tensor.
+
+                             Examples:
+                                 >>> data = mindspore.Tensor(np.ones((2, 1), np.int32))
+                                 >>> data.strides
+                                 (4, 4)
+                             )mydelimiter")
                            .def("from_numpy", TensorPy::MakeTensorNoCopy, R"mydelimiter(
                              Creates a Tensor from a numpy.ndarray without copy.
 
@@ -406,6 +524,16 @@ REGISTER_PYBIND_DEFINE(Tensor, ([](const py::module *m) {
                                  >>> array
                                  array([[1., 1., 1.],
                                         [1., 1., 1.]])
+                             )mydelimiter")
+                           .def("_flush_from_cache", TensorPy::FlushFromCache, R"mydelimiter(
+                             Flush Cache data to Host if tensor is cache enable.
+
+                             Returns:
+                                 None.
+
+                             Examples:
+                                 >>> data = mindspore.Tensor(np.ones((2, 3)))
+                                 >>> data._flush_from_cache()
                              )mydelimiter")
                            .def("is_init", &Tensor::is_init, R"mydelimiter(
                              Get tensor init_flag.

@@ -38,7 +38,9 @@ int FillCPUKernel::Init() {
 int FillCPUKernel::ReSize() {
   data_size_ = out_tensors_.front()->ElementsNum();
   thread_sz_count_ = MSMIN(thread_count_, data_size_);
-  thread_sz_stride_ = UP_DIV(data_size_, thread_sz_count_);
+  if (thread_sz_count_ != 0) {
+    thread_sz_stride_ = UP_DIV(data_size_, thread_sz_count_);
+  }
   return RET_OK;
 }
 
@@ -51,7 +53,7 @@ int FillCPUKernel::DoFill(int task_id) {
   auto input_tensor = in_tensors_.at(0);
   int ret = RET_OK;
   if (input_tensor->data_type() == kNumberTypeFloat32 || input_tensor->data_type() == kNumberTypeFloat) {
-    ret = Fill(out_ptr_ + offset, size, src_data_);
+    ret = FillFp32(out_ptr_ + offset, size, src_data_);
   } else if (input_tensor->data_type() == kNumberTypeInt32 || input_tensor->data_type() == kNumberTypeInt) {
     ret = FillInt32(int32_out_ptr_ + offset, size, int32_src_data_);
   } else {

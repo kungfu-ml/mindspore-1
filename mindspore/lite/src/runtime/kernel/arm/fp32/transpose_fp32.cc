@@ -22,14 +22,12 @@
 
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
+using mindspore::lite::RET_NULL_PTR;
 using mindspore::lite::RET_OK;
 using mindspore::lite::RET_OP_EXECUTE_FAILURE;
-using mindspore::schema::PrimitiveType_Nchw2Nhwc;
-using mindspore::schema::PrimitiveType_Nhwc2Nchw;
 using mindspore::schema::PrimitiveType_Transpose;
 
 namespace mindspore::kernel {
-
 int TransposeCPUKernel::Init() {
   if (!InferShapeDone()) {
     return RET_OK;
@@ -39,8 +37,19 @@ int TransposeCPUKernel::Init() {
 
 int TransposeCPUKernel::ReSize() {
   TransposeParameter *param = reinterpret_cast<TransposeParameter *>(op_parameter_);
-  if (in_tensors_.at(kInputIndex)->shape().size() != static_cast<size_t>(param->num_axes_) && in_tensors_.size() != 2) {
+  if (in_tensors_.size() == 2) {
+    param->num_axes_ = in_tensors_.at(1)->ElementsNum();
+  }
+  if (in_tensors_.at(kInputIndex)->shape().size() != static_cast<size_t>(param->num_axes_)) {
     return RET_OK;
+  }
+  // get perm data
+  MS_ASSERT(in_tensors_.size() == 2);
+  auto perm_tensor = in_tensors_.at(1);
+  int *perm_data = reinterpret_cast<int *>(perm_tensor->data_c());
+  MS_ASSERT(perm_data != nullptr);
+  for (int i = 0; i < param->num_axes_; ++i) {
+    param->perm_[i] = perm_data[i];
   }
   auto &inTensor = in_tensors_.front();
   auto &outTensor = out_tensors_.front();
@@ -74,6 +83,48 @@ TransposeCPUKernel::~TransposeCPUKernel() {
   }
 }
 
+void TransposeCPUKernel::GetNHNCTransposeFunc(lite::Tensor *in_tensor, lite::Tensor *out_tensor,
+                                              TransposeParameter *param) {
+  auto out_shape = out_tensor->shape();
+  if (in_tensor->shape().size() == 4 && param->perm_[0] == 0 && param->perm_[1] == 2 && param->perm_[2] == 3 &&
+      param->perm_[3] == 1) {
+    nhnc_param_[0] = out_shape[0];
+    nhnc_param_[1] = out_shape[1] * out_shape[2];
+    nhnc_param_[2] = out_shape[3];
+    if (in_tensor->data_type() == kNumberTypeFloat32) {
+      NHNCTransposeFunc_ = PackNCHWToNHWCFp32;
+    }
+  }
+  if (in_tensor->shape().size() == 4 && param->perm_[0] == 0 && param->perm_[1] == 3 && param->perm_[2] == 1 &&
+      param->perm_[3] == 2) {
+    nhnc_param_[0] = out_shape[0];
+    nhnc_param_[1] = out_shape[2] * out_shape[3];
+    nhnc_param_[2] = out_shape[1];
+    if (in_tensor->data_type() == kNumberTypeFloat32) {
+      NHNCTransposeFunc_ = PackNHWCToNCHWFp32;
+    }
+  }
+}
+
+int TransposeCPUKernel::RunImpl(int task_id) {
+  if (NHNCTransposeFunc_ != nullptr) {
+    NHNCTransposeFunc_(in_data_, out_data_, nhnc_param_[0], nhnc_param_[1], nhnc_param_[2], task_id, thread_count_);
+  } else {
+    TransposeDimsFp32(in_data_, out_data_, out_shape_, dim_size_, position_ + dims_ * task_id, param_, task_id,
+                      thread_count_);
+  }
+  return RET_OK;
+}
+
+int TransposeImpl(void *kernel, int task_id) {
+  auto transpose = reinterpret_cast<TransposeCPUKernel *>(kernel);
+  auto ret = transpose->RunImpl(task_id);
+  if (ret != RET_OK) {
+    MS_LOG(ERROR) << "TransposeImpl Run error task_id[" << task_id << "] error_code[" << ret << "]";
+  }
+  return ret;
+}
+
 int TransposeCPUKernel::Run() {
   MS_ASSERT(in_tensors_.size() == 1 || in_tensors_.size() == 2);
   MS_ASSERT(out_tensors_.size() == 1);
@@ -88,72 +139,59 @@ int TransposeCPUKernel::Run() {
   MS_ASSERT(in_data_);
   MS_ASSERT(out_data_);
 
-  TransposeParameter *param = reinterpret_cast<TransposeParameter *>(this->op_parameter_);
+  param_ = reinterpret_cast<TransposeParameter *>(this->op_parameter_);
+  if (in_tensor->shape().size() != static_cast<size_t>(param_->num_axes_)) {
+    memcpy(out_data_, in_data_, in_tensor->ElementsNum() * sizeof(float));
+    return RET_OK;
+  }
   if (in_tensors_.size() == 2) {
     auto input_perm = in_tensors_.at(1);
     MS_ASSERT(input_perm != nullptr);
     MS_ASSERT(input_perm->data_c() != nullptr);
     int *perm_data = reinterpret_cast<int *>(input_perm->data_c());
-    auto perm = std::vector<int>{perm_data, perm_data + input_perm->ElementsNum()};
     for (int i = 0; i < input_perm->ElementsNum(); ++i) {
-      param->perm_[i] = perm[i];
+      param_->perm_[i] = perm_data[i];
     }
-    for (int i = input_perm->ElementsNum(); i <= 8; ++i) {
-      param->perm_[i] = 0;
+    for (int i = input_perm->ElementsNum(); i < MAX_SHAPE_SIZE; ++i) {
+      param_->perm_[i] = 0;
     }
-    param->num_axes_ = input_perm->ElementsNum();
   }
-  if (in_tensor->shape().size() != static_cast<size_t>(param->num_axes_)) {
-    memcpy(out_data_, in_data_, in_tensor->ElementsNum() * sizeof(float));
-    return RET_OK;
-  }
-  auto out_shape = out_tensor->shape();
-  if (in_tensor->shape().size() == 4 && param->perm_[0] == 0 && param->perm_[1] == 2 && param->perm_[2] == 3 &&
-      param->perm_[3] == 1) {
-    if (in_tensor->data_type() == kNumberTypeFloat32) {
-      PackNCHWToNHWCFp32(in_tensor->MutableData(), out_tensor->MutableData(), out_shape[0], out_shape[1] * out_shape[2],
-                         out_shape[3]);
-    } else if (in_tensor->data_type() == kNumberTypeInt8) {
-      PackNCHWToNHWCInt8(in_tensor->MutableData(), out_tensor->MutableData(), out_shape[0], out_shape[1] * out_shape[2],
-                         out_shape[3]);
+  thread_count_ = op_parameter_->thread_num_;
+  GetNHNCTransposeFunc(in_tensor, out_tensor, param_);
+  if (NHNCTransposeFunc_ != nullptr) {
+    auto ret = ParallelLaunch(this->context_->thread_pool_, TransposeImpl, this, thread_count_);
+    if (ret != RET_OK) {
+      MS_LOG(ERROR) << "NHNCTransposeFunc_ is error!";
     }
-    return RET_OK;
-  }
-  if (in_tensor->shape().size() == 4 && param->perm_[0] == 0 && param->perm_[1] == 3 && param->perm_[2] == 1 &&
-      param->perm_[3] == 2) {
-    if (in_tensor->data_type() == kNumberTypeFloat32) {
-      PackNHWCToNCHWFp32(in_tensor->MutableData(), out_tensor->MutableData(), out_shape[0], out_shape[2] * out_shape[3],
-                         out_shape[1]);
-    } else if (in_tensor->data_type() == kNumberTypeInt8) {
-      PackNHWCToNCHWInt8(in_tensor->MutableData(), out_tensor->MutableData(), out_shape[0], out_shape[2] * out_shape[3],
-                         out_shape[1]);
-    }
-    return RET_OK;
-  }
-  if (in_tensor->data_type() == kNumberTypeInt8) {
-    MS_LOG(ERROR) << "not support now";
-    return RET_ERROR;
-  }
-
-  int dims = out_tensor->shape().size();
-  if (dims > MAX_TRANSPOSE_DIM_SIZE) {
-    dim_size_ = reinterpret_cast<int *>(context_->allocator->Malloc(dims * sizeof(int)));
-    if (dim_size_ == nullptr) {
-      MS_LOG(ERROR) << "Malloc data failed";
-      return RET_ERROR;
-    }
-    position_ = reinterpret_cast<int *>(context_->allocator->Malloc(dims * sizeof(int)));
-    if (position_ == nullptr) {
-      MS_LOG(ERROR) << "Malloc data failed";
-      context_->allocator->Free(dim_size_);
-      dim_size_ = nullptr;
-      return RET_ERROR;
-    }
+    return ret;
   }
 
   MS_ASSERT(out_shape_);
-  auto ret = DoTransposeFp32(in_data_, out_data_, out_shape_, param, dim_size_, position_);
-  if (dims > MAX_TRANSPOSE_DIM_SIZE) {
+  dims_ = out_tensor->shape().size();
+  if (dims_ > MAX_TRANSPOSE_DIM_SIZE) {
+    dim_size_ = reinterpret_cast<int *>(context_->allocator->Malloc(dims_ * sizeof(int)));
+    if (dim_size_ == nullptr) {
+      MS_LOG(ERROR) << "Malloc data failed";
+      return RET_NULL_PTR;
+    }
+    *(dim_size_ + dims_ - 1) = 1;
+    for (int i = dims_ - 1; i > 0; --i) {
+      *(dim_size_ + i - 1) = *(dim_size_ + i) * out_shape_[i];
+    }
+    position_ = reinterpret_cast<int *>(context_->allocator->Malloc(dims_ * sizeof(int) * thread_count_));
+    if (position_ == nullptr) {
+      context_->allocator->Free(dim_size_);
+      MS_LOG(ERROR) << "Malloc data failed";
+      return RET_NULL_PTR;
+    }
+  }
+  int ret;
+  if (dims_ > MAX_TRANSPOSE_DIM_SIZE) {
+    ret = ParallelLaunch(this->context_->thread_pool_, TransposeImpl, this, thread_count_);
+  } else {
+    ret = DoTransposeFp32(in_data_, out_data_, out_shape_, param_);
+  }
+  if (dims_ > MAX_TRANSPOSE_DIM_SIZE) {
     context_->allocator->Free(dim_size_);
     context_->allocator->Free(position_);
     dim_size_ = nullptr;
@@ -161,16 +199,10 @@ int TransposeCPUKernel::Run() {
   }
   if (ret != RET_OK) {
     MS_LOG(ERROR) << "Transpose run failed";
-    return RET_ERROR;
   }
-
   return ret;
 }
 
 REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Transpose, LiteKernelCreator<TransposeCPUKernel>)
-REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_Transpose, LiteKernelCreator<TransposeCPUKernel>)
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Nchw2Nhwc, LiteKernelCreator<TransposeCPUKernel>)
-REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_Nchw2Nhwc, LiteKernelCreator<TransposeCPUKernel>)
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Nhwc2Nchw, LiteKernelCreator<TransposeCPUKernel>)
-REG_KERNEL(kCPU, kNumberTypeInt8, PrimitiveType_Nhwc2Nchw, LiteKernelCreator<TransposeCPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeInt32, PrimitiveType_Transpose, LiteKernelCreator<TransposeCPUKernel>)
 }  // namespace mindspore::kernel

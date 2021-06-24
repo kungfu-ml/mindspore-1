@@ -19,6 +19,7 @@ import copy
 from mindspore.common.api import _wrap_func
 from mindspore import context
 from .._c_expression import Primitive_, real_run_op, prim_type
+from .._checkparam import Validator
 from . import signature as sig
 
 
@@ -37,8 +38,9 @@ class Primitive(Primitive_):
         >>> class Add(Primitive):
         ...     @prim_attr_register
         ...     def __init__(self, attr1, attr2):
-        ...         # check attr1 and attr2 or do some initializations
-        >>> # init a Primitive obj with attr1=1 and attr2=2
+        ...         '''init for add'''
+        ...     # check attr1 and attr2 or do some initializations
+        ...     # init a Primitive obj with attr1=1 and attr2=2
         >>> add = Add(attr1=1, attr2=2)
     """
     _repr_ignore_list = ['input_names', 'output_names']
@@ -100,6 +102,19 @@ class Primitive(Primitive_):
         self.__dict__[name] = value
         self.attrs[name] = value
         self.add_attr(name, value)
+        return self
+
+    def del_prim_attr(self, name):
+        """
+        Del primitive attribute.
+
+        Args:
+            name (str): Attribute Name.
+        """
+        if name in self.__dict__ and name in self.attrs:
+            del self.__dict__[name]
+            del self.attrs[name]
+            self.del_attr(name)
         return self
 
     def set_stage(self, stage):
@@ -190,7 +205,7 @@ class Primitive(Primitive_):
 
     def init_prim_io_names(self, inputs, outputs):
         """
-        Initializes the name of inputs and outpus of Tensor or attributes.
+        Initializes the name of inputs and outputs of Tensor or attributes.
 
         Args:
             inputs (list[str]): list of inputs names.
@@ -206,13 +221,23 @@ class Primitive(Primitive_):
         """ Whether the primitive will update the value of parameter."""
         return self._update_parameter
 
-    def recompute(self, mode):
+    def recompute(self, mode=True):
         """
-        Set the primitive recomputed. If a primitive feeds into a grad node and is set recomputed,
-        we will compute it again for the grad node after the forward computation.
+        Set the primitive recomputed. If a primitive set recomputed feeds into some backward nodes
+        for computing gradient, rather than storing the intermediate activation computed in forward
+        pass, we will recompute it in backward pass.
+
+        Note:
+
+            - If the computation involves something like randomization or global variable, the equivalence
+              is not guaranteed currently.
+
         Args:
             mode (bool): Specifies whether the primitive is recomputed. Default: True.
         """
+        if context.get_context("mode") == context.PYNATIVE_MODE:
+            raise TypeError("Recompute is not supported in pynative mode currently.")
+        Validator.check_bool(mode)
         self.add_prim_attr("recompute", mode)
         return self
 
@@ -220,9 +245,9 @@ class Primitive(Primitive_):
 class PrimitiveWithCheck(Primitive):
     """
     PrimitiveWithCheck is the base class of primitives in python defines functions for checking operator input arguments
-    but used the infer method registed in c++ source codes.
+    but used the infer method registered in c++ source codes.
 
-    There are three methods can be overide to define the check logic of the primitive: __check__(), check_shape(),
+    There are three methods can be override to define the check logic of the primitive: __check__(), check_shape(),
     check_dtype(). If __check__() is defined in primitive, the __check__() has highest priority to be called.
     If __check__() is not defined, check_shape() and check_dtype() can be defined to describe the check logic of
     the shape and type. Method infer_value() can also be defined (such as PrimitiveWithInfer) for constant propagation.
@@ -230,18 +255,21 @@ class PrimitiveWithCheck(Primitive):
     Args:
         name (str): Name of the current Primitive.
 
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
+
     Examples:
         >>> # init a Primitive class with check
         >>> class Flatten(PrimitiveWithCheck):
-        >>>     @prim_attr_register
-        >>>     def __init__(self):
-        >>>         pass
-        >>>     def check_shape(self, input_x):
-        >>>         validator.check_int(len(input_x), 1, Rel.GE, 'input_x rank', self.name)
-        >>>
-        >>>     def check_dtype(self, input_x):
-        >>>         validator.check_subclass("input_x", input_x, mstype.tensor, self.name)
-        >>>
+        ...     @prim_attr_register
+        ...     def __init__(self):
+        ...         pass
+        ...     def check_shape(self, input_x):
+        ...         validator.check_int(len(input_x), 1, Rel.GE, 'input_x rank', self.name)
+        ...
+        ...     def check_dtype(self, input_x):
+        ...         validator.check_subclass("input_x", input_x, mstype.tensor, self.name)
+        ...
         >>> # init a Primitive obj
         >>> add = Flatten()
     """
@@ -299,7 +327,7 @@ class PrimitiveWithInfer(Primitive):
     """
     PrimitiveWithInfer is the base class of primitives in python and defines functions for tracking inference in python.
 
-    There are four method can be overide to define the infer logic of the primitive: __infer__(), infer_shape(),
+    There are four method can be override to define the infer logic of the primitive: __infer__(), infer_shape(),
     infer_dtype(), and infer_value(). If __infer__() is defined in primitive, the __infer__() has highest priority
     to be called. If __infer__() is not defined, infer_shape() and infer_dtype() can be defined to describe the infer
     logic of the shape and type. The infer_value() is used for constant propagation.
@@ -307,19 +335,22 @@ class PrimitiveWithInfer(Primitive):
     Args:
         name (str): Name of the current Primitive.
 
+    Supported Platforms:
+        ``Ascend`` ``GPU`` ``CPU``
+
     Examples:
         >>> # init a Primitive class with infer
         >>> class Add(PrimitiveWithInfer):
-        >>>     @prim_attr_register
-        >>>     def __init__(self):
-        >>>         pass
-        >>>
-        >>>     def infer_shape(self, x, y):
-        >>>         return x # output shape same as first input 'x'
-        >>>
-        >>>     def infer_dtype(self, x, y):
-        >>>         return x # output type same as first input 'x'
-        >>>
+        ...     @prim_attr_register
+        ...     def __init__(self):
+        ...         pass
+        ...
+        ...     def infer_shape(self, x, y):
+        ...         return x # output shape same as first input 'x'
+        ...
+        ...     def infer_dtype(self, x, y):
+        ...         return x # output type same as first input 'x'
+        ...
         >>> # init a Primitive obj
         >>> add = Add()
     """
@@ -451,10 +482,13 @@ def prim_attr_register(fn):
     """
 
     def deco(self, *args, **kwargs):
+        class_name = self.__class__.__name__
+        if hasattr(self.__class__, "substitute_name"):
+            class_name = self.__class__.substitute_name
         if isinstance(self, PrimitiveWithInfer):
-            PrimitiveWithInfer.__init__(self, self.__class__.__name__)
+            PrimitiveWithInfer.__init__(self, class_name)
         elif isinstance(self, PrimitiveWithCheck):
-            PrimitiveWithCheck.__init__(self, self.__class__.__name__)
+            PrimitiveWithCheck.__init__(self, class_name)
         else:
             Primitive.__init__(self, self.__class__.__name__)
         bound_args = inspect.signature(fn).bind(self, *args, **kwargs)

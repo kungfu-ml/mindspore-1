@@ -2,9 +2,9 @@ file(GLOB_RECURSE _CURRENT_SRC_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "*.cc"
 set_property(SOURCE ${_CURRENT_SRC_FILES} PROPERTY COMPILE_DEFINITIONS SUBMODULE_ID=mindspore::SubModuleId::SM_MD)
 add_subdirectory(soft_dvpp)
 add_subdirectory(lite_cv)
-if (ENABLE_ACL)
+if(ENABLE_ACL)
     add_subdirectory(dvpp)
-endif ()
+endif()
 add_library(kernels-image OBJECT
     affine_op.cc
     auto_contrast_op.cc
@@ -44,6 +44,8 @@ add_library(kernels-image OBJECT
     random_sharpness_op.cc
     rescale_op.cc
     resize_op.cc
+    resize_preserve_ar_op.cc
+    rgb_to_gray_op.cc
     rgba_to_bgr_op.cc
     rgba_to_rgb_op.cc
     sharpness_op.cc
@@ -53,9 +55,10 @@ add_library(kernels-image OBJECT
     resize_with_bbox_op.cc
     random_resize_with_bbox_op.cc
     random_color_op.cc
+    rotate_op.cc
     )
-if (ENABLE_ACL)
+if(ENABLE_ACL)
     add_dependencies(kernels-image kernels-soft-dvpp-image kernels-dvpp-image)
 else()
     add_dependencies(kernels-image kernels-soft-dvpp-image)
-endif ()
+endif()

@@ -18,13 +18,16 @@ import os
 import sys
 from te.platform.cce_conf import te_set_version
 from te.platform.fusion_util import fusion_op
-import te
-from common import check_kernel_info, get_args, get_build_in_impl_path
+import tbe.common.context.op_info as operator_info
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+# pylint: disable=wrong-import-position
+from tbe_common import check_kernel_info, get_args, get_built_in_impl_path
 
-build_in_impl_path = get_build_in_impl_path()
+build_in_impl_path = get_built_in_impl_path()
 
 # op function list
 op_build = "compile"
+
 
 def _initialize(impl_path):
     """Initialize"""
@@ -37,6 +40,7 @@ def _initialize(impl_path):
 
     sys.path.insert(0, op_module_name)
 
+
 def _replace_range(args):
     for arg in args:
         if not arg.__contains__('range'):
@@ -47,13 +51,15 @@ def _replace_range(args):
                 if value < 0:
                     range_item[index] = None
 
-def build_op(build_type, json_str):
+
+def build_op(build_type, json_str, tune_mode=None):
     """
     call op functions with function name and input args json_str
 
     Args:
         build_type : op function name
         json_str (str): op function input args
+        tune_mode (str): if use auto_tune
 
     Raises:
         Exception: If specific keyword is not found.
@@ -62,6 +68,7 @@ def build_op(build_type, json_str):
     check_kernel_info(kernel_info)
     te_set_version(kernel_info["op_info"]["socVersion"])
     op_name = kernel_info['op_info']['name']
+    op_type = kernel_info['op_info']['Type']
 
     try:
         custom_flag = False
@@ -89,9 +96,11 @@ def build_op(build_type, json_str):
             op_module = __import__(op_name)
         else:
             if is_dynamic_shape:
-                op_module = __import__("impl.dynamic."+op_name, globals(), locals(), [op_name], 0)
+                op_module = __import__("impl.dynamic." + op_name, globals(), locals(), [op_name], 0)
+                op_module_name = "impl.dynamic." + op_name
             else:
-                op_module = __import__("impl."+op_name, globals(), locals(), [op_name], 0)
+                op_module = __import__("impl." + op_name, globals(), locals(), [op_name], 0)
+                op_module_name = "impl." + op_name
         # get function
         if build_type == op_build:
             if custom_flag:
@@ -106,11 +115,20 @@ def build_op(build_type, json_str):
 
         # call function
         if is_dynamic_shape:
-            with te.op.dynamic():
+            import tbe.common.context.op_context as op_context
+            with op_context.OpContext("dynamic"):
+                op_info = operator_info.OpInfo(op_type, op_type)
+                op_context.get_context().add_op_info(op_info)
                 op_func(*inputs_args, *outputs_args, *attrs_args, kernel_name=kernel_name)
-                return te.op.get_compile_info()
+                compile_info = op_context.get_context().get_compile_info()
+                if tune_mode is not None:
+                    return compile_info, (inputs_args, outputs_args, attrs_args), op_module_name
+                return compile_info
         else:
-            return op_func(*inputs_args, *outputs_args, *attrs_args, kernel_name=kernel_name)
+            res = op_func(*inputs_args, *outputs_args, *attrs_args, kernel_name=kernel_name)
+            if tune_mode is not None:
+                return None, (inputs_args, outputs_args, attrs_args), op_module_name
+            return res
 
     except Exception as e:
         raise RuntimeError(e)
@@ -146,8 +164,9 @@ def compile_with_json(json_str):
     if "fusion_op" in json_info:
         ret = compile_fusion_op(json_str)
     else:
-        ret = build_op(op_build, json_str)
+        ret = build_op(op_build, json_str, None)
     return ret
+
 
 if __name__ == "__main__":
     in_args = sys.stdin.readline()

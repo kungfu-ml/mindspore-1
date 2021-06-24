@@ -51,7 +51,7 @@ if [ "$TARBALL" == "" ]; then
   else
     file=$(ls ../../../../output/mindspore-lite-*-train-linux-x64.tar.gz)
   fi
-  if [ -f ${file} ]; then
+  if [[ ${file} != "" ]] && [[ -f ${file} ]]; then
     TARBALL=${file}
   else
     echo "release.tar.gz was not found"
@@ -78,13 +78,17 @@ cp model/*.ms ${PACKAGE}/model || exit 1
 cp scripts/*.sh ${PACKAGE}/
 
 # Copy the shared MindSpore ToD library
-tar -xzf ${TARBALL} --wildcards --no-anchored libmindspore-lite.so
-tar -xzf ${TARBALL} --wildcards --no-anchored include
-mv mindspore-*/lib ${PACKAGE}/
+tar -xzf ${TARBALL}
+mv mindspore-*/train/lib ${PACKAGE}/
+mv mindspore-*/train/minddata/lib/* ${PACKAGE}/lib/
+mv mindspore-*/train/minddata/third_party/libjpeg-turbo/lib/* ${PACKAGE}/lib/
+if [ "${TARGET}" == "arm64" ]; then
+  tar -xzf ${TARBALL} --wildcards --no-anchored hiai_ddk
+  mv mindspore-*/train/third_party/hiai_ddk/lib/* ${PACKAGE}/lib/
+fi
+
 rm -rf msl
-mkdir msl
-mv mindspore-*/* msl/
-rm -rf mindspore-*
+mv mindspore-* msl/
 
 # Convert the dataset into the package
 ./prepare_dataset.sh ${PLACES_DATA_PATH} || exit 1

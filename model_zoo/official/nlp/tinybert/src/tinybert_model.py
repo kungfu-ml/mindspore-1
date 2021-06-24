@@ -86,55 +86,6 @@ class BertConfig:
         self.dtype = dtype
         self.compute_type = compute_type
 
-
-class EmbeddingLookup(nn.Cell):
-    """
-    A embeddings lookup table with a fixed dictionary and size.
-
-    Args:
-        vocab_size (int): Size of the dictionary of embeddings.
-        embedding_size (int): The size of each embedding vector.
-        embedding_shape (list): [batch_size, seq_length, embedding_size], the shape of
-                         each embedding vector.
-        use_one_hot_embeddings (bool): Specifies whether to use one hot encoding form. Default: False.
-        initializer_range (float): Initialization value of TruncatedNormal. Default: 0.02.
-    """
-    def __init__(self,
-                 vocab_size,
-                 embedding_size,
-                 embedding_shape,
-                 use_one_hot_embeddings=False,
-                 initializer_range=0.02):
-        super(EmbeddingLookup, self).__init__()
-        self.vocab_size = vocab_size
-        self.use_one_hot_embeddings = use_one_hot_embeddings
-        self.embedding_table = Parameter(initializer
-                                         (TruncatedNormal(initializer_range),
-                                          [vocab_size, embedding_size]))
-        self.expand = P.ExpandDims()
-        self.shape_flat = (-1,)
-        self.gather = P.GatherV2()
-        self.one_hot = P.OneHot()
-        self.on_value = Tensor(1.0, mstype.float32)
-        self.off_value = Tensor(0.0, mstype.float32)
-        self.array_mul = P.MatMul()
-        self.reshape = P.Reshape()
-        self.shape = tuple(embedding_shape)
-
-    def construct(self, input_ids):
-        """embedding lookup"""
-        extended_ids = self.expand(input_ids, -1)
-        flat_ids = self.reshape(extended_ids, self.shape_flat)
-        if self.use_one_hot_embeddings:
-            one_hot_ids = self.one_hot(flat_ids, self.vocab_size, self.on_value, self.off_value)
-            output_for_reshape = self.array_mul(
-                one_hot_ids, self.embedding_table)
-        else:
-            output_for_reshape = self.gather(self.embedding_table, flat_ids, 0)
-        output = self.reshape(output_for_reshape, self.shape)
-        return output, self.embedding_table
-
-
 class EmbeddingPostprocessor(nn.Cell):
     """
     Postprocessors apply positional and token type embeddings to word embeddings.
@@ -166,10 +117,10 @@ class EmbeddingPostprocessor(nn.Cell):
         self.token_type_vocab_size = token_type_vocab_size
         self.use_one_hot_embeddings = use_one_hot_embeddings
         self.max_position_embeddings = max_position_embeddings
-        self.embedding_table = Parameter(initializer
-                                         (TruncatedNormal(initializer_range),
-                                          [token_type_vocab_size,
-                                           embedding_size]))
+        self.token_type_embedding = nn.Embedding(
+            vocab_size=token_type_vocab_size,
+            embedding_size=embedding_size,
+            use_one_hot=use_one_hot_embeddings)
         self.shape_flat = (-1,)
         self.one_hot = P.OneHot()
         self.on_value = Tensor(1.0, mstype.float32)
@@ -177,35 +128,28 @@ class EmbeddingPostprocessor(nn.Cell):
         self.array_mul = P.MatMul()
         self.reshape = P.Reshape()
         self.shape = tuple(embedding_shape)
-        self.layernorm = nn.LayerNorm((embedding_size,))
         self.dropout = nn.Dropout(1 - dropout_prob)
-        self.gather = P.GatherV2()
+        self.gather = P.Gather()
         self.use_relative_positions = use_relative_positions
         self.slice = P.StridedSlice()
-        self.full_position_embeddings = Parameter(initializer
-                                                  (TruncatedNormal(initializer_range),
-                                                   [max_position_embeddings,
-                                                    embedding_size]))
+        _, seq, _ = self.shape
+        self.full_position_embedding = nn.Embedding(
+            vocab_size=max_position_embeddings,
+            embedding_size=embedding_size,
+            use_one_hot=False)
+        self.layernorm = nn.LayerNorm((embedding_size,))
+        self.position_ids = Tensor(np.arange(seq).reshape(-1, seq).astype(np.int32))
+        self.add = P.Add()
 
     def construct(self, token_type_ids, word_embeddings):
-        """embedding postprocessor"""
+        """Postprocessors apply positional and token type embeddings to word embeddings."""
         output = word_embeddings
         if self.use_token_type:
-            flat_ids = self.reshape(token_type_ids, self.shape_flat)
-            if self.use_one_hot_embeddings:
-                one_hot_ids = self.one_hot(flat_ids,
-                                           self.token_type_vocab_size, self.on_value, self.off_value)
-                token_type_embeddings = self.array_mul(one_hot_ids,
-                                                       self.embedding_table)
-            else:
-                token_type_embeddings = self.gather(self.embedding_table, flat_ids, 0)
-            token_type_embeddings = self.reshape(token_type_embeddings, self.shape)
-            output += token_type_embeddings
+            token_type_embeddings = self.token_type_embedding(token_type_ids)
+            output = self.add(output, token_type_embeddings)
         if not self.use_relative_positions:
-            _, seq, width = self.shape
-            position_embeddings = self.slice(self.full_position_embeddings, (0, 0), (seq, width), (1, 1))
-            position_embeddings = self.reshape(position_embeddings, (1, seq, width))
-            output += position_embeddings
+            position_embeddings = self.full_position_embedding(self.position_ids)
+            output = self.add(output, position_embeddings)
         output = self.layernorm(output)
         output = self.dropout(output)
         return output
@@ -232,7 +176,7 @@ class BertOutput(nn.Cell):
         self.dense = nn.Dense(in_channels, out_channels,
                               weight_init=TruncatedNormal(initializer_range)).to_float(compute_type)
         self.dropout = nn.Dropout(1 - dropout_prob)
-        self.add = P.TensorAdd()
+        self.add = P.Add()
         self.is_gpu = context.get_context('device_target') == "GPU"
         if self.is_gpu:
             self.layernorm = nn.LayerNorm((out_channels,)).to_float(mstype.float32)
@@ -322,7 +266,7 @@ class RelaPosEmbeddingsGenerator(nn.Cell):
         self.on_value = Tensor(1.0, mstype.float32)
         self.off_value = Tensor(0.0, mstype.float32)
         self.shape = P.Shape()
-        self.gather = P.GatherV2()  # index_select
+        self.gather = P.Gather()  # index_select
         self.matmul = P.BatchMatMul()
 
     def construct(self):
@@ -451,7 +395,7 @@ class BertAttention(nn.Cell):
         if self.has_attention_mask:
             self.expand_dims = P.ExpandDims()
             self.sub = P.Sub()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.cast = P.Cast()
             self.get_dtype = P.DType()
         if do_return_2d_tensor:
@@ -788,12 +732,10 @@ class BertModel(nn.Cell):
         self.last_idx = self.num_hidden_layers - 1
         output_embedding_shape = [-1, self.seq_length,
                                   self.embedding_size]
-        self.bert_embedding_lookup = EmbeddingLookup(
+        self.bert_embedding_lookup = nn.Embedding(
             vocab_size=config.vocab_size,
             embedding_size=self.embedding_size,
-            embedding_shape=output_embedding_shape,
-            use_one_hot_embeddings=use_one_hot_embeddings,
-            initializer_range=config.initializer_range)
+            use_one_hot=use_one_hot_embeddings)
         self.bert_embedding_postprocessor = EmbeddingPostprocessor(
             use_relative_positions=config.use_relative_positions,
             embedding_size=self.embedding_size,
@@ -831,7 +773,8 @@ class BertModel(nn.Cell):
     def construct(self, input_ids, token_type_ids, input_mask):
         """bert model"""
         # embedding
-        word_embeddings, embedding_tables = self.bert_embedding_lookup(input_ids)
+        embedding_tables = self.bert_embedding_lookup.embedding_table
+        word_embeddings = self.bert_embedding_lookup(input_ids)
         embedding_output = self.bert_embedding_postprocessor(token_type_ids, word_embeddings)
         # attention mask [batch_size, seq_length, seq_length]
         attention_mask = self._create_attention_mask_from_input_mask(input_mask)
@@ -883,12 +826,10 @@ class TinyBertModel(nn.Cell):
         self.last_idx = self.num_hidden_layers - 1
         output_embedding_shape = [-1, self.seq_length,
                                   self.embedding_size]
-        self.tinybert_embedding_lookup = EmbeddingLookup(
+        self.tinybert_embedding_lookup = nn.Embedding(
             vocab_size=config.vocab_size,
             embedding_size=self.embedding_size,
-            embedding_shape=output_embedding_shape,
-            use_one_hot_embeddings=use_one_hot_embeddings,
-            initializer_range=config.initializer_range)
+            use_one_hot=use_one_hot_embeddings)
         self.tinybert_embedding_postprocessor = EmbeddingPostprocessor(
             use_relative_positions=config.use_relative_positions,
             embedding_size=self.embedding_size,
@@ -926,7 +867,8 @@ class TinyBertModel(nn.Cell):
     def construct(self, input_ids, token_type_ids, input_mask):
         """tiny bert model"""
         # embedding
-        word_embeddings, embedding_tables = self.tinybert_embedding_lookup(input_ids)
+        embedding_tables = self.tinybert_embedding_lookup.embedding_table
+        word_embeddings = self.tinybert_embedding_lookup(input_ids)
         embedding_output = self.tinybert_embedding_postprocessor(token_type_ids,
                                                                  word_embeddings)
         # attention mask [batch_size, seq_length, seq_length]
@@ -957,7 +899,7 @@ class BertModelCLS(nn.Cell):
     """
     This class is responsible for classification task evaluation,
     i.e. XNLI(num_labels=3), LCQMC(num_labels=2), Chnsenti(num_labels=2).
-    The returned output represents the final logits as the results of log_softmax is propotional to that of softmax.
+    The returned output represents the final logits as the results of log_softmax is proportional to that of softmax.
     """
     def __init__(self, config, is_training, num_labels=2, dropout_prob=0.0,
                  use_one_hot_embeddings=False, phase_type="student"):
@@ -969,12 +911,8 @@ class BertModelCLS(nn.Cell):
         self.dtype = config.dtype
         self.num_labels = num_labels
         self.phase_type = phase_type
-        if self.phase_type == "teacher":
-            self.dense = nn.Dense(config.hidden_size, self.num_labels, weight_init=self.weight_init,
-                                  has_bias=True).to_float(config.compute_type)
-        else:
-            self.dense_1 = nn.Dense(config.hidden_size, self.num_labels, weight_init=self.weight_init,
-                                    has_bias=True).to_float(config.compute_type)
+        self.dense_1 = nn.Dense(config.hidden_size, self.num_labels, weight_init=self.weight_init,
+                                has_bias=True).to_float(config.compute_type)
         self.dropout = nn.ReLU()
 
     def construct(self, input_ids, token_type_id, input_mask):
@@ -982,12 +920,46 @@ class BertModelCLS(nn.Cell):
         _, pooled_output, _, seq_output, att_output = self.bert(input_ids, token_type_id, input_mask)
         cls = self.cast(pooled_output, self.dtype)
         cls = self.dropout(cls)
-        if self.phase_type == "teacher":
-            logits = self.dense(cls)
-        else:
-            logits = self.dense_1(cls)
+        logits = self.dense_1(cls)
         logits = self.cast(logits, self.dtype)
         log_probs = self.log_softmax(logits)
         if self._phase == 'train' or self.phase_type == "teacher":
             return seq_output, att_output, logits, log_probs
         return log_probs
+
+class BertModelNER(nn.Cell):
+    """
+    This class is responsible for sequence labeling task evaluation, i.e. NER(num_labels=11).
+    The returned output represents the final logits as the results of log_softmax is proportional to that of softmax.
+    """
+    def __init__(self, config, is_training, num_labels=11, dropout_prob=0.0,
+                 use_one_hot_embeddings=False, phase_type="student"):
+        super(BertModelNER, self).__init__()
+        if not is_training:
+            config.hidden_dropout_prob = 0.0
+            config.hidden_probs_dropout_prob = 0.0
+        self.bert = BertModel(config, is_training, use_one_hot_embeddings)
+        self.cast = P.Cast()
+        self.weight_init = TruncatedNormal(config.initializer_range)
+        self.log_softmax = P.LogSoftmax(axis=-1)
+        self.dtype = config.dtype
+        self.num_labels = num_labels
+        self.dense_1 = nn.Dense(config.hidden_size, self.num_labels, weight_init=self.weight_init,
+                                has_bias=True).to_float(config.compute_type)
+        self.dropout = nn.ReLU()
+        self.reshape = P.Reshape()
+        self.shape = (-1, config.hidden_size)
+        self.origin_shape = (-1, config.seq_length, self.num_labels)
+
+    def construct(self, input_ids, input_mask, token_type_id):
+        """Return the final logits as the results of log_softmax."""
+        sequence_output, _, _, encoder_outputs, attention_outputs = \
+            self.bert(input_ids, token_type_id, input_mask)
+        seq = self.dropout(sequence_output)
+        seq = self.reshape(seq, self.shape)
+        logits = self.dense_1(seq)
+        logits = self.cast(logits, self.dtype)
+        return_value = self.log_softmax(logits)
+        if self._phase == 'train' or self.phase_type == "teacher":
+            return encoder_outputs, attention_outputs, logits, return_value
+        return return_value

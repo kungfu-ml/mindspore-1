@@ -40,7 +40,7 @@ def cond_data_test(x_init, y_init):
             """"""
             super(Net, self).__init__()
             self.square = P.Square()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.value = Tensor(3, dtype=ms.float32)
             self.switch = P.GeSwitch()
             self.merge = P.Merge()
@@ -79,7 +79,7 @@ def if_compile_test(x_init, y_init):
             """"""
             super(Net, self).__init__()
             self.square = P.Square()
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.value = Tensor(3, dtype=ms.float32)
             self.switch = P.GeSwitch()
             self.merge = P.Merge()
@@ -465,7 +465,7 @@ def test_parser_switch_layer_switch_in_bprop():
     class Add(nn.Cell):
         def __init__(self):
             super().__init__()
-            self.op = P.TensorAdd()
+            self.op = P.Add()
 
         def construct(self, x, y):
             return self.op(x, y)
@@ -503,7 +503,7 @@ def test_parser_switch_layer_inputs_tuple():
     class Add(nn.Cell):
         def __init__(self):
             super().__init__()
-            self.op = P.TensorAdd()
+            self.op = P.Add()
 
         def construct(self, x):
             y = self.op(x[0], x[1])
@@ -611,18 +611,6 @@ def test_switch_layer_single_layer():
     x = Tensor(np.ones((3, 1, 12, 12)), ms.float32)
     i = Tensor(1, ms.int32)
     net2(x, i)
-
-
-def test_control_depend_check():
-    with pytest.raises(TypeError) as e:
-        P.ControlDepend(0.0)
-        print(e)
-    with pytest.raises(ValueError) as e:
-        P.ControlDepend(2)
-        print(e)
-    with pytest.raises(TypeError) as e:
-        P.ControlDepend((2,))
-        print(e)
 
 
 def test_if_nested_compile():
@@ -761,27 +749,6 @@ def test_while_scalar():
     out = net(x, y)
 
 
-def test_while_tensor():
-    class Net(nn.Cell):
-        def __init__(self):
-            super(Net, self).__init__()
-            self.t = Tensor(np.ones([6, 8, 10], np.int32))
-            self.count = Tensor(np.array([10], np.int32))
-
-        def construct(self, x, y):
-            i = 0
-            t = self.t
-            while (i < self.count):
-                t = t + x + y
-                i = i + 1
-            return t
-
-    net = Net()
-    x = Tensor(np.ones([6, 8, 10], np.int32))
-    y = Tensor(np.ones([6, 8, 10], np.int32))
-    out = net(x, y)
-
-
 def test_large_for_loop():
     class Net(nn.Cell):
         def __init__(self):
@@ -835,14 +802,14 @@ def test_mixed_precision_cast():
     assert z.dtype == mstype.float16
 
 
-def test_while_concat():
+def test_while_add():
     class Net(nn.Cell):
         def __init__(self, data):
             super(Net, self).__init__()
             self.start = Tensor(0, dtype=mstype.int32)
             self.end = Tensor(2, dtype=mstype.int32)
             self.out = Tensor(np.zeros([2, 3], dtype=np.float32))
-            self.concat = P.Concat()
+            self.add = P.Add()
 
         def construct(self, inputs):
             idx = self.start
@@ -850,7 +817,7 @@ def test_while_concat():
             out = self.out
             while idx < end:
                 xi = inputs[idx, :, :]
-                out = self.concat((out, xi))
+                out = self.add(out, xi)
                 idx = idx + 1
             return out
 

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,21 +17,24 @@
 #ifndef MINDSPORE_CCSRC_MINDDATA_DATASET_API_PYTHON_PYBIND_CONVERSION_H_
 #define MINDSPORE_CCSRC_MINDDATA_DATASET_API_PYTHON_PYBIND_CONVERSION_H_
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 #include "pybind11/pybind11.h"
 #include "pybind11/stl.h"
 #include "pybind11/stl_bind.h"
-#include "minddata/dataset/include/datasets.h"
-#include "minddata/dataset/include/samplers.h"
-#include "minddata/dataset/include/transforms.h"
 #include "minddata/dataset/api/python/pybind_register.h"
+#include "minddata/dataset/core/type_id.h"
 #include "minddata/dataset/engine/ir/cache/pre_built_dataset_cache.h"
 #include "minddata/dataset/engine/ir/datasetops/source/csv_node.h"
+#include "minddata/dataset/include/datasets.h"
+#include "minddata/dataset/include/samplers.h"
+#include "minddata/dataset/kernels/ir/data/transforms_ir.h"
 #include "minddata/dataset/kernels/py_func_op.h"
 namespace py = pybind11;
 
@@ -53,6 +56,10 @@ std::map<std::string, int32_t> toStringMap(const py::dict dict);
 
 std::vector<std::string> toStringVector(const py::list list);
 
+std::vector<pid_t> toIntVector(const py::list input_list);
+
+std::unordered_map<int32_t, std::vector<pid_t>> toIntMap(const py::dict input_dict);
+
 std::pair<int64_t, int64_t> toIntPair(const py::tuple tuple);
 
 std::vector<std::pair<int, int>> toPairVector(const py::list list);
@@ -73,7 +80,7 @@ std::vector<std::shared_ptr<CsvBase>> toCSVBase(py::list csv_bases);
 
 std::shared_ptr<TensorOp> toPyFuncOp(py::object func, DataType::Type data_type);
 
-Status ToJson(const py::handle &padded_sample, nlohmann::json *padded_sample_json,
+Status ToJson(const py::handle &padded_sample, nlohmann::json *const padded_sample_json,
               std::map<std::string, std::string> *sample_bytes);
 
 Status toPadInfo(py::dict value, std::map<std::string, std::pair<TensorShape, std::shared_ptr<Tensor>>> *pad_info);

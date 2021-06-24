@@ -30,6 +30,7 @@
 #include "ir/func_graph.h"
 #include "utils/convert_utils.h"
 #include "utils/info.h"
+#include "pipeline/jit/pipeline.h"
 
 namespace mindspore {
 namespace parallel {
@@ -43,6 +44,11 @@ constexpr char DYNAMIC_PROGRAMMING[] = "dynamic_programming";
 constexpr char RECURSIVE_PROGRAMMING[] = "recursive_programming";
 
 constexpr char TRAINING[] = "training";
+constexpr char ACCUMULATION[] = "accumulation";
+
+constexpr char ALL_GROUP_PARALLEL[] = "all_group_parallel";
+constexpr char SAME_SERVER_GROUP_PARALLEL[] = "same_server_group_parallel";
+constexpr char NO_GROUP_PARALLEL[] = "no_group_parallel";
 
 class ParallelContext {
  public:
@@ -102,13 +108,23 @@ class ParallelContext {
   std::string strategy_ckpt_load_file() const { return strategy_ckpt_load_file_; }
   void set_strategy_ckpt_save_file(const std::string &strategy_ckpt_save_file);
   std::string strategy_ckpt_save_file() const { return strategy_ckpt_save_file_; }
+  void set_group_ckpt_save_file(const std::string &group_ckpt_save_file);
+  std::string group_ckpt_save_file() const { return group_ckpt_save_file_; }
 
   void set_enable_parallel_optimizer(bool enable_parallel_optimizer) {
     enable_parallel_optimizer_ = enable_parallel_optimizer;
   }
   bool enable_parallel_optimizer() const { return enable_parallel_optimizer_; }
 
+  bool set_communi_parallel_mode(const std::string &communi_parallel_mode);
+  std::string communi_parallel_mode() const { return communi_parallel_mode_; }
+
   void Reset();
+  void ParallelParameterContextInitShape(const FuncGraphPtr &func_graph);
+  void ParallelParameterContextRestoreShape(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
+                                            AbstractBasePtr ptr);
+  void ParallelParameterContextCkptShape(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
+                                         const AbstractBasePtr &ptr);
 
  private:
   ParallelContext();
@@ -132,14 +148,11 @@ class ParallelContext {
   std::map<std::string, std::vector<uint32_t>> all_reduce_fusion_split_sizes_;
   std::string strategy_ckpt_load_file_;
   std::string strategy_ckpt_save_file_;
+  std::string group_ckpt_save_file_;
   bool enable_parallel_optimizer_;
+  bool init_param_shape_;
+  std::string communi_parallel_mode_;
 };
-
-void ParallelParameterContextInit(const FuncGraphPtr &func_graph);
-void ParallelParameterContextRestoreInNoTraining(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
-                                                 AbstractBasePtr ptr);
-void ParallelParameterContextCkptInTraining(const FuncGraphPtr &func_graph, const ParameterPtr &param_node,
-                                            const AbstractBasePtr &ptr);
 }  // namespace parallel
 }  // namespace mindspore
 

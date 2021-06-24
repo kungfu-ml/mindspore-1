@@ -31,7 +31,6 @@
 #include "tools/converter/legacy_optimizer/graph/trans_format_insert_pass.h"
 #include "tools/converter/legacy_optimizer/graph/global_format_transform_pass.h"
 #include "tools/converter/legacy_optimizer/graph/isolated_node_remove_pass.h"
-#include "tools/converter/legacy_optimizer/graph/unused_node_remove_pass.h"
 #include "tools/converter/legacy_optimizer/graph/dropout_node_remove_pass.h"
 #include "tools/converter/legacy_optimizer/graph/topological_sort_pass.h"
 #include "tools/converter/legacy_optimizer/graph/tensor_quant_pass.h"
@@ -39,9 +38,9 @@
 #include "tools/converter/legacy_optimizer/graph/infer_quant_param_pass.h"
 #include "tools/converter/legacy_optimizer/graph/set_unused_quant_param_to_default_pass.h"
 #include "tools/converter/legacy_optimizer/graph/switch_pass.h"
-#include "tools/converter/legacy_optimizer/graph/select_pass.h"
 #include "tools/converter/legacy_optimizer/graph/subgraph_node_pass.h"
 #include "tools/converter/legacy_optimizer/graph/subgraph_tensor_pass.h"
+#include "tools/converter/legacy_optimizer/graph/nested_loop_expand_pass.h"
 
 using std::string;
 namespace mindspore::lite {
@@ -65,7 +64,6 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
   {
     auto old_nodes = GetGraphNodes();
     Optimizer unusedOpRemoveOptimizer;
-    unusedOpRemoveOptimizer.AddPass(new UnusedNodeRemovePass());
     if (!ctx.trainModel) {
       unusedOpRemoveOptimizer.AddPass(new DropoutNodeRemovePass());
     }
@@ -90,9 +88,68 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
     }
   }
 
+  {
+    // format transform
+    // init old node indices
+    auto old_nodes = GetGraphNodes();
+
+    Optimizer formatTransOptimizer;
+    auto formatTransPass = new (std::nothrow) FormatTransPass();
+    if (formatTransPass == nullptr) {
+      MS_LOG(ERROR) << "new formatTransPass failed";
+      return RET_MEMORY_FAILED;
+    }
+    formatTransPass->SetQuantType(ctx.quantType);
+    formatTransPass->SetFmk(ctx.fmk);
+    formatTransOptimizer.AddPass(formatTransPass);
+    formatTransOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
+    formatTransOptimizer.AddPass(new (std::nothrow) TopologicalSortPass());
+    if (ctx.fmk != converter::FmkType_TF) {
+      formatTransOptimizer.AddPass(new (std::nothrow) InferShapePass());
+    }
+    status = formatTransOptimizer.Run(graphDefT);
+    if (status != RET_OK && status != RET_NO_CHANGE && status != RET_INFER_INVALID) {
+      MS_LOG(ERROR) << "Run formatTransOptimizer graphPasses Failed";
+      return status;
+    }
+  }
+  {
+    // init old node indices
+    auto old_nodes = GetGraphNodes();
+    Optimizer formatTransOptimizer;
+    formatTransOptimizer.AddPass(new (std::nothrow) FormatTransFusionPass());
+    formatTransOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
+    formatTransOptimizer.AddPass(new (std::nothrow) TransOpRemovePass());
+    formatTransOptimizer.AddPass(new (std::nothrow) TransOpInsertPass());
+    formatTransOptimizer.AddPass(new (std::nothrow) FormatTransFusionPass());
+    formatTransOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
+    formatTransOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
+    status = formatTransOptimizer.Run(graphDefT);
+    if (status != RET_OK && status != RET_NO_CHANGE && status != RET_INFER_INVALID) {
+      MS_LOG(ERROR) << "Run formatTransOptimizer graphPasses Failed";
+      return status;
+    }
+  }
+
+  {
+    // init old node indices
+    auto old_nodes = GetGraphNodes();
+    Optimizer formatTransOptimizer;
+    if (!ctx.trainModel && ctx.fmk != converter::FmkType_ONNX) {
+      formatTransOptimizer.AddPass(new (std::nothrow) GlobalFormatTransformPass());
+      formatTransOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
+      formatTransOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
+    }
+    status = formatTransOptimizer.Run(graphDefT);
+    if (status != RET_OK && status != RET_NO_CHANGE && status != RET_INFER_INVALID) {
+      MS_LOG(ERROR) << "Run formatTransOptimizer graphPasses Failed";
+      return status;
+    }
+  }
+
   // postconvert pass
   {
-    // init old node indecies
+    // init old node indices
     auto old_nodes = GetGraphNodes();
     Optimizer fusionOptimizer;
     if (!ctx.trainModel) {
@@ -113,76 +170,8 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
     }
   }
 
-  if (ctx.fmk != converter::FmkType_TF) {
-    // format transform
-    // init old node indecies
-    auto old_nodes = GetGraphNodes();
-
-    Optimizer formatTransOptimizer;
-    auto formatTransPass = new (std::nothrow) FormatTransPass();
-    if (formatTransPass == nullptr) {
-      MS_LOG(ERROR) << "new formatTransPass failed";
-      return RET_MEMORY_FAILED;
-    }
-    formatTransPass->SetQuantType(ctx.quantType);
-    formatTransPass->SetFmk(ctx.fmk);
-    formatTransOptimizer.AddPass(formatTransPass);
-    formatTransOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
-    formatTransOptimizer.AddPass(new (std::nothrow) TopologicalSortPass());
-    formatTransOptimizer.AddPass(new (std::nothrow) InferShapePass());
-    status = formatTransOptimizer.Run(graphDefT);
-    if (status != RET_OK && status != RET_NO_CHANGE && status != RET_INFER_INVALID) {
-      MS_LOG(ERROR) << "Run formatTransOptimizer graphPasses Failed";
-      return status;
-    }
-  }
-
   {
-    // init old node indecies
-    auto old_nodes = GetGraphNodes();
-    Optimizer formatTransOptimizer;
-    auto formatTransPass = new (std::nothrow) FormatTransPass();
-    if (formatTransPass == nullptr) {
-      MS_LOG(ERROR) << "new formatTransPass failed";
-      return RET_MEMORY_FAILED;
-    }
-    formatTransOptimizer.AddPass(new (std::nothrow) FormatTransFusionPass());
-    formatTransOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
-    formatTransOptimizer.AddPass(new (std::nothrow) TransOpRemovePass());
-    formatTransOptimizer.AddPass(new (std::nothrow) TransOpInsertPass());
-    formatTransOptimizer.AddPass(new (std::nothrow) FormatTransFusionPass());
-    formatTransOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
-    formatTransOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
-    status = formatTransOptimizer.Run(graphDefT);
-    if (status != RET_OK && status != RET_NO_CHANGE && status != RET_INFER_INVALID) {
-      MS_LOG(ERROR) << "Run formatTransOptimizer graphPasses Failed";
-      return status;
-    }
-  }
-
-  {
-    // init old node indecies
-    auto old_nodes = GetGraphNodes();
-    Optimizer formatTransOptimizer;
-    auto formatTransPass = new (std::nothrow) FormatTransPass();
-    if (formatTransPass == nullptr) {
-      MS_LOG(ERROR) << "new formatTransPass failed";
-      return RET_MEMORY_FAILED;
-    }
-    if (!ctx.trainModel && ctx.fmk != converter::FmkType_ONNX) {
-      formatTransOptimizer.AddPass(new (std::nothrow) GlobalFormatTransformPass());
-      formatTransOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
-      formatTransOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
-    }
-    status = formatTransOptimizer.Run(graphDefT);
-    if (status != RET_OK && status != RET_NO_CHANGE && status != RET_INFER_INVALID) {
-      MS_LOG(ERROR) << "Run formatTransOptimizer graphPasses Failed";
-      return status;
-    }
-  }
-
-  {
-    // init old node indecies
+    // init old node indices
     auto old_nodes = GetGraphNodes();
     Optimizer fusionOptimizer;
     fusionOptimizer.AddPass(new (std::nothrow) MulAddFusionPass());
@@ -197,7 +186,7 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
 
   // do quantization
   if (ctx.fmk != converter::FmkType_TF) {
-    // init old node indecies
+    // init old node indices
     auto old_nodes = GetGraphNodes();
     Optimizer tensorQuantOptimizer;
     tensorQuantOptimizer.AddPass(new (std::nothrow) TopologicalSortPass());
@@ -213,7 +202,7 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
 
   // insert quantNode and deQuantNode
   if (ctx.fmk != converter::FmkType_TF) {
-    // init old node indecies
+    // init old node indices
     auto old_nodes = GetGraphNodes();
     Optimizer quantNodeOptimizer;
     auto dTypeTransPass = new (std::nothrow) DTypeTransPass();
@@ -235,7 +224,6 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
     quantNodeOptimizer.AddPass(dTypeTransPass);
     quantNodeOptimizer.AddPass(new (std::nothrow) QuantCastFusionPass());
     quantNodeOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
-    quantNodeOptimizer.AddPass(new (std::nothrow) SetUnusedQuantParamToDefaultPass());
     quantNodeOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes2));
     status = quantNodeOptimizer.Run(graphDefT);
     if (status != RET_OK && status != RET_NO_CHANGE) {
@@ -246,27 +234,13 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
 
   // switch pass
   {
-    // init old node indecies
+    // init old node indices
     auto old_nodes = GetGraphNodes();
     Optimizer switchOptimizer;
     switchOptimizer.AddPass(new (std::nothrow) SwitchPass());
     switchOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
     switchOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
     status = switchOptimizer.Run(graphDefT);
-    if (status != RET_OK && status != RET_NO_CHANGE) {
-      MS_LOG(ERROR) << "Run switch graphPasses Failed";
-      return status;
-    }
-  }
-
-  // select pass
-  {
-    // init old node indecies
-    auto old_nodes = GetGraphNodes();
-    Optimizer selectOptimizer;
-    selectOptimizer.AddPass(new (std::nothrow) SelectPass());
-    selectOptimizer.AddPass(new (std::nothrow) IsolatedNodeRemovePass());
-    status = selectOptimizer.Run(graphDefT);
     if (status != RET_OK && status != RET_NO_CHANGE) {
       MS_LOG(ERROR) << "Run switch graphPasses Failed";
       return status;
@@ -286,7 +260,7 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
 
   // tensor name
   {
-    // init old node indecies
+    // init old node indices
     auto old_nodes = GetGraphNodes();
     Optimizer nameOptimizer;
     nameOptimizer.AddPass(new (std::nothrow) SubgraphNodePass(old_nodes));
@@ -299,6 +273,25 @@ int GraphDefTransform::Transform(const converter::Flags &ctx) {
     }
   }
 
+  {
+    Optimizer nestedLoopOptimizer;
+    nestedLoopOptimizer.AddPass(new (std::nothrow) NestedLoopExpandPass());
+    status = nestedLoopOptimizer.Run(graphDefT);
+    if (status != RET_OK && status != RET_NO_CHANGE) {
+      MS_LOG(ERROR) << "Run nestedLoopOptimizer graphPasses Failed";
+      return status;
+    }
+  }
+
+  {
+    Optimizer quantNodeOptimizer;
+    quantNodeOptimizer.AddPass(new (std::nothrow) SetUnusedQuantParamToDefaultPass());
+    status = quantNodeOptimizer.Run(graphDefT);
+    if (status != RET_OK && status != RET_NO_CHANGE) {
+      MS_LOG(ERROR) << "Run quantNodeOptimizer graphPasses Failed";
+      return status;
+    }
+  }
   return RET_OK;
 }  // namespace mindspore::lite
 }  // namespace mindspore::lite

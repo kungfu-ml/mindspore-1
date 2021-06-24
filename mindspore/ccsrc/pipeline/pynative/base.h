@@ -52,13 +52,12 @@ enum RunOpArgsEnum { PY_PRIM = 0, PY_NAME, PY_INPUTS, PY_ARGS_NUM };
 struct OpExecInfo {
   std::string op_name;
   std::string op_index;
-  std::string prim_id;
   PrimitivePyPtr py_primitive;
   AbstractBasePtr abstract;
 
   py::list op_inputs;
   py::dict op_attrs;
-  std::vector<bool> inputs_mask;
+  std::vector<int64_t> inputs_mask;
   bool is_dynamic_shape = false;
   std::string next_op_name = "";
   bool is_mixed_precision_cast = false;

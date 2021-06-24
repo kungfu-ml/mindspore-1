@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ TEST_F(MindDataTestPipeline, TestCocoDefault) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -48,9 +48,9 @@ TEST_F(MindDataTestPipeline, TestCocoDefault) {
     auto image = row["image"];
     auto bbox = row["bbox"];
     auto category_id = row["category_id"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    MS_LOG(INFO) << "Tensor bbox shape: " << bbox->shape();
-    MS_LOG(INFO) << "Tensor category_id shape: " << category_id->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    MS_LOG(INFO) << "Tensor bbox shape: " << bbox.Shape();
+    MS_LOG(INFO) << "Tensor category_id shape: " << category_id.Shape();
     iter->GetNextRow(&row);
     i++;
   }
@@ -97,7 +97,7 @@ TEST_F(MindDataTestPipeline, TestCocoDefaultWithPipeline) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -105,9 +105,9 @@ TEST_F(MindDataTestPipeline, TestCocoDefaultWithPipeline) {
     auto image = row["image"];
     auto bbox = row["bbox"];
     auto category_id = row["category_id"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
-    MS_LOG(INFO) << "Tensor bbox shape: " << bbox->shape();
-    MS_LOG(INFO) << "Tensor category_id shape: " << category_id->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
+    MS_LOG(INFO) << "Tensor bbox shape: " << bbox.Shape();
+    MS_LOG(INFO) << "Tensor category_id shape: " << category_id.Shape();
     iter->GetNextRow(&row);
     i++;
   }
@@ -138,7 +138,8 @@ TEST_F(MindDataTestPipeline, TestCocoDetection) {
   std::string folder_path = datasets_root_path_ + "/testCOCO/train";
   std::string annotation_file = datasets_root_path_ + "/testCOCO/annotations/train.json";
 
-  std::shared_ptr<Dataset> ds = Coco(folder_path, annotation_file, "Detection", false, SequentialSampler(0, 6));
+  std::shared_ptr<Dataset> ds =
+    Coco(folder_path, annotation_file, "Detection", false, std::make_shared<SequentialSampler>(0, 6));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -147,7 +148,7 @@ TEST_F(MindDataTestPipeline, TestCocoDetection) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::string expect_file[] = {"000000391895", "000000318219", "000000554625",
@@ -164,16 +165,23 @@ TEST_F(MindDataTestPipeline, TestCocoDetection) {
     auto image = row["image"];
     auto bbox = row["bbox"];
     auto category_id = row["category_id"];
-    std::shared_ptr<Tensor> expect_image;
-    Tensor::CreateFromFile(folder_path + "/" + expect_file[i] + ".jpg", &expect_image);
-    EXPECT_EQ(*image, *expect_image);
-    std::shared_ptr<Tensor> expect_bbox;
+
+    mindspore::MSTensor expect_image = ReadFileToTensor(folder_path + "/" + expect_file[i] + ".jpg");
+    EXPECT_MSTENSOR_EQ(image, expect_image);
+
+    std::shared_ptr<Tensor> de_expect_bbox;
     dsize_t bbox_num = static_cast<dsize_t>(expect_bbox_vector[i].size() / 4);
-    Tensor::CreateFromVector(expect_bbox_vector[i], TensorShape({bbox_num, 4}), &expect_bbox);
-    EXPECT_EQ(*bbox, *expect_bbox);
-    std::shared_ptr<Tensor> expect_categoryid;
-    Tensor::CreateFromVector(expect_catagoryid_list[i], TensorShape({bbox_num, 1}), &expect_categoryid);
-    EXPECT_EQ(*category_id, *expect_categoryid);
+    ASSERT_OK(Tensor::CreateFromVector(expect_bbox_vector[i], TensorShape({bbox_num, 4}), &de_expect_bbox));
+    mindspore::MSTensor expect_bbox =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_bbox));
+    EXPECT_MSTENSOR_EQ(bbox, expect_bbox);
+
+    std::shared_ptr<Tensor> de_expect_categoryid;
+    ASSERT_OK(Tensor::CreateFromVector(expect_catagoryid_list[i], TensorShape({bbox_num, 1}), &de_expect_categoryid));
+    mindspore::MSTensor expect_categoryid =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_categoryid));
+    EXPECT_MSTENSOR_EQ(category_id, expect_categoryid);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -220,7 +228,8 @@ TEST_F(MindDataTestPipeline, TestCocoKeypoint) {
   std::string folder_path = datasets_root_path_ + "/testCOCO/train";
   std::string annotation_file = datasets_root_path_ + "/testCOCO/annotations/key_point.json";
 
-  std::shared_ptr<Dataset> ds = Coco(folder_path, annotation_file, "Keypoint", false, SequentialSampler(0, 2));
+  std::shared_ptr<Dataset> ds =
+    Coco(folder_path, annotation_file, "Keypoint", false, std::make_shared<SequentialSampler>(0, 2));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -229,7 +238,7 @@ TEST_F(MindDataTestPipeline, TestCocoKeypoint) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::string expect_file[] = {"000000391895", "000000318219"};
@@ -247,16 +256,24 @@ TEST_F(MindDataTestPipeline, TestCocoKeypoint) {
     auto image = row["image"];
     auto keypoints = row["keypoints"];
     auto num_keypoints = row["num_keypoints"];
-    std::shared_ptr<Tensor> expect_image;
-    Tensor::CreateFromFile(folder_path + "/" + expect_file[i] + ".jpg", &expect_image);
-    EXPECT_EQ(*image, *expect_image);
-    std::shared_ptr<Tensor> expect_keypoints;
+
+    mindspore::MSTensor expect_image = ReadFileToTensor(folder_path + "/" + expect_file[i] + ".jpg");
+    EXPECT_MSTENSOR_EQ(image, expect_image);
+
+    std::shared_ptr<Tensor> de_expect_keypoints;
     dsize_t keypoints_size = expect_size[i][0];
-    Tensor::CreateFromVector(expect_keypoint_vector[i], TensorShape(expect_size[i]), &expect_keypoints);
-    EXPECT_EQ(*keypoints, *expect_keypoints);
-    std::shared_ptr<Tensor> expect_num_keypoints;
-    Tensor::CreateFromVector(expect_num_keypoints_list[i], TensorShape({keypoints_size, 1}), &expect_num_keypoints);
-    EXPECT_EQ(*num_keypoints, *expect_num_keypoints);
+    ASSERT_OK(Tensor::CreateFromVector(expect_keypoint_vector[i], TensorShape(expect_size[i]), &de_expect_keypoints));
+    mindspore::MSTensor expect_keypoints =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_keypoints));
+    EXPECT_MSTENSOR_EQ(keypoints, expect_keypoints);
+
+    std::shared_ptr<Tensor> de_expect_num_keypoints;
+    ASSERT_OK(Tensor::CreateFromVector(expect_num_keypoints_list[i], TensorShape({keypoints_size, 1}),
+                                       &de_expect_num_keypoints));
+    mindspore::MSTensor expect_num_keypoints =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_num_keypoints));
+    EXPECT_MSTENSOR_EQ(num_keypoints, expect_num_keypoints);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -273,7 +290,8 @@ TEST_F(MindDataTestPipeline, TestCocoPanoptic) {
   std::string folder_path = datasets_root_path_ + "/testCOCO/train";
   std::string annotation_file = datasets_root_path_ + "/testCOCO/annotations/panoptic.json";
 
-  std::shared_ptr<Dataset> ds = Coco(folder_path, annotation_file, "Panoptic", false, SequentialSampler(0, 2));
+  std::shared_ptr<Dataset> ds =
+    Coco(folder_path, annotation_file, "Panoptic", false, std::make_shared<SequentialSampler>(0, 2));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -282,7 +300,7 @@ TEST_F(MindDataTestPipeline, TestCocoPanoptic) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::string expect_file[] = {"000000391895", "000000574769"};
@@ -299,22 +317,35 @@ TEST_F(MindDataTestPipeline, TestCocoPanoptic) {
     auto category_id = row["category_id"];
     auto iscrowd = row["iscrowd"];
     auto area = row["area"];
-    std::shared_ptr<Tensor> expect_image;
-    Tensor::CreateFromFile(folder_path + "/" + expect_file[i] + ".jpg", &expect_image);
-    EXPECT_EQ(*image, *expect_image);
-    std::shared_ptr<Tensor> expect_bbox;
+
+    mindspore::MSTensor expect_image = ReadFileToTensor(folder_path + "/" + expect_file[i] + ".jpg");
+    EXPECT_MSTENSOR_EQ(image, expect_image);
+
+    std::shared_ptr<Tensor> de_expect_bbox;
     dsize_t bbox_size = expect_size[i][0];
-    Tensor::CreateFromVector(expect_bbox_vector[i], TensorShape(expect_size[i]), &expect_bbox);
-    EXPECT_EQ(*bbox, *expect_bbox);
-    std::shared_ptr<Tensor> expect_categoryid;
-    Tensor::CreateFromVector(expect_categoryid_vector[i], TensorShape({bbox_size, 1}), &expect_categoryid);
-    EXPECT_EQ(*category_id, *expect_categoryid);
-    std::shared_ptr<Tensor> expect_iscrowd;
-    Tensor::CreateFromVector(expect_iscrowd_vector[i], TensorShape({bbox_size, 1}), &expect_iscrowd);
-    EXPECT_EQ(*iscrowd, *expect_iscrowd);
-    std::shared_ptr<Tensor> expect_area;
-    Tensor::CreateFromVector(expect_area_vector[i], TensorShape({bbox_size, 1}), &expect_area);
-    EXPECT_EQ(*area, *expect_area);
+    ASSERT_OK(Tensor::CreateFromVector(expect_bbox_vector[i], TensorShape(expect_size[i]), &de_expect_bbox));
+    mindspore::MSTensor expect_bbox =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_bbox));
+    EXPECT_MSTENSOR_EQ(bbox, expect_bbox);
+
+    std::shared_ptr<Tensor> de_expect_categoryid;
+    ASSERT_OK(Tensor::CreateFromVector(expect_categoryid_vector[i], TensorShape({bbox_size, 1}), &de_expect_categoryid));
+    mindspore::MSTensor expect_categoryid =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_categoryid));
+    EXPECT_MSTENSOR_EQ(category_id, expect_categoryid);
+
+    std::shared_ptr<Tensor> de_expect_iscrowd;
+    ASSERT_OK(Tensor::CreateFromVector(expect_iscrowd_vector[i], TensorShape({bbox_size, 1}), &de_expect_iscrowd));
+    mindspore::MSTensor expect_iscrowd =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_iscrowd));
+    EXPECT_MSTENSOR_EQ(iscrowd, expect_iscrowd);
+
+    std::shared_ptr<Tensor> de_expect_area;
+    ASSERT_OK(Tensor::CreateFromVector(expect_area_vector[i], TensorShape({bbox_size, 1}), &de_expect_area));
+    mindspore::MSTensor expect_area =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_area));
+    EXPECT_MSTENSOR_EQ(area, expect_area);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -331,9 +362,10 @@ TEST_F(MindDataTestPipeline, TestCocoPanopticGetClassIndex) {
   std::string folder_path = datasets_root_path_ + "/testCOCO/train";
   std::string annotation_file = datasets_root_path_ + "/testCOCO/annotations/panoptic.json";
 
-  std::shared_ptr<Dataset> ds = Coco(folder_path, annotation_file, "Panoptic", false, SequentialSampler(0, 2));
+  std::shared_ptr<Dataset> ds =
+    Coco(folder_path, annotation_file, "Panoptic", false, std::make_shared<SequentialSampler>(0, 2));
   EXPECT_NE(ds, nullptr);
-  
+
   std::vector<std::pair<std::string, std::vector<int32_t>>> class_index1 = ds->GetClassIndexing();
   EXPECT_EQ(class_index1.size(), 3);
   EXPECT_EQ(class_index1[0].first, "person");
@@ -353,7 +385,8 @@ TEST_F(MindDataTestPipeline, TestCocoStuff) {
   std::string folder_path = datasets_root_path_ + "/testCOCO/train";
   std::string annotation_file = datasets_root_path_ + "/testCOCO/annotations/train.json";
 
-  std::shared_ptr<Dataset> ds = Coco(folder_path, annotation_file, "Stuff", false, SequentialSampler(0, 6));
+  std::shared_ptr<Dataset> ds =
+    Coco(folder_path, annotation_file, "Stuff", false, std::make_shared<SequentialSampler>(0, 6));
   EXPECT_NE(ds, nullptr);
 
   // Create an iterator over the result of the above dataset
@@ -362,7 +395,7 @@ TEST_F(MindDataTestPipeline, TestCocoStuff) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::string expect_file[] = {"000000391895", "000000318219", "000000554625",
@@ -381,13 +414,16 @@ TEST_F(MindDataTestPipeline, TestCocoStuff) {
   while (row.size() != 0) {
     auto image = row["image"];
     auto segmentation = row["segmentation"];
-    auto iscrowd = row["iscrowd"];
-    std::shared_ptr<Tensor> expect_image;
-    Tensor::CreateFromFile(folder_path + "/" + expect_file[i] + ".jpg", &expect_image);
-    EXPECT_EQ(*image, *expect_image);
-    std::shared_ptr<Tensor> expect_segmentation;
-    Tensor::CreateFromVector(expect_segmentation_vector[i], TensorShape(expect_size[i]), &expect_segmentation);
-    EXPECT_EQ(*segmentation, *expect_segmentation);
+
+    mindspore::MSTensor expect_image = ReadFileToTensor(folder_path + "/" + expect_file[i] + ".jpg");
+    EXPECT_MSTENSOR_EQ(image, expect_image);
+
+    std::shared_ptr<Tensor> de_expect_segmentation;
+    ASSERT_OK(Tensor::CreateFromVector(expect_segmentation_vector[i], TensorShape(expect_size[i]), &de_expect_segmentation));
+    mindspore::MSTensor expect_segmentation =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expect_segmentation));
+    EXPECT_MSTENSOR_EQ(segmentation, expect_segmentation);
+
     iter->GetNextRow(&row);
     i++;
   }

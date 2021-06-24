@@ -19,9 +19,9 @@
 
 namespace Analysis {
 namespace Dvvp {
-namespace ProfilerCommon {
+namespace ProfilerSpecial {
 extern int32_t MsprofilerInit();
-}  // namespace ProfilerCommon
+}  // namespace ProfilerSpecial
 }  // namespace Dvvp
 }  // namespace Analysis
 
@@ -30,8 +30,44 @@ constexpr Status PROF_SUCCESS = 0;
 constexpr Status PROF_FAILED = 0xFFFFFFFF;
 }  // namespace
 
+int32_t _aclprofGetDeviceByModelId(uint32_t modelId, uint32_t &deviceId) { return 0; }
+
+bool _aclprofGetInitFlag() { return true; }
+
+int32_t _aclprofRegisterCtrlCallback(MsprofCtrlCallback callback) {
+  if (VMCallbackRegister::GetInstance().registered()) {
+    return VMCallbackRegister::GetInstance().DoRegProfCtrlCallback(callback);
+  } else {
+    return PROF_SUCCESS;
+  }
+}
+
+int32_t _aclprofRegisterSetDeviceCallback(MsprofSetDeviceCallback callback) {
+  if (VMCallbackRegister::GetInstance().registered()) {
+    return VMCallbackRegister::GetInstance().DoRegProfSetDeviceCallback(callback);
+  } else {
+    return PROF_SUCCESS;
+  }
+}
+
+int32_t _aclprofRegisterReporterCallback(MsprofReporterCallback callback) {
+  if (VMCallbackRegister::GetInstance().registered()) {
+    return VMCallbackRegister::GetInstance().DoRegProfReporterCallback(callback);
+  } else {
+    return PROF_SUCCESS;
+  }
+}
+
+int32_t _aclprofCommandHandle(uint32_t type, void *data, uint32_t len) {
+  if (VMCallbackRegister::GetInstance().registered()) {
+    return VMCallbackRegister::GetInstance().DoProfCommandHandle((ProfCommandHandleType)type, data, len);
+  } else {
+    return PROF_SUCCESS;
+  }
+}
+
 Status RegProfCtrlCallback(MsprofCtrlCallback func) {
-  if (VMCallbackRegister::GetInstance().registed()) {
+  if (VMCallbackRegister::GetInstance().registered()) {
     return VMCallbackRegister::GetInstance().DoRegProfCtrlCallback(func);
   } else {
     return PROF_SUCCESS;
@@ -39,7 +75,7 @@ Status RegProfCtrlCallback(MsprofCtrlCallback func) {
 }
 
 Status RegProfSetDeviceCallback(MsprofSetDeviceCallback func) {
-  if (VMCallbackRegister::GetInstance().registed()) {
+  if (VMCallbackRegister::GetInstance().registered()) {
     return VMCallbackRegister::GetInstance().DoRegProfSetDeviceCallback(func);
   } else {
     return PROF_SUCCESS;
@@ -47,7 +83,7 @@ Status RegProfSetDeviceCallback(MsprofSetDeviceCallback func) {
 }
 
 Status RegProfReporterCallback(MsprofReporterCallback func) {
-  if (VMCallbackRegister::GetInstance().registed()) {
+  if (VMCallbackRegister::GetInstance().registered()) {
     return VMCallbackRegister::GetInstance().DoRegProfReporterCallback(func);
   } else {
     return PROF_SUCCESS;
@@ -55,7 +91,7 @@ Status RegProfReporterCallback(MsprofReporterCallback func) {
 }
 
 Status ProfCommandHandle(ProfCommandHandleType type, void *data, uint32_t len) {
-  if (VMCallbackRegister::GetInstance().registed()) {
+  if (VMCallbackRegister::GetInstance().registered()) {
     return VMCallbackRegister::GetInstance().DoProfCommandHandle(type, data, len);
   } else {
     return PROF_SUCCESS;
@@ -69,16 +105,16 @@ VMCallbackRegister &VMCallbackRegister::GetInstance() {
   return instance;
 }
 
-bool VMCallbackRegister::Registe(Status (*pRegProfCtrlCallback)(MsprofCtrlCallback),
-                                 Status (*pRegProfSetDeviceCallback)(MsprofSetDeviceCallback),
-                                 Status (*pRegProfReporterCallback)(MsprofReporterCallback),
-                                 Status (*pProfCommandHandle)(ProfCommandHandleType, void *, uint32_t)) {
-  if (!registed_) {
+bool VMCallbackRegister::Register(Status (*pRegProfCtrlCallback)(MsprofCtrlCallback),
+                                  Status (*pRegProfSetDeviceCallback)(MsprofSetDeviceCallback),
+                                  Status (*pRegProfReporterCallback)(MsprofReporterCallback),
+                                  Status (*pProfCommandHandle)(ProfCommandHandleType, void *, uint32_t)) {
+  if (!registered_) {
     pRegProfCtrlCallback_ = pRegProfCtrlCallback;
     pRegProfSetDeviceCallback_ = pRegProfSetDeviceCallback;
     pRegProfReporterCallback_ = pRegProfReporterCallback;
     pProfCommandHandle_ = pProfCommandHandle;
-    registed_ = true;
+    registered_ = true;
     ForceMsprofilerInit();
     return true;
   }
@@ -87,7 +123,7 @@ bool VMCallbackRegister::Registe(Status (*pRegProfCtrlCallback)(MsprofCtrlCallba
 
 void VMCallbackRegister::ForceMsprofilerInit() {
   if (!ms_profile_inited_) {
-    Analysis::Dvvp::ProfilerCommon::MsprofilerInit();
+    Analysis::Dvvp::ProfilerSpecial::MsprofilerInit();
     ms_profile_inited_ = true;
   }
 }

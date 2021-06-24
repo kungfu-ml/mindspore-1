@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,7 +64,7 @@ class CsvOp : public ParallelOp {
     CsvParser() = delete;
 
     CsvParser(int32_t worker_id, std::shared_ptr<JaggedConnector> connector, int64_t rows_per_buffer, char field_delim,
-              std::vector<std::shared_ptr<CsvOp::BaseRecord>> column_default);
+              std::vector<std::shared_ptr<CsvOp::BaseRecord>> column_default, std::string file_path);
 
     ~CsvParser() = default;
 
@@ -142,6 +142,7 @@ class CsvOp : public ParallelOp {
     std::unique_ptr<TensorQTable> tensor_table_;
     std::unique_ptr<DataBuffer> cur_buffer_;
     std::string err_message_;
+    std::string file_path_;
   };
 
   class Builder {
@@ -240,14 +241,6 @@ class CsvOp : public ParallelOp {
       return *this;
     }
 
-    // Setter method
-    // @param std::shared_ptr<Sampler> sampler
-    // @return Builder setter method returns reference to the builder.
-    Builder &SetSampler(std::shared_ptr<SamplerRT> sampler) {
-      builder_sampler_ = std::move(sampler);
-      return *this;
-    }
-
    private:
     int32_t builder_device_id_;
     int32_t builder_num_devices_;
@@ -261,7 +254,6 @@ class CsvOp : public ParallelOp {
     char builder_field_delim_;
     std::vector<std::shared_ptr<CsvOp::BaseRecord>> builder_column_default_list_;
     std::vector<std::string> builder_column_name_list_;
-    std::shared_ptr<SamplerRT> builder_sampler_;
   };
 
   // Constructor of CsvOp
@@ -270,8 +262,7 @@ class CsvOp : public ParallelOp {
   CsvOp(const std::vector<std::string> &csv_files_list, char field_delim,
         const std::vector<std::shared_ptr<BaseRecord>> &column_default, const std::vector<std::string> &column_name,
         int32_t num_workers, int64_t rows_per_buffer, int64_t num_samples, int32_t worker_connector_size,
-        int32_t op_connector_size, bool shuffle_files, int32_t num_devices, int32_t device_id,
-        std::shared_ptr<SamplerRT> sampler);
+        int32_t op_connector_size, bool shuffle_files, int32_t num_devices, int32_t device_id);
 
   // Default destructor
   ~CsvOp() = default;
@@ -307,16 +298,9 @@ class CsvOp : public ParallelOp {
   // @return Vector of the input file names
   std::vector<std::string> FileNames() { return csv_files_list_; }
 
-  /// \Brief If a cache has been added into the ascendant tree over this csv op, then the cache will be executing
-  ///     a sampler for fetching the data.  As such, any options in the csv op need to be reset to its defaults so
-  ///     that this csv op will produce the full set of data into the cache.
-  void MakeSimpleProducer();
-
-  // Base-class override for NodePass visitor acceptor.
-  // @param p - Pointer to the NodePass to be accepted.
-  // @param modified - Whether this node visit modified the pipeline.
-  // @return - Status of the node visit.
-  Status Accept(NodePass *p, bool *modified) override;
+  // Op name getter
+  // @return Name of the current Op
+  std::string Name() const override { return "CsvOp"; }
 
  private:
   // The entry point for when workers are launched.
@@ -402,6 +386,14 @@ class CsvOp : public ParallelOp {
   // @return - the a string vector
   std::vector<std::string> split(const std::string &s, char delim);
 
+  // Private function for analysing the column name in every CSV file
+  // @return - Status
+  Status ColMapAnalyse(const std::string &csv_file_name);
+
+  // Private function for validating whether the column name set in every CSV file remain the same
+  // @return bool - whether column name identical in all CSV files
+  bool ColumnNameValidate();
+
   int32_t device_id_;
   bool shuffle_files_;
   bool finished_reading_dataset_;
@@ -421,6 +413,7 @@ class CsvOp : public ParallelOp {
   char field_delim_;
   std::vector<std::shared_ptr<CsvOp::BaseRecord>> column_default_list_;
   std::vector<std::string> column_name_list_;
+  bool check_flag_ = false;
 };
 }  // namespace dataset
 }  // namespace mindspore

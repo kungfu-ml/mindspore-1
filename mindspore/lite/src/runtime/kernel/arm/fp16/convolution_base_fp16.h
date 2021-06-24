@@ -28,8 +28,10 @@ class ConvolutionBaseFP16CPUKernel : public ConvolutionBaseCPUKernel {
  public:
   ConvolutionBaseFP16CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
                                const std::vector<lite::Tensor *> &outputs, const InnerContext *ctx,
-                               const mindspore::lite::PrimitiveC *primitive)
-      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                               TypeId origin_weight_data_type, TypeId origin_bias_data_type)
+      : ConvolutionBaseCPUKernel(parameter, inputs, outputs, ctx),
+        origin_weight_data_type_(origin_weight_data_type),
+        origin_bias_data_type_(origin_bias_data_type) {}
   ~ConvolutionBaseFP16CPUKernel() override;
 
   int Init() override { return mindspore::lite::RET_OK; }
@@ -37,17 +39,18 @@ class ConvolutionBaseFP16CPUKernel : public ConvolutionBaseCPUKernel {
   int Run() override { return mindspore::lite::RET_OK; }
   int RunImpl(int task_id) { return mindspore::lite::RET_OK; }
   virtual int GetExecuteTensor();
-  virtual int GetExecuteFilter();
-  virtual void IfCastOutput();
-  void FreeTmpBuffer();
+  // origin_data may not be the same as the data in the weight tensor,
+  // because weight tensor has released data already. In this situation,
+  // origin_data is the pointer of another memory block.
+  virtual int GetExecuteFilter(lite::Tensor *weight_tensor, void *origin_data);
 
  protected:
   float16_t *fp16_weight_ = nullptr;
   float16_t *execute_input_ = nullptr;
   float16_t *execute_weight_ = nullptr;
   float16_t *execute_output_ = nullptr;
-  TypeId in_data_type_;
-  TypeId out_data_type_;
+  TypeId origin_weight_data_type_;
+  TypeId origin_bias_data_type_;
 };
 }  // namespace mindspore::kernel
 

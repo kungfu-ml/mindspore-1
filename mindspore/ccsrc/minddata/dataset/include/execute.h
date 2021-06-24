@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,45 +14,79 @@
  * limitations under the License.
  */
 
-#ifndef DATASET_API_EXECUTE_H_
-#define DATASET_API_EXECUTE_H_
+#ifndef MINDSPORE_CCSRC_MINDDATA_DATASET_INCLUDE_EXECUTE_H_
+#define MINDSPORE_CCSRC_MINDDATA_DATASET_INCLUDE_EXECUTE_H_
 
+#include <string>
 #include <vector>
+#include <map>
 #include <memory>
-#include "minddata/dataset/core/constants.h"
-#ifdef ENABLE_ANDROID
-#include "minddata/dataset/include/de_tensor.h"
-#endif
-#include "minddata/dataset/include/tensor.h"
+#include "include/api/context.h"
+#include "include/api/types.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/include/transforms.h"
 
 namespace mindspore {
 namespace dataset {
-
-class TensorOp;
-
+class DeviceResource;
 // class to run tensor operations in eager mode
 class Execute {
  public:
   /// \brief Constructor
-  explicit Execute(std::shared_ptr<TensorOperation> op);
+  // FIXME - Temporarily overload Execute to support both TensorOperation and TensorTransform
+  explicit Execute(std::shared_ptr<TensorOperation> op, MapTargetDevice deviceType = MapTargetDevice::kCpu,
+                   uint32_t device_id = 0);
+  explicit Execute(std::shared_ptr<TensorTransform> op, MapTargetDevice deviceType = MapTargetDevice::kCpu,
+                   uint32_t device_id = 0);
+  explicit Execute(std::reference_wrapper<TensorTransform> op, MapTargetDevice deviceType = MapTargetDevice::kCpu,
+                   uint32_t device_id = 0);
+  explicit Execute(TensorTransform *op, MapTargetDevice deviceType = MapTargetDevice::kCpu, uint32_t device_id = 0);
 
-#ifdef ENABLE_ANDROID
-  /// \brief callable function to execute the TensorOperation in eager mode
-  /// \param[inout] input - the tensor to be transformed
-  /// \return - the output tensor, nullptr if Compute fails
-  std::shared_ptr<tensor::MSTensor> operator()(std::shared_ptr<tensor::MSTensor> input);
-#endif
+  explicit Execute(std::vector<std::shared_ptr<TensorOperation>> ops,
+                   MapTargetDevice deviceType = MapTargetDevice::kCpu, uint32_t device_id = 0);
+  explicit Execute(std::vector<std::shared_ptr<TensorTransform>> ops,
+                   MapTargetDevice deviceType = MapTargetDevice::kCpu, uint32_t device_id = 0);
+  explicit Execute(const std::vector<std::reference_wrapper<TensorTransform>> ops,
+                   MapTargetDevice deviceType = MapTargetDevice::kCpu, uint32_t device_id = 0);
+  explicit Execute(const std::vector<TensorTransform *> &ops, MapTargetDevice deviceType = MapTargetDevice::kCpu,
+                   uint32_t device_id = 0);
+
+  /// \brief Destructor
+  ~Execute();
 
   /// \brief callable function to execute the TensorOperation in eager mode
-  /// \param[inout] input - the tensor to be transformed
-  /// \return - the output tensor, nullptr if Compute fails
-  std::shared_ptr<dataset::Tensor> operator()(std::shared_ptr<dataset::Tensor> input);
+  /// \param[in] input Tensor to be transformed
+  /// \param[out] output Transformed tensor
+  /// \return Status code
+  Status operator()(const mindspore::MSTensor &input, mindspore::MSTensor *output);
+
+  /// \brief callable function to execute the TensorOperation in eager mode
+  /// \param[in] input_tensor_list List of Tensor to be transformed
+  /// \param[out] out Result tensor after transform
+  /// \return - Status
+  Status operator()(const std::vector<mindspore::MSTensor> &input_tensor_list, std::vector<mindspore::MSTensor> *out);
+
+  Status DeviceMemoryRelease();
+
+  std::string AippCfgGenerator();
 
  private:
-  std::shared_ptr<TensorOperation> op_;
+  Status ParseTransforms_();
+
+  Status validate_device_();
+
+  std::vector<std::shared_ptr<TensorTransform>> transforms_;
+
+  std::vector<std::shared_ptr<TensorOperation>> ops_;
+
+  MapTargetDevice device_type_;
+
+  std::shared_ptr<DeviceResource> device_resource_;
+
+  struct ExtraInfo;
+  std::shared_ptr<ExtraInfo> info_;
 };
 
 }  // namespace dataset
 }  // namespace mindspore
-#endif  // DATASET_API_EXECUTE_H_
+#endif  // MINDSPORE_CCSRC_MINDDATA_DATASET_INCLUDE_EXECUTE_H_

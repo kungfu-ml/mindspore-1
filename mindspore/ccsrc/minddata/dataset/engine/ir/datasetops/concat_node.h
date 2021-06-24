@@ -55,11 +55,24 @@ class ConcatNode : public DatasetNode {
   /// \return Status Status::OK() if build successfully
   Status Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops) override;
 
+  /// \brief Base-class override for GetDatasetSize
+  /// \param[in] size_getter Shared pointer to DatasetSizeGetter
+  /// \param[in] estimate This is only supported by some of the ops and it's used to speed up the process of getting
+  ///     dataset size at the expense of accuracy.
+  /// \param[out] dataset_size the size of the dataset
+  /// \return Status of the function
+  Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
+                        int64_t *dataset_size) override;
+
   /// \brief Parameters validation
   /// \return Status Status::OK() if all the parameters are valid
   Status ValidateParams() override;
 
   bool IsSizeDefined() override { return false; }
+
+  /// \brief Getter functions
+  const std::vector<std::pair<int, int>> &ChildrenFlagAndNums() const { return children_flag_and_nums_; }
+  const std::vector<std::pair<int, int>> &ChildrenStartEndIndex() const { return children_start_end_index_; }
 
  private:
   std::shared_ptr<SamplerObj> sampler_;
@@ -70,13 +83,13 @@ class ConcatNode : public DatasetNode {
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status Accept(IRNodePass *p, bool *modified) override;
+  Status Accept(IRNodePass *const p, bool *const modified) override;
 
   /// \brief Base-class override for accepting IRNodePass visitor
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status AcceptAfter(IRNodePass *p, bool *modified) override;
+  Status AcceptAfter(IRNodePass *const p, bool *const modified) override;
 };
 
 }  // namespace dataset

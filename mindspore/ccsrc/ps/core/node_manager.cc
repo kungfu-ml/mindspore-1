@@ -19,7 +19,9 @@
 namespace mindspore {
 namespace ps {
 namespace core {
-void NodeManager::InitNodeNum() { total_node_num_ = ClusterConfig::server_num() + ClusterConfig::worker_num(); }
+void NodeManager::InitNodeNum() {
+  total_node_num_ = ClusterMetadata::instance()->total_server_num() + ClusterMetadata::instance()->total_worker_num();
+}
 
 int NodeManager::NextRankId(const RegisterMessage &register_message) {
   std::lock_guard<std::mutex> lock(assign_rank_id_mutex_);
@@ -37,6 +39,11 @@ int NodeManager::NextRankId(const RegisterMessage &register_message) {
     uint32_t port = register_message.port();
 
     rank_id = ++next_server_rank_id_;
+    if (IntToUint(rank_id) >= ClusterMetadata::instance()->total_server_num()) {
+      MS_LOG(WARNING) << "The rank id is greater than the number of servers.";
+      rank_id = -1;
+      --next_server_rank_id_;
+    }
     NodeInfo node_info;
     node_info.node_role_ = NodeRole::SERVER;
     node_info.node_id_ = node_id;
@@ -48,6 +55,11 @@ int NodeManager::NextRankId(const RegisterMessage &register_message) {
                  << " assign rank id:" << rank_id;
   } else if (register_message.role() == NodeRole::WORKER) {
     rank_id = ++next_worker_rank_id_;
+    if (IntToUint(rank_id) >= ClusterMetadata::instance()->total_worker_num()) {
+      MS_LOG(WARNING) << "The rank id is greater than the number of workers.";
+      rank_id = -1;
+      --next_worker_rank_id_;
+    }
     NodeInfo node_info;
     node_info.node_role_ = NodeRole::WORKER;
     node_info.node_id_ = node_id;
@@ -64,8 +76,8 @@ void NodeManager::UpdateHeartbeat(const std::string &node_id) {
   struct timeval current_time {};
   (void)gettimeofday(&current_time, nullptr);
   heartbeats_[node_id] = current_time;
-  MS_LOG(INFO) << "The node role: " << CommUtil::NodeRoleToString(node_info.node_role_) << ", the node id:" << node_id
-               << ", the node rank id:" << node_info.rank_id_ << " the current time is: " << current_time.tv_sec;
+  MS_LOG(DEBUG) << "The node role: " << CommUtil::NodeRoleToString(node_info.node_role_) << ", the node id:" << node_id
+                << ", the node rank id:" << node_info.rank_id_ << " the current time is: " << current_time.tv_sec;
 }
 
 void NodeManager::UpdateNodeFinishState(const std::string &node_id) { heartbeats_finish_nodes_.insert(node_id); }
@@ -92,13 +104,13 @@ void NodeManager::UpdateClusterState() {
   (void)gettimeofday(&current_time, nullptr);
   timeout_nodes_info_.clear();
   for (auto it = heartbeats_.begin(); it != heartbeats_.end(); ++it) {
-    if (it->second.tv_sec + ClusterConfig::heartbeat_timeout() < current_time.tv_sec) {
-      MS_LOG(ERROR) << "The node id:" << it->first << " is timeout!";
+    if (it->second.tv_sec + ClusterMetadata::instance()->heartbeat_timeout() < current_time.tv_sec) {
+      MS_LOG(WARNING) << "The node id:" << it->first << " is timeout!";
       timeout_nodes_info_[it->first] = nodes_info_[it->first];
     }
   }
   if (!timeout_nodes_info_.empty()) {
-    is_cluster_timeout_ = true;
+    is_node_timeout_ = true;
     for (auto it = timeout_nodes_info_.begin(); it != timeout_nodes_info_.end(); ++it) {
       finish_nodes_id_.insert(it->first);
     }
@@ -118,7 +130,7 @@ void NodeManager::UpdateClusterState() {
 
 void NodeManager::CheckClusterTimeout() {
   if (total_node_num_ != nodes_info_.size()) {
-    MS_LOG(WARNING) << "The cluster is not ready after " << ClusterConfig::cluster_available_timeout()
+    MS_LOG(WARNING) << "The cluster is not ready after " << ClusterMetadata::instance()->cluster_available_timeout()
                     << " seconds,so finish the cluster, and change total node number from " << total_node_num_ << " to "
                     << nodes_info_.size();
     current_node_num_ = nodes_info_.size();
@@ -126,9 +138,7 @@ void NodeManager::CheckClusterTimeout() {
   }
 }
 
-void NodeManager::AddFinishNode(const FinishMessage &finish_message) {
-  finish_nodes_id_.insert(finish_message.node_id());
-}
+void NodeManager::AddFinishNode(const std::string &finish_message) { finish_nodes_id_.insert(finish_message); }
 
 std::unordered_map<std::string, NodeInfo> NodeManager::nodes_info() { return nodes_info_; }
 

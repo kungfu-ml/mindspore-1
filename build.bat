@@ -26,16 +26,12 @@ set VERSION_MAJOR=''
 set VERSION_MINOR=''
 set ERSION_REVISION=''
 
-find "const int ms_version_major =" mindspore\lite\include\version.h > version.txt
-for /f "delims=\= tokens=2" %%a in ('findstr "const int ms_version_major = " version.txt') do (set x=%%a)
+for /f "delims=\= tokens=2" %%a in ('findstr /C:"const int ms_version_major = " mindspore\lite\include\version.h') do (set x=%%a)
 set VERSION_MAJOR=%x:~1,1%
-find "const int ms_version_minor =" mindspore\lite\include\version.h > version.txt
-for /f "delims=\= tokens=2" %%b in ('findstr "const int ms_versio/retestn_minor = " version.txt') do (set y=%%b)
+for /f "delims=\= tokens=2" %%b in ('findstr /C:"const int ms_version_minor = " mindspore\lite\include\version.h') do (set y=%%b)
 set VERSION_MINOR=%y:~1,1%
-find "const int ms_version_revision =" mindspore\lite\include\version.h > version.txt
-for /f "delims=\= tokens=2" %%c in ('findstr "const int ms_version_revision = " version.txt') do (set z=%%c)
+for /f "delims=\= tokens=2" %%c in ('findstr /C:"const int ms_version_revision = " mindspore\lite\include\version.h') do (set z=%%c)
 set VERSION_REVISION=%z:~1,1%
-del version.txt
 
 echo "======Start building MindSpore Lite %VERSION_MAJOR%.%VERSION_MINOR%.%VERSION_REVISION%======"
 
@@ -78,6 +74,9 @@ IF NOT EXIST "%BUILD_PATH%/mindspore" (
 
 cd %BUILD_PATH%/mindspore
 IF "%1%" == "lite" (
+    cmake --build "%BUILD_PATH%\mindspore" --target clean
+    rd /s /q "%BASE_PATH%\output"
+    (git log -1 | findstr "^commit") > %BUILD_PATH%\.commit_id
     cmake -DPLATFORM_ARM64=off -DSUPPORT_TRAIN=off ^
     -DENABLE_TOOLS=on -DENABLE_CONVERTER=on -DBUILD_TESTCASES=off ^
     -DCMAKE_BUILD_TYPE=Release -DSUPPORT_GPU=off -DBUILD_MINDDATA=off -DOFFLINE_COMPILE=off ^

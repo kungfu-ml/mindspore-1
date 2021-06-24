@@ -131,12 +131,18 @@ def conver_training_shape(args):
     return training_shape
 
 
-def train():
-    """Train function."""
-    args = parse_args()
+def network_init(args):
     devid = int(os.getenv('DEVICE_ID', '0'))
     context.set_context(mode=context.GRAPH_MODE, enable_auto_mixed_precision=True,
-                        device_target=args.device_target, save_graphs=True, device_id=devid)
+                        device_target=args.device_target, save_graphs=False, device_id=devid)
+
+    profiler = None
+    if args.need_profiler:
+        from mindspore.profiler import Profiler
+        profiling_dir = os.path.join("profiling",
+                                     datetime.datetime.now().strftime('%Y-%m-%d_time_%H_%M_%S'))
+        profiler = Profiler(output_path=profiling_dir, is_detail=True, is_show_op_path=True)
+
     # init distributed
     if args.is_distributed:
         if args.device_target == "Ascend":
@@ -145,26 +151,22 @@ def train():
             init("nccl")
         args.rank = get_rank()
         args.group_size = get_group_size()
-    # select for master rank save ckpt or all rank save, compatiable for model parallel
+    # select for master rank save ckpt or all rank save, compatible for model parallel
     args.rank_save_ckpt_flag = 0
     if args.is_save_on_master:
         if args.rank == 0:
             args.rank_save_ckpt_flag = 1
     else:
         args.rank_save_ckpt_flag = 1
-
     # logger
     args.outputs_dir = os.path.join(args.ckpt_path,
                                     datetime.datetime.now().strftime('%Y-%m-%d_time_%H_%M_%S'))
     args.logger = get_logger(args.outputs_dir, args.rank)
     args.logger.save_args(args)
+    return profiler
 
-    if args.need_profiler:
-        from mindspore.profiler.profiling import Profiler
-        profiler = Profiler(output_path=args.outputs_dir, is_detail=True, is_show_op_path=True)
 
-    loss_meter = AverageMeter('loss')
-
+def parallel_init(args):
     context.reset_auto_parallel_context()
     parallel_mode = ParallelMode.STAND_ALONE
     degree = 1
@@ -172,6 +174,14 @@ def train():
         parallel_mode = ParallelMode.DATA_PARALLEL
         degree = get_group_size()
     context.set_auto_parallel_context(parallel_mode=parallel_mode, gradients_mean=True, device_num=degree)
+
+def train():
+    """Train function."""
+    args = parse_args()
+    profiler = network_init(args)
+
+    loss_meter = AverageMeter('loss')
+    parallel_init(args)
 
     network = YOLOV3DarkNet53(is_training=True)
     # default is kaiming-normal
@@ -182,7 +192,6 @@ def train():
     args.logger.info('finish get network')
 
     config = ConfigYOLOV3DarkNet53()
-
     config.label_smooth = args.label_smooth
     config.label_smooth_factor = args.label_smooth_factor
 
@@ -202,7 +211,6 @@ def train():
         args.ckpt_interval = args.steps_per_epoch
 
     lr = get_lr(args)
-
     opt = Momentum(params=get_param_groups(network),
                    learning_rate=Tensor(lr),
                    momentum=args.momentum,
@@ -281,7 +289,6 @@ def train():
             if i == 10:
                 profiler.analyse()
                 break
-
     args.logger.info('==========end training===============')
 
 

@@ -16,7 +16,6 @@
 
 #include "tools/converter/legacy_optimizer/graph/tensor_name_pass.h"
 #include "tools/converter/converter_context.h"
-#include "tools/converter/quantizer/quantize_util.h"
 #include "tools/common/tensor_util.h"
 
 namespace mindspore::lite {
@@ -36,7 +35,7 @@ STATUS TensorNamePass::Run(schema::MetaGraphT *graph) {
       auto tensor_id = node->inputIndex.at(i);
       auto &tensor = graph->allTensors.at(tensor_id);
       if (tensor->name.empty()) {
-        MS_LOG(WARNING) << "input tensor (id = " << tensor_id << ") name is null";
+        MS_LOG(DEBUG) << "input tensor (id = " << tensor_id << ") name is null";
         tensor->name = node->name + "/input-" + std::to_string(i);
       }
     }

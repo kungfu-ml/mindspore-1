@@ -21,7 +21,7 @@
 #include <arm_neon.h>
 #endif
 #include "nnacl/op_base.h"
-#include "nnacl/quantization/quantize.h"
+#include "nnacl/int8/quantize.h"
 
 typedef struct ConvParameter {
   OpParameter op_parameter_;
@@ -51,6 +51,9 @@ typedef struct ConvParameter {
   int output_unit_;
   PadMode pad_mode_;
   ActType act_type_;
+  int channel_multiplie_;
+  int output_padding_w_;
+  int output_padding_h_;
 } ConvParameter;
 
 typedef struct SlidingWindowParam {
@@ -72,6 +75,7 @@ typedef struct SlidingWindowParam {
   int kernel_step_;
 } SlidingWindowParam;
 
+#define OUPUT_UNIT 2
 #define DECONV_WINOGRAD_DEFAULT_UNIT 3
 #define DECONV_WINOGRAD_DEFAULT_TILE 8
 #define DECONV_WINOGRAD_BUFFER_COUNT 8

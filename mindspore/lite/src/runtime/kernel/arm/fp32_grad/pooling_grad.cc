@@ -26,10 +26,11 @@ using mindspore::kernel::KERNEL_ARCH::kCPU;
 using mindspore::lite::KernelRegistrar;
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
-using mindspore::schema::PrimitiveType_PoolingGrad;
+using mindspore::schema::PrimitiveType_AvgPoolGrad;
+using mindspore::schema::PrimitiveType_MaxPoolGrad;
 
 namespace mindspore::kernel {
-int PoolingGradCPUKernel::Init() {
+int PoolingGradCPUKernel::ReSize() {
   PoolingParameter *pool_param = reinterpret_cast<PoolingParameter *>(op_parameter_);
 
   auto in_shape = in_tensors_.at(0)->shape();
@@ -59,20 +60,29 @@ int PoolingGradCPUKernel::Init() {
   return RET_OK;
 }
 
-int PoolingGradCPUKernel::ReSize() { return RET_OK; }
+int PoolingGradCPUKernel::Init() { return ReSize(); }
 
 int PoolingGradCPUKernel::Execute(int task_id) {
   PoolingParameter *pool_param = reinterpret_cast<PoolingParameter *>(op_parameter_);
   auto input_ptr = reinterpret_cast<float *>(in_tensors_.at(0)->MutableData());
   auto output_ptr = reinterpret_cast<float *>(out_tensors_.at(0)->MutableData());
+  int stride = UP_DIV(pool_param->output_batch_, thread_num_);
+  int count = MSMIN(stride, pool_param->output_batch_ - stride * task_id);
 
-  if (pool_param->pool_mode_ == PoolMode_MaxPool) {
-    auto dx_ptr = reinterpret_cast<float *>(in_tensors_.at(1)->MutableData());
-    auto dy_ptr = reinterpret_cast<float *>(in_tensors_.at(2)->MutableData());
-    MaxPoolingGrad(input_ptr, dx_ptr, dy_ptr, output_ptr, pool_param, task_id);
-  } else {
-    input_ptr = reinterpret_cast<float *>(in_tensors_.at(2)->MutableData());
-    AvgPoolingGrad(input_ptr, output_ptr, pool_param, task_id);
+  if (count > 0) {
+    int in_batch_size = pool_param->input_h_ * pool_param->input_w_ * pool_param->input_channel_;
+    int out_batch_size = pool_param->output_h_ * pool_param->output_w_ * pool_param->input_channel_;
+    std::fill(output_ptr + task_id * stride * in_batch_size, output_ptr + ((task_id * stride) + count) * in_batch_size,
+              0.f);
+    if (pool_param->pool_mode_ == PoolMode_MaxPool) {
+      auto dy_ptr = reinterpret_cast<float *>(in_tensors_.at(2)->MutableData());
+      MaxPoolingGrad(input_ptr + task_id * stride * in_batch_size, dy_ptr + task_id * stride * out_batch_size,
+                     output_ptr + task_id * stride * in_batch_size, count, pool_param);
+    } else {
+      input_ptr = reinterpret_cast<float *>(in_tensors_.at(2)->MutableData());
+      AvgPoolingGrad(input_ptr + task_id * stride * out_batch_size, output_ptr + task_id * stride * in_batch_size,
+                     count, pool_param);
+    }
   }
   return RET_OK;
 }
@@ -89,7 +99,8 @@ int PoolingGradImpl(void *cdata, int task_id) {
 }
 
 int PoolingGradCPUKernel::Run() {
-  int error_code = ParallelLaunch(this->context_->thread_pool_, PoolingGradImpl, this, 1);
+  thread_num_ = context_->thread_num_;
+  int error_code = ParallelLaunch(this->context_->thread_pool_, PoolingGradImpl, this, thread_num_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "pooling error error_code[" << error_code << "]";
     return RET_ERROR;
@@ -100,12 +111,10 @@ int PoolingGradCPUKernel::Run() {
 kernel::LiteKernel *CpuPoolingGradFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                     const std::vector<lite::Tensor *> &outputs,
                                                     OpParameter *opParameter, const lite::InnerContext *ctx,
-                                                    const kernel::KernelKey &desc,
-                                                    const mindspore::lite::PrimitiveC *primitive) {
+                                                    const kernel::KernelKey &desc) {
   MS_ASSERT(opParameter != nullptr);
-  MS_ASSERT(desc.type == schema::PrimitiveType_PoolingGrad);
 
-  auto *kernel = new (std::nothrow) PoolingGradCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  auto *kernel = new (std::nothrow) PoolingGradCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new PoolingGradCPUKernel fail!";
     free(opParameter);
@@ -122,5 +131,6 @@ kernel::LiteKernel *CpuPoolingGradFp32KernelCreator(const std::vector<lite::Tens
   return kernel;
 }
 
-REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_PoolingGrad, CpuPoolingGradFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_AvgPoolGrad, CpuPoolingGradFp32KernelCreator)
+REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_MaxPoolGrad, CpuPoolingGradFp32KernelCreator)
 }  // namespace mindspore::kernel

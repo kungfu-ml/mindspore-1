@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,16 +18,16 @@
 #include <string>
 
 #include "common/common.h"
+#include "include/api/status.h"
 #include "minddata/dataset/include/config.h"
 #include "minddata/dataset/include/datasets.h"
-#include "minddata/dataset/include/status.h"
-#include "minddata/dataset/include/transforms.h"
 #include "minddata/dataset/include/text.h"
+#include "minddata/dataset/include/transforms.h"
+#include "minddata/dataset/text/vocab.h"
 
 using namespace mindspore::dataset;
-using mindspore::dataset::DataType;
+using mindspore::Status;
 using mindspore::dataset::ShuffleMode;
-using mindspore::dataset::Status;
 using mindspore::dataset::Tensor;
 using mindspore::dataset::Vocab;
 
@@ -49,7 +49,7 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create BasicTokenizer operation on ds
-  std::shared_ptr<TensorOperation> basic_tokenizer = text::BasicTokenizer();
+  std::shared_ptr<TensorTransform> basic_tokenizer = std::make_shared<text::BasicTokenizer>();
   EXPECT_NE(basic_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -62,7 +62,7 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
@@ -80,9 +80,12 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -107,7 +110,7 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess2) {
   EXPECT_NE(ds, nullptr);
 
   // Create BasicTokenizer operation on ds
-  std::shared_ptr<TensorOperation> basic_tokenizer = text::BasicTokenizer(true);
+  std::shared_ptr<TensorTransform> basic_tokenizer = std::make_shared<text::BasicTokenizer>(true);
   EXPECT_NE(basic_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -120,17 +123,19 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"this", "is", "a", "funky", "string"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -155,8 +160,8 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess3) {
   EXPECT_NE(ds, nullptr);
 
   // Create BasicTokenizer operation on ds
-  std::shared_ptr<TensorOperation> basic_tokenizer =
-    text::BasicTokenizer(true, false, NormalizeForm::kNone, true, true);
+  std::shared_ptr<TensorTransform> basic_tokenizer =
+    std::make_shared<text::BasicTokenizer>(true, false, NormalizeForm::kNone, true, true);
   EXPECT_NE(basic_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -169,27 +174,39 @@ TEST_F(MindDataTestPipeline, TestBasicTokenizerSuccess3) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected_tokens = {"this", "is", "a", "funky", "string"};
   std::vector<uint32_t> expected_offsets_start = {0, 5, 8, 10, 16};
   std::vector<uint32_t> expected_offsets_limit = {4, 7, 9, 15, 22};
 
+  std::shared_ptr<Tensor> de_expected_tokens;
+  ASSERT_OK(Tensor::CreateFromVector(expected_tokens, &de_expected_tokens));
+  mindspore::MSTensor ms_expected_tokens =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+
+  std::shared_ptr<Tensor> de_expected_offsets_start;
+  ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start, &de_expected_offsets_start));
+  mindspore::MSTensor ms_expected_offsets_start =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+
+  std::shared_ptr<Tensor> de_expected_offsets_limit;
+  ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit, &de_expected_offsets_limit));
+  mindspore::MSTensor ms_expected_offsets_limit =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["token"];
-    std::shared_ptr<Tensor> expected_token_tensor;
-    Tensor::CreateFromVector(expected_tokens, &expected_token_tensor);
-    EXPECT_EQ(*ind, *expected_token_tensor);
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tokens);
+
     auto start = row["offsets_start"];
-    std::shared_ptr<Tensor> expected_start_tensor;
-    Tensor::CreateFromVector(expected_offsets_start, &expected_start_tensor);
-    EXPECT_EQ(*start, *expected_start_tensor);
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
     auto limit = row["offsets_limit"];
-    std::shared_ptr<Tensor> expected_limit_tensor;
-    Tensor::CreateFromVector(expected_offsets_limit, &expected_limit_tensor);
-    EXPECT_EQ(*limit, *expected_limit_tensor);
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -226,7 +243,7 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess1) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer = text::BertTokenizer(vocab);
+  std::shared_ptr<TensorTransform> bert_tokenizer = std::make_shared<text::BertTokenizer>(vocab);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -239,7 +256,7 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {{"床", "前", "明", "月", "光"},
@@ -250,9 +267,12 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -286,7 +306,8 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess2) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer = text::BertTokenizer(vocab, "##", 100, "[UNK]", true);
+  std::shared_ptr<TensorTransform> bert_tokenizer =
+    std::make_shared<text::BertTokenizer>(vocab, "##", 100, "[UNK]", true);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -299,18 +320,20 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"i",   "am",     "mak",  "##ing", "small", "mistake",
                                        "##s", "during", "work", "##ing", "hour",  "##s"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -344,8 +367,8 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess3) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer =
-    text::BertTokenizer(vocab, "##", 100, "[UNK]", false, false, NormalizeForm::kNfc);
+  std::shared_ptr<TensorTransform> bert_tokenizer =
+    std::make_shared<text::BertTokenizer>(vocab, "##", 100, "[UNK]", false, false, NormalizeForm::kNfc);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -358,7 +381,7 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess3) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
@@ -367,9 +390,12 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess3) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -403,7 +429,8 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess4) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer = text::BertTokenizer(vocab, "##", 100, "[UNK]", false, true);
+  std::shared_ptr<TensorTransform> bert_tokenizer =
+    std::make_shared<text::BertTokenizer>(vocab, "##", 100, "[UNK]", false, true);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -416,17 +443,19 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess4) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"[UNK]", " ", "[CLS]"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -460,7 +489,8 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess5) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer = text::BertTokenizer(vocab, "##", 100, "", false, true);
+  std::shared_ptr<TensorTransform> bert_tokenizer =
+    std::make_shared<text::BertTokenizer>(vocab, "##", 100, "", false, true);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -473,17 +503,19 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess5) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"unused", " ", "[CLS]"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -517,8 +549,8 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess6) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer =
-    text::BertTokenizer(vocab, "##", 100, "", false, true, NormalizeForm::kNone, false);
+  std::shared_ptr<TensorTransform> bert_tokenizer =
+    std::make_shared<text::BertTokenizer>(vocab, "##", 100, "", false, true, NormalizeForm::kNone, false);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -531,17 +563,19 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess6) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"unused", " ", "[", "CLS", "]"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -575,8 +609,8 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess7) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer =
-    text::BertTokenizer(vocab, "##", 100, "[UNK]", true, false, NormalizeForm::kNone, true, true);
+  std::shared_ptr<TensorTransform> bert_tokenizer =
+    std::make_shared<text::BertTokenizer>(vocab, "##", 100, "[UNK]", true, false, NormalizeForm::kNone, true, true);
   EXPECT_NE(bert_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -589,7 +623,7 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess7) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected_tokens = {"i",   "am",     "mak",  "##ing", "small", "mistake",
@@ -597,20 +631,32 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerSuccess7) {
   std::vector<uint32_t> expected_offsets_start = {0, 2, 5, 8, 12, 18, 25, 27, 34, 38, 42, 46};
   std::vector<uint32_t> expected_offsets_limit = {1, 4, 8, 11, 17, 25, 26, 33, 38, 41, 46, 47};
 
+  std::shared_ptr<Tensor> de_expected_tokens;
+  ASSERT_OK(Tensor::CreateFromVector(expected_tokens, &de_expected_tokens));
+  mindspore::MSTensor ms_expected_tokens =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+
+  std::shared_ptr<Tensor> de_expected_offsets_start;
+  ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start, &de_expected_offsets_start));
+  mindspore::MSTensor ms_expected_offsets_start =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+
+  std::shared_ptr<Tensor> de_expected_offsets_limit;
+  ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit, &de_expected_offsets_limit));
+  mindspore::MSTensor ms_expected_offsets_limit =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["token"];
-    std::shared_ptr<Tensor> expected_token_tensor;
-    Tensor::CreateFromVector(expected_tokens, &expected_token_tensor);
-    EXPECT_EQ(*ind, *expected_token_tensor);
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tokens);
+
     auto start = row["offsets_start"];
-    std::shared_ptr<Tensor> expected_start_tensor;
-    Tensor::CreateFromVector(expected_offsets_start, &expected_start_tensor);
-    EXPECT_EQ(*start, *expected_start_tensor);
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
     auto limit = row["offsets_limit"];
-    std::shared_ptr<Tensor> expected_limit_tensor;
-    Tensor::CreateFromVector(expected_offsets_limit, &expected_limit_tensor);
-    EXPECT_EQ(*limit, *expected_limit_tensor);
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -631,9 +677,16 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerFail1) {
   EXPECT_NE(ds, nullptr);
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer = text::BertTokenizer(nullptr);
+  std::shared_ptr<TensorTransform> bert_tokenizer = std::make_shared<text::BertTokenizer>(nullptr);
+  EXPECT_NE(bert_tokenizer, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({bert_tokenizer});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
   // Expect failure: invalid BertTokenizer input with nullptr vocab
-  EXPECT_EQ(bert_tokenizer, nullptr);
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestBertTokenizerFail2) {
@@ -651,9 +704,16 @@ TEST_F(MindDataTestPipeline, TestBertTokenizerFail2) {
   EXPECT_EQ(s, Status::OK());
 
   // Create BertTokenizer operation on ds
-  std::shared_ptr<TensorOperation> bert_tokenizer = text::BertTokenizer(vocab, "##", -1);
+  std::shared_ptr<TensorTransform> bert_tokenizer = std::make_shared<text::BertTokenizer>(vocab, "##", -1);
+  EXPECT_NE(bert_tokenizer, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({bert_tokenizer});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
   // Expect failure: invalid BertTokenizer input with nullptr vocab
-  EXPECT_EQ(bert_tokenizer, nullptr);
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestCaseFoldSuccess) {
@@ -665,7 +725,7 @@ TEST_F(MindDataTestPipeline, TestCaseFoldSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create casefold operation on ds
-  std::shared_ptr<TensorOperation> casefold = text::CaseFold();
+  std::shared_ptr<TensorTransform> casefold = std::make_shared<text::CaseFold>();
   EXPECT_NE(casefold, nullptr);
 
   // Create Map operation on ds
@@ -678,7 +738,7 @@ TEST_F(MindDataTestPipeline, TestCaseFoldSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"welcome to beijing!", "北京欢迎您!", "我喜欢english!", "  "};
@@ -686,9 +746,11 @@ TEST_F(MindDataTestPipeline, TestCaseFoldSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -711,7 +773,8 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create jieba_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> jieba_tokenizer = text::JiebaTokenizer(hmm_path, mp_path, JiebaMode::kMp);
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
   EXPECT_NE(jieba_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -724,17 +787,19 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"今天天气", "太好了", "我们", "一起", "去", "外面", "玩吧"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -757,7 +822,8 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create jieba_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> jieba_tokenizer = text::JiebaTokenizer(hmm_path, mp_path, JiebaMode::kHmm);
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kHmm);
   EXPECT_NE(jieba_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -770,17 +836,19 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"今天", "天气", "太", "好", "了", "我们", "一起", "去", "外面", "玩", "吧"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
 
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -803,7 +871,8 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess2) {
   EXPECT_NE(ds, nullptr);
 
   // Create jieba_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> jieba_tokenizer = text::JiebaTokenizer(hmm_path, mp_path, JiebaMode::kMp, true);
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp, true);
   EXPECT_NE(jieba_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -817,28 +886,39 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
-  std::vector<std::string> expected = {"今天天气", "太好了", "我们", "一起", "去", "外面", "玩吧"};
-
+  std::vector<std::string> expected_tokens = {"今天天气", "太好了", "我们", "一起", "去", "外面", "玩吧"};
   std::vector<uint32_t> expected_offsets_start = {0, 12, 21, 27, 33, 36, 42};
   std::vector<uint32_t> expected_offsets_limit = {12, 21, 27, 33, 36, 42, 48};
+  
+  std::shared_ptr<Tensor> de_expected_tokens;
+  ASSERT_OK(Tensor::CreateFromVector(expected_tokens, &de_expected_tokens));
+  mindspore::MSTensor ms_expected_tokens =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+
+  std::shared_ptr<Tensor> de_expected_offsets_start;
+  ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start, &de_expected_offsets_start));
+  mindspore::MSTensor ms_expected_offsets_start =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+
+  std::shared_ptr<Tensor> de_expected_offsets_limit;
+  ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit, &de_expected_offsets_limit));
+  mindspore::MSTensor ms_expected_offsets_limit =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
 
   uint64_t i = 0;
   while (row.size() != 0) {
-    auto ind = row["offsets_start"];
-    auto ind1 = row["offsets_limit"];
-    auto token = row["token"];
-    std::shared_ptr<Tensor> expected_tensor;
-    std::shared_ptr<Tensor> expected_tensor_offsets_start;
-    std::shared_ptr<Tensor> expected_tensor_offsets_limit;
-    Tensor::CreateFromVector(expected, &expected_tensor);
-    Tensor::CreateFromVector(expected_offsets_start, &expected_tensor_offsets_start);
-    Tensor::CreateFromVector(expected_offsets_limit, &expected_tensor_offsets_limit);
-    EXPECT_EQ(*ind, *expected_tensor_offsets_start);
-    EXPECT_EQ(*ind1, *expected_tensor_offsets_limit);
-    EXPECT_EQ(*token, *expected_tensor);
+    auto ind = row["token"];
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tokens);
+
+    auto start = row["offsets_start"];
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
+    auto limit = row["offsets_limit"];
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -849,9 +929,319 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerSuccess2) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestJiebaTokenizerFail) {
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerFail1) {
   // Testing the incorrect parameter of JiebaTokenizer interface.
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerFail.";
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerFail1.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/3.txt";
+  std::string mp_path = datasets_root_path_ + "/jiebadict/jieba.dict.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  // Testing the parameter hmm_path is empty
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>("", mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({jieba_tokenizer});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid JiebaTokenizer input (parameter hmm_path is empty)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerFail2) {
+  // Testing the incorrect parameter of JiebaTokenizer interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerFail2.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/3.txt";
+  std::string hmm_path = datasets_root_path_ + "/jiebadict/hmm_model.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  // Testing the parameter mp_path is empty
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, "", JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({jieba_tokenizer});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid JiebaTokenizer input (parameter mp_path is empty)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerFail3) {
+  // Testing the incorrect parameter of JiebaTokenizer interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerFail3.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/3.txt";
+  std::string hmm_path_invalid = datasets_root_path_ + "/jiebadict/1.txt";
+  std::string mp_path = datasets_root_path_ + "/jiebadict/jieba.dict.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  // Testing the parameter hmm_path is invalid path
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path_invalid, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({jieba_tokenizer});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid JiebaTokenizer input (parameter hmm_path is invalid path)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerFail4) {
+  // Testing the incorrect parameter of JiebaTokenizer interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerFail4.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/3.txt";
+  std::string hmm_path = datasets_root_path_ + "/jiebadict/hmm_model.utf8";
+  std::string mp_path_invalid = datasets_root_path_ + "/jiebadict/1.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  // Testing the parameter mp_path is invalid path
+  std::shared_ptr<TensorTransform> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path_invalid, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({jieba_tokenizer});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid JiebaTokenizer input (parameter mp_path is invalid path)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerAddWord) {
+  // Testing the parameter AddWord of JiebaTokenizer when the freq is not provided (default 0).
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerAddWord.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/4.txt";
+  std::string hmm_path = datasets_root_path_ + "/jiebadict/hmm_model.utf8";
+  std::string mp_path = datasets_root_path_ + "/jiebadict/jieba.dict.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file});
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  std::shared_ptr<text::JiebaTokenizer> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Add word with freq not provided (default 0)
+  jieba_tokenizer->AddWord("男默女泪");
+
+  // Create Map operation on ds
+  ds = ds->Map({jieba_tokenizer}, {"text"});
+  EXPECT_NE(ds, nullptr);
+
+  // Create an iterator over the result of the above dataset
+  // This will trigger the creation of the Execution Tree and launch it.
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  EXPECT_NE(iter, nullptr);
+
+  // Iterate the dataset and get each row
+  std::unordered_map<std::string, mindspore::MSTensor> row;
+  iter->GetNextRow(&row);
+
+  std::vector<std::string> expected = {"男默女泪", "市", "长江大桥"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+
+  uint64_t i = 0;
+  while (row.size() != 0) {
+    auto ind = row["text"];
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+    iter->GetNextRow(&row);
+    i++;
+  }
+
+  EXPECT_EQ(i, 1);
+
+  // Manually terminate the pipeline
+  iter->Stop();
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerAddWord1) {
+  // Testing the parameter AddWord of JiebaTokenizer when the freq is set explicitly to 0.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerAddWord1.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/4.txt";
+  std::string hmm_path = datasets_root_path_ + "/jiebadict/hmm_model.utf8";
+  std::string mp_path = datasets_root_path_ + "/jiebadict/jieba.dict.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file});
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  std::shared_ptr<text::JiebaTokenizer> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Add word with freq is set explicitly to 0
+  jieba_tokenizer->AddWord("男默女泪", 0);
+
+  // Create Map operation on ds
+  ds = ds->Map({jieba_tokenizer}, {"text"});
+  EXPECT_NE(ds, nullptr);
+
+  // Create an iterator over the result of the above dataset
+  // This will trigger the creation of the Execution Tree and launch it.
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  EXPECT_NE(iter, nullptr);
+
+  // Iterate the dataset and get each row
+  std::unordered_map<std::string, mindspore::MSTensor> row;
+  iter->GetNextRow(&row);
+
+  std::vector<std::string> expected = {"男默女泪", "市", "长江大桥"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+
+  uint64_t i = 0;
+  while (row.size() != 0) {
+    auto ind = row["text"];
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+    iter->GetNextRow(&row);
+    i++;
+  }
+
+  EXPECT_EQ(i, 1);
+
+  // Manually terminate the pipeline
+  iter->Stop();
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerAddWord2) {
+  // Testing the parameter AddWord of JiebaTokenizer when the freq is 10.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerAddWord2.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/4.txt";
+  std::string hmm_path = datasets_root_path_ + "/jiebadict/hmm_model.utf8";
+  std::string mp_path = datasets_root_path_ + "/jiebadict/jieba.dict.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file});
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  std::shared_ptr<text::JiebaTokenizer> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Add word with freq 10
+  jieba_tokenizer->AddWord("男默女泪", 10);
+
+  // Create Map operation on ds
+  ds = ds->Map({jieba_tokenizer}, {"text"});
+  EXPECT_NE(ds, nullptr);
+
+  // Create an iterator over the result of the above dataset
+  // This will trigger the creation of the Execution Tree and launch it.
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  EXPECT_NE(iter, nullptr);
+
+  // Iterate the dataset and get each row
+  std::unordered_map<std::string, mindspore::MSTensor> row;
+  iter->GetNextRow(&row);
+
+  std::vector<std::string> expected = {"男默女泪", "市", "长江大桥"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+
+  uint64_t i = 0;
+  while (row.size() != 0) {
+    auto ind = row["text"];
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+    iter->GetNextRow(&row);
+    i++;
+  }
+
+  EXPECT_EQ(i, 1);
+
+  // Manually terminate the pipeline
+  iter->Stop();
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerAddWord3) {
+  // Testing the parameter AddWord of JiebaTokenizer when the freq is 20000 which affects the result of segmentation.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerAddWord3.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testJiebaDataset/6.txt";
+  std::string hmm_path = datasets_root_path_ + "/jiebadict/hmm_model.utf8";
+  std::string mp_path = datasets_root_path_ + "/jiebadict/jieba.dict.utf8";
+  std::shared_ptr<Dataset> ds = TextFile({data_file});
+  EXPECT_NE(ds, nullptr);
+
+  // Create jieba_tokenizer operation on ds
+  std::shared_ptr<text::JiebaTokenizer> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+
+  // Add word with freq 20000
+  jieba_tokenizer->AddWord("江大桥", 20000);
+
+  // Create Map operation on ds
+  ds = ds->Map({jieba_tokenizer}, {"text"});
+  EXPECT_NE(ds, nullptr);
+
+  // Create an iterator over the result of the above dataset
+  // This will trigger the creation of the Execution Tree and launch it.
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  EXPECT_NE(iter, nullptr);
+
+  // Iterate the dataset and get each row
+  std::unordered_map<std::string, mindspore::MSTensor> row;
+  iter->GetNextRow(&row);
+
+  std::vector<std::string> expected = {"江州", "市长", "江大桥", "参加", "了", "长江大桥", "的", "通车", "仪式"};
+  std::shared_ptr<Tensor> de_expected_tensor;
+  ASSERT_OK(Tensor::CreateFromVector(expected, &de_expected_tensor));
+  mindspore::MSTensor expected_tensor =
+    mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+
+  uint64_t i = 0;
+  while (row.size() != 0) {
+    auto ind = row["text"];
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+    iter->GetNextRow(&row);
+    i++;
+  }
+
+  EXPECT_EQ(i, 1);
+
+  // Manually terminate the pipeline
+  iter->Stop();
+}
+
+TEST_F(MindDataTestPipeline, TestJiebaTokenizerAddWordFail) {
+  // Testing the incorrect parameter of AddWord in JiebaTokenizer.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestJiebaTokenizerAddWordFail.";
 
   // Create a TextFile dataset
   std::string data_file = datasets_root_path_ + "/testJiebaDataset/3.txt";
@@ -860,21 +1250,16 @@ TEST_F(MindDataTestPipeline, TestJiebaTokenizerFail) {
   std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
   EXPECT_NE(ds, nullptr);
 
-  // Create jieba_tokenizer operation on ds
-  // Testing the parameter hmm_path is empty
-  std::shared_ptr<TensorOperation> jieba_tokenizer = text::JiebaTokenizer("", mp_path, JiebaMode::kMp);
-  EXPECT_EQ(jieba_tokenizer, nullptr);
-  // Testing the parameter mp_path is empty
-  std::shared_ptr<TensorOperation> jieba_tokenizer1 = text::JiebaTokenizer(hmm_path, "", JiebaMode::kMp);
-  EXPECT_EQ(jieba_tokenizer1, nullptr);
-  // Testing the parameter hmm_path is invalid path
-  std::string hmm_path_invalid = datasets_root_path_ + "/jiebadict/1.txt";
-  std::shared_ptr<TensorOperation> jieba_tokenizer2 = text::JiebaTokenizer(hmm_path_invalid, mp_path, JiebaMode::kMp);
-  EXPECT_EQ(jieba_tokenizer2, nullptr);
-  // Testing the parameter mp_path is invalid path
-  std::string mp_path_invalid = datasets_root_path_ + "/jiebadict/1.txt";
-  std::shared_ptr<TensorOperation> jieba_tokenizer3 = text::JiebaTokenizer(hmm_path, mp_path_invalid, JiebaMode::kMp);
-  EXPECT_EQ(jieba_tokenizer3, nullptr);
+  // Testing the parameter word of AddWord is empty
+  std::shared_ptr<text::JiebaTokenizer> jieba_tokenizer =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer, nullptr);
+  EXPECT_NE(jieba_tokenizer->AddWord("", 10), Status::OK());
+  // Testing the parameter freq of AddWord is negative
+  std::shared_ptr<text::JiebaTokenizer> jieba_tokenizer1 =
+    std::make_shared<text::JiebaTokenizer>(hmm_path, mp_path, JiebaMode::kMp);
+  EXPECT_NE(jieba_tokenizer1, nullptr);
+  EXPECT_NE(jieba_tokenizer1->AddWord("我们", -1), Status::OK());
 }
 
 TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess) {
@@ -887,10 +1272,10 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create white_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> white_tokenizer = text::WhitespaceTokenizer();
+  std::shared_ptr<TensorTransform> white_tokenizer = std::make_shared<text::WhitespaceTokenizer>();
   EXPECT_NE(white_tokenizer, nullptr);
   // Create sliding_window operation on ds
-  std::shared_ptr<TensorOperation> sliding_window = text::SlidingWindow(3, 0);
+  std::shared_ptr<TensorTransform> sliding_window = std::make_shared<text::SlidingWindow>(3, 0);
   EXPECT_NE(sliding_window, nullptr);
 
   // Create Map operation on ds
@@ -903,7 +1288,7 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {{"This", "is", "a", "is", "a", "text", "a", "text", "file."},
@@ -913,10 +1298,14 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size() / 3;
-    Tensor::CreateFromVector(expected[i], TensorShape({x, 3}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x, 3}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -937,10 +1326,10 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create white_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> white_tokenizer = text::WhitespaceTokenizer();
+  std::shared_ptr<TensorTransform> white_tokenizer = std::make_shared<text::WhitespaceTokenizer>();
   EXPECT_NE(white_tokenizer, nullptr);
   // Create sliding_window operation on ds
-  std::shared_ptr<TensorOperation> sliding_window = text::SlidingWindow(2, -1);
+  std::shared_ptr<TensorTransform> sliding_window = std::make_shared<text::SlidingWindow>(2, -1);
   EXPECT_NE(sliding_window, nullptr);
 
   // Create Map operation on ds
@@ -953,7 +1342,7 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {{"This", "is", "is", "a", "a", "text", "text", "file."},
@@ -962,10 +1351,14 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size() / 2;
-    Tensor::CreateFromVector(expected[i], TensorShape({x, 2}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x, 2}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -976,9 +1369,9 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowSuccess1) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestSlidingWindowFail) {
+TEST_F(MindDataTestPipeline, TestSlidingWindowFail1) {
   // Testing the incorrect parameter of SlidingWindow interface.
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestSlidingWindowFail.";
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestSlidingWindowFail1.";
 
   // Create a TextFile dataset
   std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
@@ -988,12 +1381,40 @@ TEST_F(MindDataTestPipeline, TestSlidingWindowFail) {
   // Create sliding_window operation on ds
   // Testing the parameter width less than or equal to 0
   // The parameter axis support 0 or -1 only for now
-  std::shared_ptr<TensorOperation> sliding_window = text::SlidingWindow(0, 0);
-  EXPECT_EQ(sliding_window, nullptr);
+  std::shared_ptr<TensorTransform> sliding_window = std::make_shared<text::SlidingWindow>(0, 0);
+  EXPECT_NE(sliding_window, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({sliding_window});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid SlidingWindow input (width less than or equal to 0)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestSlidingWindowFail2) {
+  // Testing the incorrect parameter of SlidingWindow interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestSlidingWindowFail2.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create sliding_window operation on ds
   // Testing the parameter width less than or equal to 0
   // The parameter axis support 0 or -1 only for now
-  std::shared_ptr<TensorOperation> sliding_window1 = text::SlidingWindow(-2, 0);
-  EXPECT_EQ(sliding_window1, nullptr);
+  std::shared_ptr<TensorTransform> sliding_window = std::make_shared<text::SlidingWindow>(-2, 0);
+  EXPECT_NE(sliding_window, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({sliding_window});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid SlidingWindow input (width less than or equal to 0)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestToNumberSuccess1) {
@@ -1011,7 +1432,7 @@ TEST_F(MindDataTestPipeline, TestToNumberSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number = text::ToNumber(DataType("int64"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("int64");
   EXPECT_NE(to_number, nullptr);
 
   // Create a Map operation on ds
@@ -1024,7 +1445,7 @@ TEST_F(MindDataTestPipeline, TestToNumberSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<int64_t> expected = {-121, 14, -2219, 7623, -8162536, 162371864, -1726483716, 98921728421};
@@ -1032,9 +1453,11 @@ TEST_F(MindDataTestPipeline, TestToNumberSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1064,7 +1487,7 @@ TEST_F(MindDataTestPipeline, TestToNumberSuccess2) {
   EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number = text::ToNumber(DataType("float64"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("float64");
   EXPECT_NE(to_number, nullptr);
 
   // Create a Map operation on ds
@@ -1077,7 +1500,7 @@ TEST_F(MindDataTestPipeline, TestToNumberSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<double_t> expected = {-1.1, 1.4, -2219.321, 7623.453, -816256.234282, 162371864.243243};
@@ -1085,9 +1508,11 @@ TEST_F(MindDataTestPipeline, TestToNumberSuccess2) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1117,7 +1542,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail1) {
   EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number = text::ToNumber(DataType("int8"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("int8");
   EXPECT_NE(to_number, nullptr);
 
   // Create a Map operation on ds
@@ -1130,7 +1555,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   // Expect error: input out of bounds of int8
   iter->GetNextRow(&row);
@@ -1167,7 +1592,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail2) {
   EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number = text::ToNumber(DataType("float16"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("float16");
   EXPECT_NE(to_number, nullptr);
 
   // Create a Map operation on ds
@@ -1180,7 +1605,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   // Expect error: input out of bounds of float16
   iter->GetNextRow(&row);
@@ -1213,7 +1638,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail3) {
   EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number = text::ToNumber(DataType("int64"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("int64");
   EXPECT_NE(to_number, nullptr);
 
   // Create a Map operation on ds
@@ -1226,7 +1651,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail3) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
 
   // Expect error: invalid input which is non numerical
   iter->GetNextRow(&row);
@@ -1246,7 +1671,7 @@ TEST_F(MindDataTestPipeline, TestToNumberFail3) {
 
 TEST_F(MindDataTestPipeline, TestToNumberFail4) {
   MS_LOG(INFO) << "Doing MindDataTestPipeline-TestToNumberFail4.";
-  // Test ToNumber with non numerical DataType
+  // Test ToNumber with non numerical data type
 
   std::string data_file = datasets_root_path_ + "/testTokenizerData/to_number.txt";
 
@@ -1255,16 +1680,39 @@ TEST_F(MindDataTestPipeline, TestToNumberFail4) {
   EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number1 = text::ToNumber(DataType("string"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("string");
+  EXPECT_NE(to_number, nullptr);
 
-  // Expect failure: invalid parameter with non numerical DataType
-  EXPECT_EQ(to_number1, nullptr);
+  // Create a Map operation on ds
+  ds = ds->Map({to_number}, {"text"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid parameter with non numerical data type
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestToNumberFail5) {
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestToNumberFail5.";
+  // Test ToNumber with non numerical data type
+
+  std::string data_file = datasets_root_path_ + "/testTokenizerData/to_number.txt";
+
+  // Create a TextFile dataset
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
 
   // Create ToNumber operation on ds
-  std::shared_ptr<TensorOperation> to_number2 = text::ToNumber(DataType("bool"));
+  std::shared_ptr<TensorTransform> to_number = std::make_shared<text::ToNumber>("bool");
+  EXPECT_NE(to_number, nullptr);
 
-  // Expect failure: invalid parameter with non numerical DataType
-  EXPECT_EQ(to_number2, nullptr);
+  // Create a Map operation on ds
+  ds = ds->Map({to_number}, {"text"});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid parameter with non numerical data type
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess1) {
@@ -1283,13 +1731,13 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess1) {
 
   // Create a RandomDataset which has column names "col1" and "col2"
   std::shared_ptr<SchemaObj> schema = Schema();
-  schema->add_column("col1", mindspore::TypeId::kNumberTypeInt16, {5});
-  schema->add_column("col2", mindspore::TypeId::kNumberTypeInt32, {3});
+  schema->add_column("col1", mindspore::DataType::kNumberTypeInt16, {5});
+  schema->add_column("col2", mindspore::DataType::kNumberTypeInt32, {3});
   std::shared_ptr<Dataset> ds = RandomData(3, schema);
   EXPECT_NE(ds, nullptr);
 
   // Create a truncate_sequence_pair operation on ds
-  std::shared_ptr<TensorOperation> truncate_sequence_pair = text::TruncateSequencePair(4);
+  std::shared_ptr<TensorTransform> truncate_sequence_pair = std::make_shared<text::TruncateSequencePair>(4);
   EXPECT_NE(truncate_sequence_pair, nullptr);
 
   // Create Map operation on ds
@@ -1302,7 +1750,7 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<int16_t>> expected1 = {{-29556, -29556}, {-18505, -18505}, {-25958, -25958}};
@@ -1313,12 +1761,19 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess1) {
   while (row.size() != 0) {
     auto ind1 = row["col1"];
     auto ind2 = row["col2"];
-    std::shared_ptr<Tensor> expected_tensor1;
-    std::shared_ptr<Tensor> expected_tensor2;
-    Tensor::CreateFromVector(expected1[i], &expected_tensor1);
-    Tensor::CreateFromVector(expected2[i], &expected_tensor2);
-    EXPECT_EQ(*ind1, *expected_tensor1);
-    EXPECT_EQ(*ind2, *expected_tensor2);
+
+    std::shared_ptr<Tensor> de_expected_tensor1;
+    ASSERT_OK(Tensor::CreateFromVector(expected1[i], &de_expected_tensor1));
+    mindspore::MSTensor expected_tensor1 =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor1));
+    EXPECT_MSTENSOR_EQ(ind1, expected_tensor1);
+
+    std::shared_ptr<Tensor> de_expected_tensor2;
+    ASSERT_OK(Tensor::CreateFromVector(expected2[i], &de_expected_tensor2));
+    mindspore::MSTensor expected_tensor2 =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor2));
+    EXPECT_MSTENSOR_EQ(ind2, expected_tensor2);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -1351,13 +1806,13 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess2) {
 
   // Create a RandomDataset which has column names "col1" and "col2"
   std::shared_ptr<SchemaObj> schema = Schema();
-  schema->add_column("col1", mindspore::TypeId::kNumberTypeInt32, {4});
-  schema->add_column("col2", mindspore::TypeId::kNumberTypeInt64, {4});
+  schema->add_column("col1", mindspore::DataType::kNumberTypeInt32, {4});
+  schema->add_column("col2", mindspore::DataType::kNumberTypeInt64, {4});
   std::shared_ptr<Dataset> ds = RandomData(4, schema);
   EXPECT_NE(ds, nullptr);
 
   // Create a truncate_sequence_pair operation on ds
-  std::shared_ptr<TensorOperation> truncate_sequence_pair = text::TruncateSequencePair(5);
+  std::shared_ptr<TensorTransform> truncate_sequence_pair = std::make_shared<text::TruncateSequencePair>(5);
   EXPECT_NE(truncate_sequence_pair, nullptr);
 
   // Create Map operation on ds
@@ -1370,7 +1825,7 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<int32_t>> expected1 = {{1785358954, 1785358954, 1785358954},
@@ -1384,12 +1839,19 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairSuccess2) {
   while (row.size() != 0) {
     auto ind1 = row["col1"];
     auto ind2 = row["col2"];
-    std::shared_ptr<Tensor> expected_tensor1;
-    std::shared_ptr<Tensor> expected_tensor2;
-    Tensor::CreateFromVector(expected1[i], &expected_tensor1);
-    Tensor::CreateFromVector(expected2[i], &expected_tensor2);
-    EXPECT_EQ(*ind1, *expected_tensor1);
-    EXPECT_EQ(*ind2, *expected_tensor2);
+
+    std::shared_ptr<Tensor> de_expected_tensor1;
+    ASSERT_OK(Tensor::CreateFromVector(expected1[i], &de_expected_tensor1));
+    mindspore::MSTensor expected_tensor1 =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor1));
+    EXPECT_MSTENSOR_EQ(ind1, expected_tensor1);
+
+    std::shared_ptr<Tensor> de_expected_tensor2;
+    ASSERT_OK(Tensor::CreateFromVector(expected2[i], &de_expected_tensor2));
+    mindspore::MSTensor expected_tensor2 =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor2));
+    EXPECT_MSTENSOR_EQ(ind2, expected_tensor2);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -1412,16 +1874,22 @@ TEST_F(MindDataTestPipeline, TestTruncateSequencePairFail) {
 
   // Create a RandomDataset which has column names "col1" and "col2"
   std::shared_ptr<SchemaObj> schema = Schema();
-  schema->add_column("col1", mindspore::TypeId::kNumberTypeInt8, {3});
-  schema->add_column("col2", mindspore::TypeId::kNumberTypeInt8, {3});
+  schema->add_column("col1", mindspore::DataType::kNumberTypeInt8, {3});
+  schema->add_column("col2", mindspore::DataType::kNumberTypeInt8, {3});
   std::shared_ptr<Dataset> ds = RandomData(3, schema);
   EXPECT_NE(ds, nullptr);
 
   // Create a truncate_sequence_pair operation on ds
-  std::shared_ptr<TensorOperation> truncate_sequence_pair = text::TruncateSequencePair(-1);
+  std::shared_ptr<TensorTransform> truncate_sequence_pair = std::make_shared<text::TruncateSequencePair>(-1);
+  EXPECT_NE(truncate_sequence_pair, nullptr);
 
-  // Expect failure: invalid parameter with negative max_length
-  EXPECT_EQ(truncate_sequence_pair, nullptr);
+  // Create a Map operation on ds
+  ds = ds->Map({truncate_sequence_pair});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid TruncateSequencePair input (invalid parameter with negative max_length)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestNgramSuccess) {
@@ -1434,10 +1902,10 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create white_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> white_tokenizer = text::WhitespaceTokenizer();
+  std::shared_ptr<TensorTransform> white_tokenizer = std::make_shared<text::WhitespaceTokenizer>();
   EXPECT_NE(white_tokenizer, nullptr);
   // Create sliding_window operation on ds
-  std::shared_ptr<TensorOperation> ngram_op = text::Ngram({2}, {"_", 1}, {"_", 1}, " ");
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({2}, {"_", 1}, {"_", 1}, " "));
   EXPECT_NE(ngram_op, nullptr);
 
   // Create Map operation on ds
@@ -1450,7 +1918,7 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {{"_ This", "This is", "is a", "a text", "text file.", "file. _"},
@@ -1460,10 +1928,14 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -1483,10 +1955,10 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create white_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> white_tokenizer = text::WhitespaceTokenizer();
+  std::shared_ptr<TensorTransform> white_tokenizer = std::make_shared<text::WhitespaceTokenizer>();
   EXPECT_NE(white_tokenizer, nullptr);
   // Create sliding_window operation on ds
-  std::shared_ptr<TensorOperation> ngram_op = text::Ngram({2, 3}, {"&", 2}, {"&", 2}, "-");
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({2, 3}, {"&", 2}, {"&", 2}, "-"));
   EXPECT_NE(ngram_op, nullptr);
 
   // Create Map operation on ds
@@ -1499,11 +1971,12 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
-    {"&-This", "This-is", "is-a", "a-text", "text-file.", "file.-&", "&-&-This", "&-This-is", "This-is-a", "is-a-text",
+    {"&-This", "This-is", "is-a", "a-text", "text-file.", "file.-&", "&-&-This", "&-This-is", "This-is-a",
+     "is-a-text",
      "a-text-file.", "text-file.-&", "file.-&-&"},
     {"&-Be", "Be-happy", "happy-every", "every-day.", "day.-&", "&-&-Be", "&-Be-happy", "Be-happy-every",
      "happy-every-day.", "every-day.-&", "day.-&-&"},
@@ -1513,10 +1986,14 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -1527,9 +2004,9 @@ TEST_F(MindDataTestPipeline, TestNgramSuccess1) {
   iter->Stop();
 }
 
-TEST_F(MindDataTestPipeline, TestNgramFail) {
+TEST_F(MindDataTestPipeline, TestNgramFail1) {
   // Testing the incorrect parameter of Ngram interface.
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestNgramFail.";
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestNgramFail1.";
 
   // Create a TextFile dataset
   std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
@@ -1538,31 +2015,108 @@ TEST_F(MindDataTestPipeline, TestNgramFail) {
 
   // Create sliding_window operation on ds
   // Testing the vector of ngram is empty
-  std::shared_ptr<TensorOperation> ngram_op = text::Ngram({});
-  EXPECT_EQ(ngram_op, nullptr);
-  // Testing the value of ngrams vector less than and equal to 0
-  std::shared_ptr<TensorOperation> ngram_op1 = text::Ngram({0});
-  EXPECT_EQ(ngram_op1, nullptr);
-  // Testing the value of ngrams vector less than and equal to 0
-  std::shared_ptr<TensorOperation> ngram_op2 = text::Ngram({-2});
-  EXPECT_EQ(ngram_op2, nullptr);
-  // Testing the second parameter pad_width in left_pad vector less than 0
-  std::shared_ptr<TensorOperation> ngram_op3 = text::Ngram({2}, {"", -1});
-  EXPECT_EQ(ngram_op3, nullptr);
-  // Testing the second parameter pad_width in right_pad vector less than 0
-  std::shared_ptr<TensorOperation> ngram_op4 = text::Ngram({2}, {"", 1}, {"", -1});
-  EXPECT_EQ(ngram_op4, nullptr);
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({}));
+  EXPECT_NE(ngram_op, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({ngram_op});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Ngram input (the vector of ngram is empty)
+  EXPECT_EQ(iter, nullptr);
 }
 
-TEST_F(MindDataTestPipeline, TestTextOperationName) {
-  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestTextOperationName.";
+TEST_F(MindDataTestPipeline, TestNgramFail2) {
+  // Testing the incorrect parameter of Ngram interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestNgramFail2.";
 
-  // Create object for the tensor op, and check the name
-  std::string data_file = datasets_root_path_ + "/testVocab/words.txt";
-  std::shared_ptr<TensorOperation> sentence_piece_tokenizer_op =
-    text::SentencePieceTokenizer(data_file, SPieceTokenizerOutType::kString);
-  std::string correct_name = "SentencepieceTokenizer";
-  EXPECT_EQ(correct_name, sentence_piece_tokenizer_op->Name());
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create sliding_window operation on ds
+  // Testing the value of ngrams vector less than and equal to 0
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({0}));
+  EXPECT_NE(ngram_op, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({ngram_op});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Ngram input (the value of ngrams vector less than and equal to 0)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestNgramFail3) {
+  // Testing the incorrect parameter of Ngram interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestNgramFail3.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create sliding_window operation on ds
+  // Testing the value of ngrams vector less than and equal to 0
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({-2}));
+  EXPECT_NE(ngram_op, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({ngram_op});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Ngram input (the value of ngrams vector less than and equal to 0)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestNgramFail4) {
+  // Testing the incorrect parameter of Ngram interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestNgramFail4.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create sliding_window operation on ds
+  // Testing the second parameter pad_width in left_pad vector less than 0
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({2}, {"", -1}));
+  EXPECT_NE(ngram_op, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({ngram_op});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Ngram input (the second parameter pad_width in left_pad vector less than 0)
+  EXPECT_EQ(iter, nullptr);
+}
+
+TEST_F(MindDataTestPipeline, TestNgramFail5) {
+  // Testing the incorrect parameter of Ngram interface.
+  MS_LOG(INFO) << "Doing MindDataTestPipeline-TestNgramFail5.";
+
+  // Create a TextFile dataset
+  std::string data_file = datasets_root_path_ + "/testTextFileDataset/1.txt";
+  std::shared_ptr<Dataset> ds = TextFile({data_file}, 0, ShuffleMode::kFalse);
+  EXPECT_NE(ds, nullptr);
+
+  // Create sliding_window operation on ds
+  // Testing the second parameter pad_width in right_pad vector less than 0
+  std::shared_ptr<TensorTransform> ngram_op(new text::Ngram({2}, {"", 1}, {"", -1}));
+  EXPECT_NE(ngram_op, nullptr);
+
+  // Create a Map operation on ds
+  ds = ds->Map({ngram_op});
+  EXPECT_NE(ds, nullptr);
+
+  std::shared_ptr<Iterator> iter = ds->CreateIterator();
+  // Expect failure: invalid Ngram input (the second parameter pad_width in left_pad vector less than 0)
+  EXPECT_EQ(iter, nullptr);
 }
 
 TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success) {
@@ -1575,7 +2129,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success) {
   EXPECT_NE(ds, nullptr);
 
   // Create normalizeutf8 operation on ds
-  std::shared_ptr<TensorOperation> normalizeutf8 = text::NormalizeUTF8(NormalizeForm::kNfkc);
+  std::shared_ptr<TensorTransform> normalizeutf8 = std::make_shared<text::NormalizeUTF8>(NormalizeForm::kNfkc);
   EXPECT_NE(normalizeutf8, nullptr);
 
   // Create Map operation on ds
@@ -1588,7 +2142,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"ṩ", "ḍ̇", "q̣̇", "fi", "25", "ṩ"};
@@ -1596,9 +2150,11 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1619,7 +2175,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success1) {
   EXPECT_NE(ds, nullptr);
 
   // Create normalizeutf8 operation on ds
-  std::shared_ptr<TensorOperation> normalizeutf8 = text::NormalizeUTF8(NormalizeForm::kNfc);
+  std::shared_ptr<TensorTransform> normalizeutf8 = std::make_shared<text::NormalizeUTF8>(NormalizeForm::kNfc);
   EXPECT_NE(normalizeutf8, nullptr);
 
   // Create Map operation on ds
@@ -1632,7 +2188,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"ṩ", "ḍ̇", "q̣̇", "ﬁ", "2⁵", "ẛ̣"};
@@ -1640,9 +2196,11 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1663,7 +2221,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success2) {
   EXPECT_NE(ds, nullptr);
 
   // Create normalizeutf8 operation on ds
-  std::shared_ptr<TensorOperation> normalizeutf8 = text::NormalizeUTF8(NormalizeForm::kNfd);
+  std::shared_ptr<TensorTransform> normalizeutf8 = std::make_shared<text::NormalizeUTF8>(NormalizeForm::kNfd);
   EXPECT_NE(normalizeutf8, nullptr);
 
   // Create Map operation on ds
@@ -1676,7 +2234,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"ṩ", "ḍ̇", "q̣̇", "ﬁ", "2⁵", "ẛ̣"};
@@ -1684,9 +2242,11 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success2) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1707,7 +2267,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success3) {
   EXPECT_NE(ds, nullptr);
 
   // Create normalizeutf8 operation on ds
-  std::shared_ptr<TensorOperation> normalizeutf8 = text::NormalizeUTF8(NormalizeForm::kNfkd);
+  std::shared_ptr<TensorTransform> normalizeutf8 = std::make_shared<text::NormalizeUTF8>(NormalizeForm::kNfkd);
   EXPECT_NE(normalizeutf8, nullptr);
 
   // Create Map operation on ds
@@ -1720,7 +2280,7 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success3) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"ṩ", "ḍ̇", "q̣̇", "fi", "25", "ṩ"};
@@ -1728,9 +2288,11 @@ TEST_F(MindDataTestPipeline, TestNormalizeUTF8Success3) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1751,7 +2313,7 @@ TEST_F(MindDataTestPipeline, TestRegexReplaceSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create regex_replace operation on ds
-  std::shared_ptr<TensorOperation> regex_replace = text::RegexReplace("\\s+", "_", true);
+  std::shared_ptr<TensorTransform> regex_replace = std::make_shared<text::RegexReplace>("\\s+", "_", true);
   EXPECT_NE(regex_replace, nullptr);
 
   // Create Map operation on ds
@@ -1764,7 +2326,7 @@ TEST_F(MindDataTestPipeline, TestRegexReplaceSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"Hello_World", "Let's_Go",          "1:hello",        "2:world",
@@ -1773,9 +2335,11 @@ TEST_F(MindDataTestPipeline, TestRegexReplaceSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1796,7 +2360,7 @@ TEST_F(MindDataTestPipeline, TestRegexReplaceSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create regex_replace operation on ds
-  std::shared_ptr<TensorOperation> regex_replace = text::RegexReplace("\\s+", "_", false);
+  std::shared_ptr<TensorTransform> regex_replace = std::make_shared<text::RegexReplace>("\\s+", "_", false);
   EXPECT_NE(regex_replace, nullptr);
 
   // Create Map operation on ds
@@ -1809,7 +2373,7 @@ TEST_F(MindDataTestPipeline, TestRegexReplaceSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::string> expected = {"Hello_World", "Let's_Go",          "1:hello",          "2:world",
@@ -1818,9 +2382,11 @@ TEST_F(MindDataTestPipeline, TestRegexReplaceSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
-    Tensor::CreateScalar(expected[i], &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    std::shared_ptr<Tensor> de_expected_tensor;
+    ASSERT_OK(Tensor::CreateScalar(expected[i], &de_expected_tensor));
+    mindspore::MSTensor ms_expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, ms_expected_tensor);
     iter->GetNextRow(&row);
     i++;
   }
@@ -1841,7 +2407,7 @@ TEST_F(MindDataTestPipeline, TestRegexTokenizerSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create regex_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> regex_tokenizer = text::RegexTokenizer("\\s+", "\\s+", false);
+  std::shared_ptr<TensorTransform> regex_tokenizer = std::make_shared<text::RegexTokenizer>("\\s+", "\\s+", false);
   EXPECT_NE(regex_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -1854,7 +2420,7 @@ TEST_F(MindDataTestPipeline, TestRegexTokenizerSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {{"Hello", " ", "World"},
@@ -1869,10 +2435,14 @@ TEST_F(MindDataTestPipeline, TestRegexTokenizerSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -1893,7 +2463,7 @@ TEST_F(MindDataTestPipeline, TestRegexTokenizerSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create regex_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> regex_tokenizer = text::RegexTokenizer("\\s+", "\\s+", true);
+  std::shared_ptr<TensorTransform> regex_tokenizer = std::make_shared<text::RegexTokenizer>("\\s+", "\\s+", true);
   EXPECT_NE(regex_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -1907,17 +2477,17 @@ TEST_F(MindDataTestPipeline, TestRegexTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
-  std::vector<std::vector<std::string>> expected = {{"Hello", " ", "World"},
-                                                    {"Let's", " ", "Go"},
-                                                    {"1:hello"},
-                                                    {"2:world"},
-                                                    {"31:beijing"},
-                                                    {"Welcome", " ", "to", " ", "China!"},
-                                                    {"  ", "我", "	", "不想", "  ", "长大", "	"},
-                                                    {"Welcome", " ", "to", " ", "Shenzhen!"}};
+  std::vector<std::vector<std::string>> expected_tokens = {{"Hello", " ", "World"},
+                                                           {"Let's", " ", "Go"},
+                                                           {"1:hello"},
+                                                           {"2:world"},
+                                                           {"31:beijing"},
+                                                           {"Welcome", " ", "to", " ", "China!"},
+                                                           {"  ", "我", "	", "不想", "  ", "长大", "	"},
+                                                           {"Welcome", " ", "to", " ", "Shenzhen!"}};
 
   std::vector<std::vector<uint32_t>> expected_offsets_start = {
     {0, 5, 6}, {0, 5, 6}, {0}, {0}, {0}, {0, 7, 8, 10, 11}, {0, 2, 5, 6, 12, 14, 20}, {0, 7, 8, 10, 11}};
@@ -1926,19 +2496,28 @@ TEST_F(MindDataTestPipeline, TestRegexTokenizerSuccess1) {
 
   uint64_t i = 0;
   while (row.size() != 0) {
-    auto ind = row["offsets_start"];
-    auto ind1 = row["offsets_limit"];
     auto token = row["token"];
-    std::shared_ptr<Tensor> expected_tensor;
-    std::shared_ptr<Tensor> expected_tensor_offsets_start;
-    std::shared_ptr<Tensor> expected_tensor_offsets_limit;
-    int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &expected_tensor_offsets_start);
-    Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &expected_tensor_offsets_limit);
-    EXPECT_EQ(*ind, *expected_tensor_offsets_start);
-    EXPECT_EQ(*ind1, *expected_tensor_offsets_limit);
-    EXPECT_EQ(*token, *expected_tensor);
+    auto start = row["offsets_start"];
+    auto limit = row["offsets_limit"];
+
+    std::shared_ptr<Tensor> de_expected_tokens;
+    int x = expected_tokens[i].size();
+    ASSERT_OK(Tensor::CreateFromVector(expected_tokens[i], TensorShape({x}), &de_expected_tokens));
+    mindspore::MSTensor ms_expected_tokens =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+    EXPECT_MSTENSOR_EQ(token, ms_expected_tokens);
+
+    std::shared_ptr<Tensor> de_expected_offsets_start;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &de_expected_offsets_start));
+    mindspore::MSTensor ms_expected_offsets_start =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
+    std::shared_ptr<Tensor> de_expected_offsets_limit;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &de_expected_offsets_limit));
+    mindspore::MSTensor ms_expected_offsets_limit =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
 
     iter->GetNextRow(&row);
     i++;
@@ -1960,7 +2539,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create unicodechar_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> unicodechar_tokenizer = text::UnicodeCharTokenizer();
+  std::shared_ptr<TensorTransform> unicodechar_tokenizer = std::make_shared<text::UnicodeCharTokenizer>();
   EXPECT_NE(unicodechar_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -1973,7 +2552,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
@@ -1985,10 +2564,14 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -2009,7 +2592,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create unicodechar_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> unicodechar_tokenizer = text::UnicodeCharTokenizer(true);
+  std::shared_ptr<TensorTransform> unicodechar_tokenizer = std::make_shared<text::UnicodeCharTokenizer>(true);
   EXPECT_NE(unicodechar_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2023,10 +2606,10 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
-  std::vector<std::vector<std::string>> expected = {
+  std::vector<std::vector<std::string>> expected_tokens = {
     {"W", "e", "l", "c", "o", "m", "e", " ", "t", "o", " ", "B", "e", "i", "j", "i", "n", "g", "!"},
     {"北", "京", "欢", "迎", "您", "！"},
     {"我", "喜", "欢", "E", "n", "g", "l", "i", "s", "h", "!"},
@@ -2037,6 +2620,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess1) {
     {0, 3, 6, 9, 12, 15},
     {0, 3, 6, 9, 10, 11, 12, 13, 14, 15, 16},
     {0, 1}};
+
   std::vector<std::vector<uint32_t>> expected_offsets_limit = {
     {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19},
     {3, 6, 9, 12, 15, 18},
@@ -2045,19 +2629,28 @@ TEST_F(MindDataTestPipeline, TestUnicodeCharTokenizerSuccess1) {
 
   uint64_t i = 0;
   while (row.size() != 0) {
-    auto ind = row["offsets_start"];
-    auto ind1 = row["offsets_limit"];
     auto token = row["token"];
-    std::shared_ptr<Tensor> expected_tensor;
-    std::shared_ptr<Tensor> expected_tensor_offsets_start;
-    std::shared_ptr<Tensor> expected_tensor_offsets_limit;
-    int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &expected_tensor_offsets_start);
-    Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &expected_tensor_offsets_limit);
-    EXPECT_EQ(*ind, *expected_tensor_offsets_start);
-    EXPECT_EQ(*ind1, *expected_tensor_offsets_limit);
-    EXPECT_EQ(*token, *expected_tensor);
+    auto start = row["offsets_start"];
+    auto limit = row["offsets_limit"];
+
+    std::shared_ptr<Tensor> de_expected_tokens;
+    int x = expected_tokens[i].size();
+    ASSERT_OK(Tensor::CreateFromVector(expected_tokens[i], TensorShape({x}), &de_expected_tokens));
+    mindspore::MSTensor ms_expected_tokens =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+    EXPECT_MSTENSOR_EQ(token, ms_expected_tokens);
+
+    std::shared_ptr<Tensor> de_expected_offsets_start;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &de_expected_offsets_start));
+    mindspore::MSTensor ms_expected_offsets_start =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
+    std::shared_ptr<Tensor> de_expected_offsets_limit;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &de_expected_offsets_limit));
+    mindspore::MSTensor ms_expected_offsets_limit =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
 
     iter->GetNextRow(&row);
     i++;
@@ -2079,7 +2672,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create unicodescript_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> unicodescript_tokenizer = text::UnicodeScriptTokenizer();
+  std::shared_ptr<TensorTransform> unicodescript_tokenizer = std::make_shared<text::UnicodeScriptTokenizer>();
   EXPECT_NE(unicodescript_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2092,7 +2685,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
@@ -2101,10 +2694,14 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -2126,7 +2723,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create unicodescript_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> unicodescript_tokenizer = text::UnicodeScriptTokenizer(true);
+  std::shared_ptr<TensorTransform> unicodescript_tokenizer = std::make_shared<text::UnicodeScriptTokenizer>(true);
   EXPECT_NE(unicodescript_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2139,7 +2736,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
@@ -2148,10 +2745,14 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess1) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -2173,7 +2774,8 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess2) {
   EXPECT_NE(ds, nullptr);
 
   // Create unicodescript_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> unicodescript_tokenizer = text::UnicodeScriptTokenizer(false, true);
+  std::shared_ptr<TensorTransform> unicodescript_tokenizer =
+    std::make_shared<text::UnicodeScriptTokenizer>(false, true);
   EXPECT_NE(unicodescript_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2187,10 +2789,10 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
-  std::vector<std::vector<std::string>> expected = {
+  std::vector<std::vector<std::string>> expected_tokens = {
     {"Welcome", "to", "Beijing", "!"}, {"北京欢迎您", "！"}, {"我喜欢", "English", "!"}, {""}};
 
   std::vector<std::vector<uint32_t>> expected_offsets_start = {{0, 8, 11, 18}, {0, 15}, {0, 9, 16}, {0}};
@@ -2198,19 +2800,28 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess2) {
 
   uint64_t i = 0;
   while (row.size() != 0) {
-    auto ind = row["offsets_start"];
-    auto ind1 = row["offsets_limit"];
     auto token = row["token"];
-    std::shared_ptr<Tensor> expected_tensor;
-    std::shared_ptr<Tensor> expected_tensor_offsets_start;
-    std::shared_ptr<Tensor> expected_tensor_offsets_limit;
-    int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &expected_tensor_offsets_start);
-    Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &expected_tensor_offsets_limit);
-    EXPECT_EQ(*ind, *expected_tensor_offsets_start);
-    EXPECT_EQ(*ind1, *expected_tensor_offsets_limit);
-    EXPECT_EQ(*token, *expected_tensor);
+    auto start = row["offsets_start"];
+    auto limit = row["offsets_limit"];
+
+    std::shared_ptr<Tensor> de_expected_tokens;
+    int x = expected_tokens[i].size();
+    ASSERT_OK(Tensor::CreateFromVector(expected_tokens[i], TensorShape({x}), &de_expected_tokens));
+    mindspore::MSTensor ms_expected_tokens =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+    EXPECT_MSTENSOR_EQ(token, ms_expected_tokens);
+
+    std::shared_ptr<Tensor> de_expected_offsets_start;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &de_expected_offsets_start));
+    mindspore::MSTensor ms_expected_offsets_start =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
+    std::shared_ptr<Tensor> de_expected_offsets_limit;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &de_expected_offsets_limit));
+    mindspore::MSTensor ms_expected_offsets_limit =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
 
     iter->GetNextRow(&row);
     i++;
@@ -2233,7 +2844,7 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess3) {
   EXPECT_NE(ds, nullptr);
 
   // Create unicodescript_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> unicodescript_tokenizer = text::UnicodeScriptTokenizer(true, true);
+  std::shared_ptr<TensorTransform> unicodescript_tokenizer = std::make_shared<text::UnicodeScriptTokenizer>(true, true);
   EXPECT_NE(unicodescript_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2247,10 +2858,10 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess3) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
-  std::vector<std::vector<std::string>> expected = {
+  std::vector<std::vector<std::string>> expected_tokens = {
     {"Welcome", " ", "to", " ", "Beijing", "!"}, {"北京欢迎您", "！"}, {"我喜欢", "English", "!"}, {"  "}};
 
   std::vector<std::vector<uint32_t>> expected_offsets_start = {{0, 7, 8, 10, 11, 18}, {0, 15}, {0, 9, 16}, {0}};
@@ -2258,19 +2869,28 @@ TEST_F(MindDataTestPipeline, TestUnicodeScriptTokenizerSuccess3) {
 
   uint64_t i = 0;
   while (row.size() != 0) {
-    auto ind = row["offsets_start"];
-    auto ind1 = row["offsets_limit"];
     auto token = row["token"];
-    std::shared_ptr<Tensor> expected_tensor;
-    std::shared_ptr<Tensor> expected_tensor_offsets_start;
-    std::shared_ptr<Tensor> expected_tensor_offsets_limit;
-    int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &expected_tensor_offsets_start);
-    Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &expected_tensor_offsets_limit);
-    EXPECT_EQ(*ind, *expected_tensor_offsets_start);
-    EXPECT_EQ(*ind1, *expected_tensor_offsets_limit);
-    EXPECT_EQ(*token, *expected_tensor);
+    auto start = row["offsets_start"];
+    auto limit = row["offsets_limit"];
+
+    std::shared_ptr<Tensor> de_expected_tokens;
+    int x = expected_tokens[i].size();
+    ASSERT_OK(Tensor::CreateFromVector(expected_tokens[i], TensorShape({x}), &de_expected_tokens));
+    mindspore::MSTensor ms_expected_tokens =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+    EXPECT_MSTENSOR_EQ(token, ms_expected_tokens);
+
+    std::shared_ptr<Tensor> de_expected_offsets_start;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &de_expected_offsets_start));
+    mindspore::MSTensor ms_expected_offsets_start =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
+    std::shared_ptr<Tensor> de_expected_offsets_limit;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &de_expected_offsets_limit));
+    mindspore::MSTensor ms_expected_offsets_limit =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
 
     iter->GetNextRow(&row);
     i++;
@@ -2292,7 +2912,7 @@ TEST_F(MindDataTestPipeline, TestWhitespaceTokenizerSuccess) {
   EXPECT_NE(ds, nullptr);
 
   // Create white_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> white_tokenizer = text::WhitespaceTokenizer();
+  std::shared_ptr<TensorTransform> white_tokenizer = std::make_shared<text::WhitespaceTokenizer>();
   EXPECT_NE(white_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2305,7 +2925,7 @@ TEST_F(MindDataTestPipeline, TestWhitespaceTokenizerSuccess) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   std::vector<std::vector<std::string>> expected = {
@@ -2314,10 +2934,14 @@ TEST_F(MindDataTestPipeline, TestWhitespaceTokenizerSuccess) {
   uint64_t i = 0;
   while (row.size() != 0) {
     auto ind = row["text"];
-    std::shared_ptr<Tensor> expected_tensor;
+
+    std::shared_ptr<Tensor> de_expected_tensor;
     int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    EXPECT_EQ(*ind, *expected_tensor);
+    ASSERT_OK(Tensor::CreateFromVector(expected[i], TensorShape({x}), &de_expected_tensor));
+    mindspore::MSTensor expected_tensor =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tensor));
+    EXPECT_MSTENSOR_EQ(ind, expected_tensor);
+
     iter->GetNextRow(&row);
     i++;
   }
@@ -2338,7 +2962,7 @@ TEST_F(MindDataTestPipeline, TestWhitespaceTokenizerSuccess1) {
   EXPECT_NE(ds, nullptr);
 
   // Create white_tokenizer operation on ds
-  std::shared_ptr<TensorOperation> white_tokenizer = text::WhitespaceTokenizer(true);
+  std::shared_ptr<TensorTransform> white_tokenizer = std::make_shared<text::WhitespaceTokenizer>(true);
   EXPECT_NE(white_tokenizer, nullptr);
 
   // Create Map operation on ds
@@ -2352,10 +2976,10 @@ TEST_F(MindDataTestPipeline, TestWhitespaceTokenizerSuccess1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
-  std::vector<std::vector<std::string>> expected = {
+  std::vector<std::vector<std::string>> expected_tokens = {
     {"Welcome", "to", "Beijing!"}, {"北京欢迎您！"}, {"我喜欢English!"}, {""}};
 
   std::vector<std::vector<uint32_t>> expected_offsets_start = {{0, 8, 11}, {0}, {0}, {0}};
@@ -2363,19 +2987,28 @@ TEST_F(MindDataTestPipeline, TestWhitespaceTokenizerSuccess1) {
 
   uint64_t i = 0;
   while (row.size() != 0) {
-    auto ind = row["offsets_start"];
-    auto ind1 = row["offsets_limit"];
     auto token = row["token"];
-    std::shared_ptr<Tensor> expected_tensor;
-    std::shared_ptr<Tensor> expected_tensor_offsets_start;
-    std::shared_ptr<Tensor> expected_tensor_offsets_limit;
-    int x = expected[i].size();
-    Tensor::CreateFromVector(expected[i], TensorShape({x}), &expected_tensor);
-    Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &expected_tensor_offsets_start);
-    Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &expected_tensor_offsets_limit);
-    EXPECT_EQ(*ind, *expected_tensor_offsets_start);
-    EXPECT_EQ(*ind1, *expected_tensor_offsets_limit);
-    EXPECT_EQ(*token, *expected_tensor);
+    auto start = row["offsets_start"];
+    auto limit = row["offsets_limit"];
+
+    std::shared_ptr<Tensor> de_expected_tokens;
+    int x = expected_tokens[i].size();
+    ASSERT_OK(Tensor::CreateFromVector(expected_tokens[i], TensorShape({x}), &de_expected_tokens));
+    mindspore::MSTensor ms_expected_tokens =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_tokens));
+    EXPECT_MSTENSOR_EQ(token, ms_expected_tokens);
+
+    std::shared_ptr<Tensor> de_expected_offsets_start;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_start[i], TensorShape({x}), &de_expected_offsets_start));
+    mindspore::MSTensor ms_expected_offsets_start =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_start));
+    EXPECT_MSTENSOR_EQ(start, ms_expected_offsets_start);
+
+    std::shared_ptr<Tensor> de_expected_offsets_limit;
+    ASSERT_OK(Tensor::CreateFromVector(expected_offsets_limit[i], TensorShape({x}), &de_expected_offsets_limit));
+    mindspore::MSTensor ms_expected_offsets_limit =
+      mindspore::MSTensor(std::make_shared<mindspore::dataset::DETensor>(de_expected_offsets_limit));
+    EXPECT_MSTENSOR_EQ(limit, ms_expected_offsets_limit);
 
     iter->GetNextRow(&row);
     i++;

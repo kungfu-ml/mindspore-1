@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,9 +20,9 @@ A collection of operators to build neural networks or to compute functions.
 """
 
 from .image_ops import (CropAndResize)
-from .array_ops import (Argmax, Argmin, Cast, Concat, Pack, Unpack,
+from .array_ops import (Argmax, Argmin, Cast, Concat, Pack, Stack, Unpack, Unstack,
                         Diag, DiagPart, DType, ExpandDims, Eye,
-                        Fill, Ones, Zeros, GatherNd, GatherV2, SparseGatherV2, InvertPermutation,
+                        Fill, Ones, Zeros, GatherNd, GatherV2, Gather, SparseGatherV2, InvertPermutation,
                         IsInstance, IsSubClass, ArgMaxWithValue, OnesLike, ZerosLike,
                         Rank, Reshape, ResizeNearestNeighbor, ArgMinWithValue, Meshgrid,
                         SameTypeShape, ScatterAdd, ScatterSub, ScatterMul, ScatterDiv, ScatterMax, ScatterMin,
@@ -33,46 +33,47 @@ from .array_ops import (Argmax, Argmin, Cast, Concat, Pack, Unpack,
                         Transpose, TruncatedNormal, TupleToArray, UnsortedSegmentMin, UnsortedSegmentMax,
                         UnsortedSegmentProd, UnsortedSegmentSum, SpaceToDepth, DepthToSpace, SpaceToBatch, BatchToSpace,
                         SpaceToBatchND, BatchToSpaceND, BroadcastTo, InplaceUpdate, ReverseSequence, EmbeddingLookup,
-                        Unique, GatherD, Identity)
+                        Unique, GatherD, Identity, Range)
 from .comm_ops import (AllGather, AllReduce, _AlltoAll, AllSwap, ReduceScatter, Broadcast,
-                       _MirrorOperator, _MirrorMiniStepOperator, ReduceOp, _VirtualDataset,
-                       _VirtualDiv, _GetTensorSlice,
+                       _MirrorOperator, _MirrorMiniStepOperator, _MiniStepAllGather, ReduceOp, _VirtualDataset,
+                       _VirtualDiv, _GetTensorSlice, _VirtualAdd,
                        _HostAllGather, _HostReduceScatter)
 from .debug_ops import (ImageSummary, InsertGradientOf, HookBackward, ScalarSummary,
                         TensorSummary, HistogramSummary, Print, Assert)
-from .control_ops import ControlDepend, GeSwitch, Merge
-from .inner_ops import ScalarCast, Randperm, NoRepeatNGram, LambApplyOptimizerAssign, LambApplyWeightAssign
+from .control_ops import GeSwitch, Merge
+from .inner_ops import ScalarCast, Randperm, NoRepeatNGram, LambApplyOptimizerAssign, LambApplyWeightAssign, MakeRefKey
 
-from .math_ops import (Abs, ACos, Asin, Asinh, AddN, AccumulateNV2, AssignAdd, AssignSub, Atan2, BatchMatMul, BitwiseAnd, BitwiseOr,
+from .math_ops import (Abs, ACos, Asin, Asinh, AddN, AccumulateNV2, AssignAdd, AssignSub, Atan2, BatchMatMul,
+                       BitwiseAnd, BitwiseOr,
                        BitwiseXor, Inv, Invert, ApproximateEqual, InplaceAdd, InplaceSub,
                        ReduceMax, ReduceMin, ReduceMean, ReduceSum, ReduceAll, ReduceProd, CumProd, ReduceAny,
                        Cos, Div, DivNoNan, Equal, EqualCount, Exp, Expm1, Erf, Erfc, Floor, FloorDiv, FloorMod, Ceil,
                        Acosh, Greater, GreaterEqual, Less, LessEqual, Log, Log1p, LogicalAnd, Mod,
-                       LogicalNot, LogicalOr, MatMul, Maximum,
+                       LogicalNot, LogicalOr, MatMul, Maximum, MulNoNan,
                        Minimum, Mul, Neg, NMSWithMask, NotEqual,
                        NPUAllocFloatStatus, NPUClearFloatStatus, LinSpace,
                        NPUGetFloatStatus, Pow, RealDiv, IsNan, IsInf, IsFinite, FloatStatus,
                        Reciprocal, CumSum, HistogramFixedWidth, SquaredDifference, Xdivy, Xlogy,
                        Sin, Sqrt, Rsqrt, BesselI0e, BesselI1e, TruncateDiv, TruncateMod,
-                       Square, Sub, TensorAdd, Sign, Round, SquareSumAll, Atan, Atanh, Cosh, Sinh, Eps, Tan,
-                       MatrixInverse)
+                       Square, Sub, TensorAdd, Add, Sign, Round, SquareSumAll, Atan, Atanh, Cosh, Sinh, Eps, Tan,
+                       MatrixInverse, IndexAdd)
 
 from .random_ops import (RandomChoiceWithMask, StandardNormal, Gamma, Poisson, UniformInt, UniformReal,
                          RandomCategorical, StandardLaplace, Multinomial, UniformCandidateSampler,
                          LogUniformCandidateSampler)
 from .nn_ops import (LSTM, SGD, Adam, FusedSparseAdam, FusedSparseLazyAdam, AdamNoUpdateParam, ApplyMomentum, BatchNorm,
-                     BiasAdd, Conv2D,
+                     BiasAdd, Conv2D, Conv3D, Conv3DTranspose,
                      DepthwiseConv2dNative,
-                     DropoutDoMask, Dropout,
-                     DropoutGenMask, Flatten, FusedBatchNorm, FusedBatchNormEx, BNTrainingReduce, BNTrainingUpdate,
-                     Gelu, FastGelu, Elu,
+                     DropoutDoMask, Dropout, Dropout2D, Dropout3D, DropoutGenMask, Flatten,
+                     InstanceNorm, BNTrainingReduce, BNTrainingUpdate,
+                     GeLU, Gelu, FastGeLU, FastGelu, Elu,
                      GetNext, L2Normalize, LayerNorm, L2Loss, CTCLoss, CTCGreedyDecoder,
-                     LogSoftmax,
+                     LogSoftmax, MaxPool3D,
                      MaxPool, DataFormatDimMap,
                      AvgPool, Conv2DBackpropInput, ComputeAccidentalHits,
-                     MaxPoolWithArgmax, OneHot, Pad, MirrorPad, PReLU, ReLU, ReLU6, ReLUV2, HSwish, HSigmoid,
-                     ResizeBilinear, Sigmoid,
-                     SigmoidCrossEntropyWithLogits,
+                     MaxPoolWithArgmax, OneHot, Pad, MirrorPad, Mish, PReLU, ReLU, ReLU6, ReLUV2, HSwish, HSigmoid,
+                     ResizeBilinear, Sigmoid, SeLU,
+                     SigmoidCrossEntropyWithLogits, NLLLoss, BCEWithLogitsLoss,
                      SmoothL1Loss, Softmax, Softsign, Softplus, LRN, RNNTLoss, DynamicRNN, DynamicGRUV2,
                      SoftmaxCrossEntropyWithLogits, ROIAlign,
                      SparseSoftmaxCrossEntropyWithLogits, Tanh,
@@ -85,16 +86,26 @@ from .nn_ops import (LSTM, SGD, Adam, FusedSparseAdam, FusedSparseLazyAdam, Adam
 from . import _quant_ops
 from ._quant_ops import *
 from .other_ops import (Assign, InplaceAssign, IOU, BoundingBoxDecode, BoundingBoxEncode,
-                        ConfusionMatrix, PopulationCount,
-                        CheckValid, MakeRefKey, Partial, Depend, identity, CheckBprop, Push, Pull)
+                        ConfusionMatrix, PopulationCount, UpdateState, Load,
+                        CheckValid, Partial, Depend, identity, CheckBprop, Push, Pull)
 from ._thor_ops import (CusBatchMatMul, CusCholeskyTrsm, CusFusedAbsMax1, CusImg2Col, CusMatMulCubeDenseLeft,
                         CusMatMulCubeFraczRightMul, CusMatMulCube, CusMatrixCombine, CusTranspose02314,
                         CusMatMulCubeDenseRight,
                         CusMatMulCubeFraczLeftCast, Im2Col, UpdateThorGradient, Cholesky, CholeskyTrsm, DetTriangle,
                         ProdForceSeA)
 from .sparse_ops import SparseToDense
-from ._embedding_cache_ops import (CacheSwapHashmap, SearchCacheIdx, CacheSwapTable, UpdateCache, MapCacheIdx, SubAndFilter,
+from ._embedding_cache_ops import (CacheSwapTable, UpdateCache, MapCacheIdx, SubAndFilter,
                                    MapUniform, DynamicAssign, PadAndShift)
+from .quantum_ops import PQC, Evolution
+from .sponge_ops import (BondForce, BondEnergy, BondAtomEnergy, BondForceWithAtomEnergy, BondForceWithAtomVirial,
+                         DihedralForce, DihedralEnergy, DihedralAtomEnergy, DihedralForceWithAtomEnergy, AngleForce,
+                         AngleEnergy, AngleAtomEnergy, AngleForceWithAtomEnergy, PMEReciprocalForce,
+                         LJForce, LJEnergy, LJForceWithPMEDirectForce, PMEExcludedForce, PMEEnergy, Dihedral14LJForce,
+                         Dihedral14LJForceWithDirectCF, Dihedral14LJEnergy, Dihedral14LJCFForceWithAtomEnergy,
+                         Dihedral14LJAtomEnergy, Dihedral14CFEnergy, Dihedral14CFAtomEnergy, MDIterationLeapFrog,
+                         GetCenterOfGeometry, MDTemperature, NeighborListUpdate, MDIterationLeapFrogLiujian,
+                         CrdToUintCrd, MDIterationSetupRandState, TransferCrd)
+
 
 __all__ = [
     'Unique',
@@ -102,9 +113,11 @@ __all__ = [
     'Sort',
     'EditDistance',
     'CropAndResize',
+    'Add',
     'TensorAdd',
     'Argmax',
     'Argmin',
+    'MaxPool3D',
     'ArgMaxWithValue',
     'ArgMinWithValue',
     'AddN',
@@ -126,10 +139,10 @@ __all__ = [
     'Xdivy',
     'Xlogy',
     'Conv2D',
+    'Conv3D',
+    'Conv3DTranspose',
     'Flatten',
     'MaxPoolWithArgmax',
-    'FusedBatchNorm',
-    'FusedBatchNormEx',
     'BNTrainingReduce',
     'BNTrainingUpdate',
     'BatchNorm',
@@ -145,8 +158,10 @@ __all__ = [
     'Softsign',
     'LogSoftmax',
     'SoftmaxCrossEntropyWithLogits',
+    'BCEWithLogitsLoss',
     'ROIAlign',
     'SparseSoftmaxCrossEntropyWithLogits',
+    'NLLLoss',
     'SGD',
     'ApplyMomentum',
     'ExpandDims',
@@ -158,6 +173,7 @@ __all__ = [
     'Transpose',
     'OneHot',
     'GatherV2',
+    'Gather',
     'SparseGatherV2',
     'EmbeddingLookup',
     'Padding',
@@ -166,10 +182,14 @@ __all__ = [
     'UniqueWithPad',
     'Concat',
     'Pack',
+    'Stack',
     'Unpack',
+    'Unstack',
     'Tile',
     'BiasAdd',
+    'GeLU',
     'Gelu',
+    'FastGeLU',
     'FastGelu',
     'Minimum',
     'Maximum',
@@ -193,6 +213,9 @@ __all__ = [
     'ZerosLike',
     'Select',
     'Split',
+    'Mish',
+    'SeLU',
+    'MulNoNan',
     'ReLU',
     'ReLU6',
     'Elu',
@@ -228,6 +251,8 @@ __all__ = [
     'DropoutDoMask',
     'DropoutGenMask',
     'Dropout',
+    'Dropout2D',
+    'Dropout3D',
     'Neg',
     'InplaceAdd',
     'InplaceSub',
@@ -252,7 +277,6 @@ __all__ = [
     'ScalarToArray',
     'ScalarToTensor',
     'TupleToArray',
-    'ControlDepend',
     'GeSwitch',
     'Merge',
     'SameTypeShape',
@@ -284,9 +308,10 @@ __all__ = [
     'Floor',
     'NMSWithMask',
     'IOU',
-    'MakeRefKey',
     'Partial',
+    'MakeRefKey',
     'Depend',
+    'UpdateState',
     'identity',
     'AvgPool',
     # Back Primitive
@@ -402,6 +427,45 @@ __all__ = [
     "ReLUV2",
     "SparseToDense",
     "MatrixInverse",
+    "Range",
+    "IndexAdd",
+    "PQC",
+    "Evolution",
+    "BondForce",
+    "BondEnergy",
+    "BondAtomEnergy",
+    "BondForceWithAtomEnergy",
+    "BondForceWithAtomVirial",
+    "DihedralForce",
+    "DihedralEnergy",
+    "DihedralAtomEnergy",
+    "DihedralForceWithAtomEnergy",
+    "AngleForce",
+    "AngleEnergy",
+    "AngleAtomEnergy",
+    "AngleForceWithAtomEnergy",
+    'PMEReciprocalForce',
+    'LJForce',
+    'LJForceWithPMEDirectForce',
+    'LJEnergy',
+    'PMEExcludedForce',
+    'PMEEnergy',
+    "Dihedral14LJForce",
+    "Dihedral14LJEnergy",
+    "Dihedral14LJForceWithDirectCF",
+    "Dihedral14LJCFForceWithAtomEnergy",
+    "Dihedral14LJAtomEnergy",
+    "Dihedral14CFEnergy",
+    "MDIterationLeapFrog",
+    "Dihedral14CFAtomEnergy",
+    "GetCenterOfGeometry",
+    "MDTemperature",
+    "NeighborListUpdate",
+    "MDIterationLeapFrogLiujian",
+    "CrdToUintCrd",
+    "MDIterationSetupRandState",
+    "TransferCrd",
+
 ]
 
 __all__.sort()

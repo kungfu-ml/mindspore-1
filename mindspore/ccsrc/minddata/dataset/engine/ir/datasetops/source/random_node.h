@@ -22,7 +22,9 @@
 #include <utility>
 #include <vector>
 
+#include "minddata/dataset/engine/datasetops/source/sampler/sampler.h"
 #include "minddata/dataset/engine/ir/datasetops/dataset_node.h"
+#include "minddata/dataset/include/samplers.h"
 
 namespace mindspore {
 namespace dataset {
@@ -89,6 +91,38 @@ class RandomNode : public NonMappableSourceNode {
   Status GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_getter, bool estimate,
                         int64_t *dataset_size) override;
 
+  /// \brief Getter functions
+  int32_t TotalRows() const { return total_rows_; }
+  const std::string &SchemaPath() const { return schema_path_; }
+  const std::shared_ptr<SchemaObj> &GetSchema() const { return schema_; }
+  const std::vector<std::string> &ColumnsList() const { return columns_list_; }
+  const std::mt19937 &RandGen() const { return rand_gen_; }
+  const std::unique_ptr<DataSchema> &GetDataSchema() const { return data_schema_; }
+
+  /// \brief RandomDataset by itself is a non-mappable dataset that does not support sampling.
+  ///     However, if a cache operator is injected at some other place higher in the tree, that cache can
+  ///     inherit this sampler from the leaf, providing sampling support from the caching layer.
+  ///     That is why we setup the sampler for a leaf node that does not use sampling.
+  /// \param[in] sampler The sampler to setup
+  /// \return Status of the function
+  Status SetupSamplerForCache(std::shared_ptr<SamplerObj> *sampler) override;
+
+  /// \brief Random node will always produce the full set of data into the cache
+  /// \return Status of the function
+  Status MakeSimpleProducer() override { return Status::OK(); }
+
+  /// \brief Base-class override for accepting IRNodePass visitor
+  /// \param[in] p The node to visit
+  /// \param[out] modified Indicator if the node was modified
+  /// \return Status of the node visit
+  Status Accept(IRNodePass *const p, bool *const modified) override;
+
+  /// \brief Base-class override for accepting IRNodePass visitor
+  /// \param[in] p The node to visit
+  /// \param[out] modified Indicator if the node was modified
+  /// \return Status of the node visit
+  Status AcceptAfter(IRNodePass *const p, bool *const modified) override;
+
  private:
   /// \brief A quick inline for producing a random number between (and including) min/max
   /// \param[in] min minimum number that can be generated.
@@ -100,7 +134,6 @@ class RandomNode : public NonMappableSourceNode {
   std::string schema_path_;
   std::shared_ptr<SchemaObj> schema_;
   std::vector<std::string> columns_list_;
-  std::shared_ptr<SamplerObj> sampler_;
   std::mt19937 rand_gen_;
   std::unique_ptr<DataSchema> data_schema_;
 };

@@ -33,6 +33,7 @@
 #include "utils/ms_context.h"
 #include "runtime/device/memory_manager.h"
 #include "runtime/device/executor/dynamic_kernel.h"
+#include "ir/device_event.h"
 
 using mindspore::tensor::Tensor;
 using std::vector;
@@ -66,8 +67,6 @@ class KernelRuntime {
                                      const AddressPtrList &kernel_workspaces) const;
   virtual void AssignStaticMemoryInput(const session::KernelGraph *graph);
   virtual void AssignStaticMemoryValueNode(session::KernelGraph *graph);
-  virtual void SyncValueNodeDeviceAddr(session::KernelGraph *graph);
-  virtual void CleanValueNodeDeviceAddr(session::KernelGraph *graph);
   virtual void ClearGraphRuntimeResource(uint32_t graph_id, const std::vector<AnfNodePtr> &inputs,
                                          const std::unordered_set<ValueNodePtr> &value_nodes,
                                          const std::vector<CNodePtr> &execution_order);
@@ -75,12 +74,16 @@ class KernelRuntime {
                                   const std::unordered_set<ValueNodePtr> &value_nodes,
                                   const std::vector<CNodePtr> &execution_order);
   virtual bool SyncStream() = 0;
+  virtual bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind) = 0;
   virtual void ClearGlobalIdleMem() {}
   virtual void CreateContext() {}
   virtual void SetContext() {}
-  virtual void *context() const { return nullptr; }
+  virtual const void *context() const { return nullptr; }
   uint8_t *MallocMem(MemType type, size_t size, const DeviceAddressPtr &address) {
     return mem_manager_->MallocMem(type, size, address);
+  }
+  uint8_t *MallocCommunicationMemFromMemPool(size_t size) {
+    return mem_manager_->MallocCommunicationMemFromMemPool(size);
   }
   static void GenLaunchArgs(const mindspore::kernel::KernelMod &kernel_mod, const AnfNodePtr &kernel,
                             AddressPtrList *kernel_inputs, AddressPtrList *kernel_workspaces,
@@ -100,6 +103,12 @@ class KernelRuntime {
   }
 
   virtual void PreInit() {}
+  virtual uint64_t GetAvailableMemMaxSize() const { return 0; }
+  void AddBufferPtr(std::shared_ptr<char[]> ptr) { buffer_ptrs_.push_back(ptr); }
+  void FreeAndClearBufferPtrs() { buffer_ptrs_.clear(); }
+  virtual DeviceAddressType GetTargetDeviceAddressType() const = 0;
+  virtual void *compute_stream() const { return nullptr; }
+  virtual void *communication_stream() const { return nullptr; }
 
  protected:
   virtual DeviceAddressPtr CreateDeviceAddress(void *device_ptr, size_t device_size, const string &format,
@@ -134,9 +143,10 @@ class KernelRuntime {
   void AssignValueNodeTensor(const ValueNodePtr &value_node, const ValuePtr &node_value, size_t output_idx);
   DeviceAddressPtr PreAssignCNodeMemory(const AnfNodePtr &anf_node, size_t index);
 #if (ENABLE_CPU && (ENABLE_D || ENABLE_GPU))
-  void GetFirstPSEmbeddingCache(const session::KernelGraph *graph, AnfNodePtr *first_cache_input_index,
-                                size_t *first_cache_size);
+  void GetFirstPSEmbeddingCache(const session::KernelGraph *graph, AnfNodePtr *const first_cache_input_index,
+                                size_t *const first_cache_size);
   void CheckIfSupportPSEmbeddingCache(const session::KernelGraph *graph);
+  void CheckSparsePSEmbeddingCache(const CNodePtr &node);
 #endif
 
  protected:
@@ -144,9 +154,11 @@ class KernelRuntime {
 #if !defined(_WIN32) && !defined(_WIN64)
   std::shared_ptr<Debugger> debugger_;
 #endif
-  void *stream_ = nullptr;
+  void *stream_{nullptr};
+  void *communication_stream_{nullptr};
   std::shared_ptr<MemoryManager> mem_manager_{nullptr};
   std::map<uint32_t, std::vector<DynamicKernelPtr>> graph_dynamic_kernel_map_;
+  std::vector<std::shared_ptr<char[]>> buffer_ptrs_ = {};
 };
 using KernelRuntimePtr = std::shared_ptr<KernelRuntime>;
 }  // namespace device

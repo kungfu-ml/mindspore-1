@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "minddata/dataset/engine/ir/datasetops/dataset_node.h"
 #include "minddata/dataset/include/datasets.h"
 
 namespace mindspore {
@@ -32,7 +33,7 @@ class BuildSentenceVocabNode : public DatasetNode {
  public:
   /// \brief Constructor
   BuildSentenceVocabNode(std::shared_ptr<DatasetNode> child, std::shared_ptr<SentencePieceVocab> vocab,
-                         const std::vector<std::string> &col_names, uint32_t vocab_size, float character_coverage,
+                         const std::vector<std::string> &col_names, int32_t vocab_size, float character_coverage,
                          SentencePieceModel model_type, const std::unordered_map<std::string, std::string> &params);
 
   /// \brief Destructor
@@ -63,18 +64,26 @@ class BuildSentenceVocabNode : public DatasetNode {
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status Accept(IRNodePass *p, bool *modified) override;
+  Status Accept(IRNodePass *const p, bool *const modified) override;
 
   /// \brief Base-class override for accepting IRNodePass visitor
   /// \param[in] p The node to visit
   /// \param[out] modified Indicator if the node was modified
   /// \return Status of the node visit
-  Status AcceptAfter(IRNodePass *p, bool *modified) override;
+  Status AcceptAfter(IRNodePass *const p, bool *const modified) override;
+
+  /// \brief Getter functions
+  const std::shared_ptr<SentencePieceVocab> &GetVocab() const { return vocab_; }
+  const std::vector<std::string> &ColNames() const { return col_names_; }
+  int32_t VocabSize() const { return vocab_size_; }
+  float CharacterCoverage() const { return character_coverage_; }
+  SentencePieceModel ModelType() const { return model_type_; }
+  const std::unordered_map<std::string, std::string> &Params() const { return params_; }
 
  private:
   std::shared_ptr<SentencePieceVocab> vocab_;
   std::vector<std::string> col_names_;
-  uint32_t vocab_size_;
+  int32_t vocab_size_;
   float character_coverage_;
   SentencePieceModel model_type_;
   std::unordered_map<std::string, std::string> params_;

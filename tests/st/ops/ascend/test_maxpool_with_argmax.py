@@ -26,12 +26,12 @@ class Net(nn.Cell):
     def __init__(self):
         super(Net, self).__init__()
 
-        self.maxpool = P.MaxPoolWithArgmax(padding="same",
-                                           ksize=3,
+        self.maxpool = P.MaxPoolWithArgmax(pad_mode="same",
+                                           kernel_size=3,
                                            strides=2)
         self.x = Parameter(initializer(
             'normal', [1, 64, 112, 112]), name='w')
-        self.add = P.TensorAdd()
+        self.add = P.Add()
 
     @ms_function
     def construct(self):

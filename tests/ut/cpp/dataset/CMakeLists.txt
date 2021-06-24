@@ -1,6 +1,7 @@
 include(GoogleTest)
 
 SET(DE_UT_SRCS
+        affine_op_test.cc
         execute_test.cc
         album_op_test.cc
         arena_test.cc
@@ -29,12 +30,20 @@ SET(DE_UT_SRCS
         c_api_dataset_voc_test.cc
         c_api_datasets_test.cc
         c_api_epoch_ctrl_test.cc
+        c_api_pull_based_test.cc
         c_api_repeat_test.cc
         c_api_samplers_test.cc
         c_api_text_sentence_piece_vocab_test.cc
         c_api_text_vocab_test.cc
         c_api_transforms_test.cc
-        c_api_vision_test.cc
+        c_api_vision_a_to_q_test.cc
+        c_api_vision_affine_test.cc
+        c_api_vision_bounding_box_augment_test.cc
+        c_api_vision_random_subselect_policy_test.cc
+        c_api_vision_random_test.cc
+        c_api_vision_r_to_z_test.cc
+        c_api_vision_soft_dvpp_test.cc
+        c_api_vision_uniform_aug_test.cc
         celeba_op_test.cc
         center_crop_op_test.cc
         channel_swap_test.cc
@@ -66,8 +75,11 @@ SET(DE_UT_SRCS
         image_process_test.cc
         interrupt_test.cc
         ir_callback_test.cc
+        ir_sampler_test.cc
         ir_tensor_op_fusion_pass_test.cc
         ir_tree_adapter_test.cc
+        ir_vision_random_test.cc
+        ir_vision_test.cc
         jieba_tokenizer_op_test.cc
         main_test.cc
         map_op_test.cc
@@ -119,6 +131,7 @@ SET(DE_UT_SRCS
         status_test.cc
         storage_container_test.cc
         subset_random_sampler_test.cc
+        subset_sampler_test.cc
         swap_red_blue_test.cc
         take_op_test.cc
         task_manager_test.cc
@@ -131,13 +144,14 @@ SET(DE_UT_SRCS
         to_float16_op_test.cc
         tokenizer_op_test.cc
         treap_test.cc
+        tree_modifying_function_test.cc
         trucate_pair_test.cc
         type_cast_op_test.cc
         weighted_random_sampler_test.cc
         zip_op_test.cc
         )
 
-if (ENABLE_PYTHON)
+if(ENABLE_PYTHON)
     set(DE_UT_SRCS
             ${DE_UT_SRCS}
             filter_op_test.cc
@@ -145,13 +159,24 @@ if (ENABLE_PYTHON)
             voc_op_test.cc
             sentence_piece_vocab_op_test.cc
             )
-endif ()
+endif()
+
+if(ENABLE_ACL)
+    set(DE_UT_SRCS
+            ${DE_UT_SRCS}
+            dvpp_decode_jpeg_test.cc)
+endif()
 
 add_executable(de_ut_tests ${DE_UT_SRCS})
 
 set_target_properties(de_ut_tests PROPERTIES INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../lib64")
 
-target_link_libraries(de_ut_tests PRIVATE _c_dataengine pybind11::embed ${GTEST_LIBRARY} ${SECUREC_LIBRARY} ${SLOG_LIBRARY})
+target_link_libraries(de_ut_tests PRIVATE
+        _c_dataengine pybind11::embed
+        ${GTEST_LIBRARY}
+        ${SECUREC_LIBRARY}
+        ${SLOG_LIBRARY}
+        )
 
 gtest_discover_tests(de_ut_tests WORKING_DIRECTORY ${Project_DIR}/tests/dataset)
 

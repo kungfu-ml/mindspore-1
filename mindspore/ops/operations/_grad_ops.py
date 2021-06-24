@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -183,7 +183,8 @@ class SqrtGrad(PrimitiveWithInfer):
 
     def infer_dtype(self, x_dtype, dout_dtype):
         args = {"x": x_dtype, "dout": dout_dtype}
-        validator.check_tensors_dtypes_same_and_valid(args, [mstype.float16, mstype.float32], self.name)
+        valid_types = [mstype.float16, mstype.float32, mstype.float64]
+        validator.check_tensors_dtypes_same_and_valid(args, valid_types, self.name)
         return x_dtype
 
 
@@ -191,17 +192,35 @@ class BatchNormGrad(PrimitiveWithInfer):
     """Performs grad of BatchNorm operation."""
 
     @prim_attr_register
-    def __init__(self, is_training=False, epsilon=1e-5):
+    def __init__(self, is_training=False, epsilon=1e-5, data_format='NCHW'):
         self.is_training = validator.check_value_type('is_training', is_training, (bool,), self.name)
         self.epsilon = validator.check_float_range(epsilon, 0, 1, Rel.INC_RIGHT, 'epsilon', self.name)
-        self.add_prim_attr('data_format', "NCHW")
+        self.data_format = validator.check_string(data_format, ['NCHW', 'NHWC'], 'format', self.name)
 
-    def infer_shape(self, y_backprop_shape, x_shape, scale_shape, reserve_1_shape, reserve_2_shape):
+    def infer_shape(self, y_backprop_shape, x_shape, scale_shape, save_mean_shape, save_variance_shape, reserve):
         validator.check("BatchNorm y_backprop_shape", y_backprop_shape, "BatchNorm x_shape", x_shape)
-        return (x_shape, scale_shape, scale_shape, reserve_1_shape, reserve_2_shape)
+        return (x_shape, scale_shape, scale_shape)
 
-    def infer_dtype(self, y_backprop_type, x_type, scale_type, reserve_1_type, reserve_2_type):
-        return (x_type, scale_type, scale_type, reserve_1_type, reserve_2_type)
+    def infer_dtype(self, y_backprop_type, x_type, scale_type, save_mean_shape, save_variance_shape, reserve):
+        return (x_type, scale_type, scale_type)
+
+
+class SyncBatchNormGrad(PrimitiveWithInfer):
+    """Performs grad of SyncBatchNorm operation."""
+
+    @prim_attr_register
+    def __init__(self, epsilon=1e-5, group="group0", device_num=2):
+        validator.check_float_range(epsilon, 0, 1, Rel.INC_RIGHT, 'epsilon', self.name)
+        if not isinstance(group, str):
+            raise TypeError("The group attr of SyncBatchNormGrad should be str.")
+        validator.check_int(device_num, 2, Rel.GE, "device_num", self.name)
+
+    def infer_shape(self, y_backprop_shape, x_shape, scale_shape, save_mean_shape, save_variance_shape):
+        validator.check("BatchNorm y_backprop_shape", y_backprop_shape, "BatchNorm x_shape", x_shape)
+        return (x_shape, scale_shape, scale_shape)
+
+    def infer_dtype(self, y_backprop_type, x_type, scale_type, save_mean_shape, save_variance_shape):
+        return (x_type, scale_type, scale_type)
 
 
 class BiasAddGrad(PrimitiveWithInfer):
@@ -210,13 +229,15 @@ class BiasAddGrad(PrimitiveWithInfer):
     @prim_attr_register
     def __init__(self, data_format="NCHW"):
         self.init_prim_io_names(inputs=['dout'], outputs=['output'])
-        self.format = validator.check_string(data_format, ['NCHW', 'NHWC'], 'format', self.name)
+        self.format = validator.check_string(data_format, ['NCHW', 'NHWC', 'NCDHW'], 'format', self.name)
         if context.get_context("device_target") != "GPU" and self.format == "NHWC":
             raise ValueError("NHWC format only support in GPU target.")
+        if self.format == "NCDHW":
+            self.format = "NCHW"
         self.add_prim_attr('data_format', self.format)
 
     def infer_shape(self, d_output):
-        channel = d_output[1] if self.format == "NCHW" else d_output[-1]
+        channel = d_output[-1] if self.format == "NHWC" else d_output[1]
         return (channel,)
 
     def infer_dtype(self, dout_dtype):
@@ -309,9 +330,11 @@ class Conv3DBackpropFilter(PrimitiveWithInfer):
 
     Inputs:
         - **x** (Tensor) - The input of the convolution, then the shape is :math:`(C_{out}, C_{in}, D_{in}, K_1, K_2)`.
+          Currently dout data type only support float16 and float32.
         - **dout** (Tensor) - The gradients w.r.t the output of the convolution. The shape conforms to the default
-          data_format :math:`(N, C_{out}, D_{out}, H_{out}, W_{out})`.
-        - **w_size** (Tensor) - A tuple describes the shape of the weight which conforms to the format
+          data_format :math:`(N, C_{out}, D_{out}, H_{out}, W_{out})`. Currently dout data type only support float16
+          and float32.
+        - **w_size** (tuple(int)) - A tuple describes the shape of the weight which conforms to the format
           :math:`(N, C_{in}, D_{in}, H_{in}, W_{in})`.
 
     Outputs:
@@ -354,8 +377,9 @@ class Conv3DBackpropFilter(PrimitiveWithInfer):
         if isinstance(pad, int):
             pad = (pad,) * 6
         validator.check_equal_int(len(pad), 6, 'pad size', self.name)
+        self.add_prim_attr('pad', self.pad)
         self.pad_list = pad
-        self.add_prim_attr('pads', self.pad_list)
+        self.add_prim_attr('pad_list', self.pad_list)
 
         self.pad_mode = validator.check_string(pad_mode.lower(), ['valid', 'same', 'pad'], 'pad_mode', self.name)
         if self.pad_mode != 'pad' and self.pad_list != (0, 0, 0, 0, 0, 0):
@@ -371,7 +395,6 @@ class Conv3DBackpropFilter(PrimitiveWithInfer):
         self.add_prim_attr('groups', self.group)
         self.format = validator.check_string(data_format, ['NCDHW'], 'format', self.name)
         self.add_prim_attr('data_format', self.format)
-        self.add_prim_attr('io_format', self.format)
 
     def __infer__(self, x, doutput, w_size):
         w_size_v = w_size['value']
@@ -415,7 +438,7 @@ class Conv3DBackpropFilter(PrimitiveWithInfer):
             pad_right = pad_needed_w - pad_left
             self.pad_list = (pad_head, pad_tail, pad_top, pad_bottom, pad_left, pad_right)
 
-        self.add_prim_attr('pads', self.pad_list)
+        self.add_prim_attr('pad_list', self.pad_list)
         out = {
             'value': None,
             'shape': w_size_v,
@@ -432,7 +455,10 @@ class Conv2DBackpropFilter(PrimitiveWithInfer):
         out_channel (int): The dimensionality of the output space.
         kernel_size (Union[int, tuple[int]]): The size of the convolution window.
         pad_mode (str): Modes to fill padding. It could be "valid", "same", or "pad". Default: "valid".
-        pad (int): The pad value to be filled. Default: 0.
+        pad (Union(int, tuple[int])): The pad value to be filled. Default: 0. If `pad` is an integer, the paddings of
+                    top, bottom, left and right are the same, equal to pad. If `pad` is a tuple of four integers, the
+                    padding of top, bottom, left and right equal to pad[0], pad[1], pad[2], and pad[3] correspondingly.
+        pad_list (tuple): The pad list like (top, bottom, left, right). Default: (0, 0, 0, 0).
         mode (int): Modes for different convolutions. 0 Math convolutiuon, 1 cross-correlation convolution ,
                     2 deconvolution, 3 depthwise convolution. Default: 1.
         stride (tuple): The stride to be applied to the convolution filter. Default: (1, 1).
@@ -464,7 +490,11 @@ class Conv2DBackpropFilter(PrimitiveWithInfer):
         self.mode = mode
         pad_mode = pad_mode.upper()
         self.add_prim_attr('pad_mode', pad_mode)
-        self.pad = pad
+        if isinstance(pad, int):
+            pad = (pad,) * 4
+        else:
+            validator.check_equal_int(len(pad), 4, 'pad size', self.name)
+        self.add_prim_attr("pad", pad)
         if isinstance(stride, tuple) and len(stride) == 4:
             self.stride = (stride[2], stride[3])
             self.add_prim_attr('stride', self.stride)
@@ -501,13 +531,15 @@ class DepthwiseConv2dNativeBackpropFilter(PrimitiveWithInfer):
     Refer to class DepthwiseConv2dNative for more details.
 
     Args:
-        channel_multiplier (int): The multipiler for the original output conv.
+        channel_multiplier (int): The multiplier for the original output conv.
         kernel_size (int or tuple): The size of the conv kernel.
         mode (int): Modes for different convolutions. 0 Math convolutiuon, 1 cross-correlation convolution,
-                       2 deconvolution,3 depthwise convolution. Defaul: 3.
+                       2 deconvolution,3 depthwise convolution. Default: 3.
         pad_mode (str): The mode to fill padding which can be: "valid", "same" or "pad". Default: "valid".
-        pad (int): The pad value to be filled. Default: 0.
-        pads (tuple): The pad list like (top, bottom, left, right). Default: (0, 0, 0, 0).
+        pad (Union(int, tuple[int])): The pad value to be filled. Default: 0. If `pad` is an integer, the paddings of
+                    top, bottom, left and right are the same, equal to pad. If `pad` is a tuple of four integers, the
+                    padding of top, bottom, left and right equal to pad[0], pad[1], pad[2], and pad[3] correspondingly.
+        pad_list (tuple): The pad list like (top, bottom, left, right). Default: (0, 0, 0, 0).
         stride (int): The stride to be applied to the convolution filter. Default: 1.
         dilation (int): Specifies the space to use between kernel elements. Default: 1.
         group (int): Splits input into groups. Default: 1.
@@ -522,7 +554,7 @@ class DepthwiseConv2dNativeBackpropFilter(PrimitiveWithInfer):
                  kernel_size,
                  pad_mode="valid",
                  pad=0,
-                 pads=(0, 0, 0, 0),
+                 pad_list=(0, 0, 0, 0),
                  mode=3,
                  stride=1,
                  dilation=1,
@@ -533,8 +565,12 @@ class DepthwiseConv2dNativeBackpropFilter(PrimitiveWithInfer):
         self.kernel_size = kernel_size
         self.mode = mode
         self.pad_mode = pad_mode
-        self.pad = pad
-        self.pads = pads
+        if isinstance(pad, int):
+            pad = (pad,) * 4
+        else:
+            validator.check_equal_int(len(pad), 4, 'pad size', self.name)
+        self.add_prim_attr("pad", pad)
+        self.pad_list = pad_list
         self.stride = stride
         self.dilation = dilation
         self.group = group
@@ -562,13 +598,15 @@ class DepthwiseConv2dNativeBackpropInput(PrimitiveWithInfer):
     Applies depthwise conv2d for the input, which will generate more channels with channel_multiplier.
 
     Args:
-        channel_multiplier (int): The multipiler for the original output conv.
+        channel_multiplier (int): The multiplier for the original output conv.
         kernel_size (int or tuple): The size of the conv kernel.
         mode (int): Modes for different convolutions. 0 Math convolutiuon, 1 cross-correlation convolution ,
                     2 deconvolution,3 depthwise convolution. Default: 3.
         pad_mode (str):  Modes to fill padding. It could be "valid", "same", or "pad". Default: "valid".
-        pad (int): The pad value to be filled. Default: 0.
-        pads (tuple): The pad list like (top, bottom, left, right). Default: (0, 0, 0, 0).
+        pad (Union(int, tuple[int])): The pad value to be filled. Default: 0. If `pad` is an integer, the paddings of
+                    top, bottom, left and right are the same, equal to pad. If `pad` is a tuple of four integers, the
+                    padding of top, bottom, left and right equal to pad[0], pad[1], pad[2], and pad[3] correspondingly.
+        pad_list (tuple): The pad list like (top, bottom, left, right). Default: (0, 0, 0, 0).
         stride (int): The stride to be applied to the convolution filter. Default: 1.
         dilation (int): Specifies the space to use between kernel elements. Default: 1.
         group (int): Splits input into groups. Default: 1.
@@ -583,7 +621,7 @@ class DepthwiseConv2dNativeBackpropInput(PrimitiveWithInfer):
                  kernel_size,
                  pad_mode="valid",
                  pad=0,
-                 pads=(0, 0, 0, 0),
+                 pad_list=(0, 0, 0, 0),
                  mode=3,
                  stride=1,
                  dilation=1,
@@ -594,8 +632,12 @@ class DepthwiseConv2dNativeBackpropInput(PrimitiveWithInfer):
         self.kernel_size = kernel_size
         self.mode = mode
         self.pad_mode = pad_mode
-        self.pad = pad
-        self.pads = pads
+        if isinstance(pad, int):
+            pad = (pad,) * 4
+        else:
+            validator.check_equal_int(len(pad), 4, 'pad size', self.name)
+        self.add_prim_attr("pad", pad)
+        self.pad_list = pad_list
         self.stride = stride
         self.dilation = dilation
         self.group = group
@@ -667,51 +709,19 @@ class FlattenGrad(PrimitiveWithInfer):
         return out
 
 
-class FusedBatchNormGrad(Primitive):
-    """Gradients of FusedBatchNorm operation."""
+class InstanceNormGrad(PrimitiveWithInfer):
+    """Gradients of InstanceNorm operation."""
 
     @prim_attr_register
     def __init__(self, epsilon=0.0, momentum=0.1):
-        self.init_prim_io_names(inputs=['dy', 'x', 'scale', 'save_mean', 'save_inv_variance'],
-                                outputs=['dx', 'bn_scale', 'bn_bias'])
+        self.init_prim_io_names(inputs=['dy', 'x', 'gamma', 'save_mean', 'save_variance'],
+                                outputs=['dx', 'bn_gamma', 'bn_beta'])
 
-    def __call__(self, dy, x, scale, save_mean, save_inv_variance):
-        raise NotImplementedError
+    def infer_shape(self, y_backprop_shape, x_shape, gamma_shape, save_mean_shape, save_variance_shape):
+        return (x_shape, gamma_shape, gamma_shape)
 
-
-class FusedBatchNormGradCPU(PrimitiveWithInfer):
-    """Gradients of FusedBatchNorm operation for CPU."""
-
-    @prim_attr_register
-    def __init__(self, epsilon=0.0, momentum=0.1):
-        self.init_prim_io_names(inputs=['dy', 'x', 'scale', 'bias', 'save_mean', 'save_inv_variance'],
-                                outputs=['dx', 'bn_scale', 'bn_bias'])
-        self.add_prim_attr('data_format', "NCHW")
-
-    def infer_shape(self, dy_shape, x_shape, scale_shape, bias_shape, save_mean_shape, save_inv_variance_shape):
-        return (x_shape, scale_shape, bias_shape)
-
-    def infer_dtype(self, dy_type, x_type, scale_type, bias_type, save_mean_type, save_inv_variance_type):
-        return (x_type, scale_type, bias_type)
-
-
-class FusedBatchNormGradEx(PrimitiveWithInfer):
-    """Gradients of FusedBatchNormEx operation."""
-
-    @prim_attr_register
-    def __init__(self, epsilon=0.0, momentum=0.1, data_format="NCHW"):
-        self.init_prim_io_names(inputs=['dy', 'x', 'scale', 'save_mean', 'save_inv_variance', 'reserve'],
-                                outputs=['dx', 'bn_scale', 'bn_bias'])
-        self.format = validator.check_string(data_format, ['NCHW', 'NHWC'], 'format', self.name)
-        if context.get_context("device_target") != "GPU" and self.format == "NHWC":
-            raise ValueError("NHWC format only support in GPU target.")
-        self.add_prim_attr('data_format', self.format)
-
-    def infer_shape(self, y_backprop_shape, x_shape, scale_shape, save_mean_shape, save_variance_shape, reserve_shape):
-        return (x_shape, scale_shape, scale_shape)
-
-    def infer_dtype(self, y_backprop_type, x_type, scale_type, save_mean_type, save_variance_type, reserve_type):
-        return (x_type, scale_type, scale_type)
+    def infer_dtype(self, y_backprop_type, x_type, gamma_type, save_mean_type, save_variance_type):
+        return (x_type, gamma_type, gamma_type)
 
 
 class UniqueGrad(Primitive):
@@ -755,12 +765,12 @@ class BNTrainingUpdateGrad(PrimitiveWithInfer):
         return (batch_mean, batch_variance)
 
 
-class GeluGrad(PrimitiveWithInfer):
-    """Gradients of Gelu operation."""
+class GeLUGrad(PrimitiveWithInfer):
+    """Gradients of GeLU operation."""
 
     @prim_attr_register
     def __init__(self):
-        """Initialize GeluGrad"""
+        """Initialize GeLUGrad"""
 
     def infer_shape(self, y_backprop_shape, x_shape, y_shape):
         return x_shape
@@ -773,12 +783,12 @@ class GeluGrad(PrimitiveWithInfer):
         return x_dtype
 
 
-class FastGeluGrad(PrimitiveWithInfer):
-    """Gradients of FastGelu operation."""
+class FastGeLUGrad(PrimitiveWithInfer):
+    """Gradients of FastGeLU operation."""
 
     @prim_attr_register
     def __init__(self):
-        """init FastGeluGrad"""
+        """init FastGeLUGrad"""
 
     def infer_shape(self, y_backprop_shape, x_shape):
         return x_shape
@@ -795,13 +805,13 @@ class _PoolGrad(PrimitiveWithInfer):
     """Gradients of the max/avg pool operation."""
 
     @prim_attr_register
-    def __init__(self, ksize, strides, padding="VALID", data_format="NCHW"):
+    def __init__(self, kernel_size, strides, pad_mode="VALID", data_format="NCHW"):
         self.init_prim_io_names(inputs=['x_origin', 'out_origin', 'grad'], outputs=['output'])
 
-        validator.check_value_type('ksize', ksize, [int, tuple], self.name)
+        validator.check_value_type('kernel_size', kernel_size, [int, tuple], self.name)
         validator.check_value_type('strides', strides, [int, tuple], self.name)
-        self.padding = validator.check_string(padding.upper(), ['VALID', 'SAME'], 'padding', self.name)
-        self.add_prim_attr("padding", self.padding)
+        self.pad_mode = validator.check_string(pad_mode.upper(), ['VALID', 'SAME'], 'pad_mode', self.name)
+        self.add_prim_attr("pad_mode", self.pad_mode)
         self.format = validator.check_string(data_format, ['NCHW', 'NHWC'], 'format', self.name)
         if context.get_context("device_target") != "GPU" and self.format == "NHWC":
             raise ValueError("NHWC format only support in GPU target.")
@@ -827,38 +837,22 @@ class _PoolGrad(PrimitiveWithInfer):
                     raise error_msg
             return ret
 
-        ksize = _grad_check_int_or_tuple("ksize", ksize, self.is_maxpoolgradwithargmax)
-        self.ksize = ksize if self.format == "NCHW" else [ksize[0], ksize[2], ksize[3], ksize[1]]
-        self.add_prim_attr("ksize", self.ksize)
+        kernel_size = _grad_check_int_or_tuple("kernel_size", kernel_size, self.is_maxpoolgradwithargmax)
+        self.kernel_size = kernel_size if self.format == "NCHW" else [kernel_size[0], kernel_size[2],
+                                                                      kernel_size[3], kernel_size[1]]
+        self.add_prim_attr("kernel_size", self.kernel_size)
 
         strides = _grad_check_int_or_tuple("strides", strides, self.is_maxpoolgradwithargmax)
         self.strides = strides if self.format == "NCHW" else [strides[0], strides[2], strides[3], strides[1]]
         self.add_prim_attr("strides", self.strides)
 
 
-class AvgPoolGrad(_PoolGrad):
-    """Gradients of the avg pool operation for ge."""
-
-    @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID"):
-        super(AvgPoolGrad, self).__init__(ksize, strides, padding)
-
-    def __infer__(self, origin_input, dout):
-        out = {
-            'value': None,
-            'shape': tuple(origin_input['value']),
-            'dtype': dout['dtype'],
-        }
-
-        return out
-
-
 class AvgPoolGradVm(_PoolGrad):
     """Gradients of the avg pool operation for vm."""
 
     @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID"):
-        super(AvgPoolGradVm, self).__init__(ksize, strides, padding)
+    def __init__(self, kernel_size=1, strides=1, pad_mode="VALID"):
+        super(AvgPoolGradVm, self).__init__(kernel_size, strides, pad_mode)
         self.init_prim_io_names(inputs=['x_origin', 'grad', 'mean_matrix', 'kernel_matrix'], outputs=['output'])
 
     def __infer__(self, origin_input, dout, mean_matrix, kernel_matrix):
@@ -871,26 +865,12 @@ class AvgPoolGradVm(_PoolGrad):
         return out
 
 
-class AvgPoolGradGpu(_PoolGrad):
-    """Gradients of the avg pool operation for gpu."""
+class AvgPoolGrad(_PoolGrad):
+    """Gradients of the avg pool operation."""
 
     @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID", data_format="NCHW"):
-        super(AvgPoolGradGpu, self).__init__(ksize, strides, padding, data_format)
-
-    def infer_shape(self, x1_shape, x2_shape, grad_shape):
-        return x1_shape
-
-    def infer_dtype(self, x1_dtype, x2_dtype, grad_dtype):
-        return x1_dtype
-
-
-class AvgPoolGradCpu(_PoolGrad):
-    """Gradients of the avg pool operation for cpu."""
-
-    @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID", data_format="NCHW"):
-        super(AvgPoolGradCpu, self).__init__(ksize, strides, padding, data_format)
+    def __init__(self, kernel_size=1, strides=1, pad_mode="VALID", data_format="NCHW"):
+        super(AvgPoolGrad, self).__init__(kernel_size, strides, pad_mode, data_format)
 
     def infer_shape(self, x1_shape, x2_shape, grad_shape):
         return x1_shape
@@ -903,8 +883,8 @@ class MaxPoolGrad(_PoolGrad):
     """Performs gradients of the max pool operation."""
 
     @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID", data_format="NCHW"):
-        super(MaxPoolGrad, self).__init__(ksize, strides, padding, data_format)
+    def __init__(self, kernel_size=1, strides=1, pad_mode="VALID", data_format="NCHW"):
+        super(MaxPoolGrad, self).__init__(kernel_size, strides, pad_mode, data_format)
 
     def infer_shape(self, x1_shape, x2_shape, grad_shape):
         return x1_shape
@@ -918,13 +898,13 @@ class MaxPoolGradGrad(_PoolGrad):
     Performs gradients of the MaxPoolGrad operation.
 
     Args:
-        ksize (Union[int, tuple[int]]): The size of kernel used to take the maximum value,
-            is an int number that represents height and width are both ksize, or a tuple
+        kernel_size (Union[int, tuple[int]]): The size of kernel used to take the maximum value,
+            is an int number that represents height and width are both kernel_size, or a tuple
             of two int numbers that represent height and width respectively. Default: 1.
         strides (Union[int, tuple[int]]): The distance of kernel moving, an int number that represents
             the height and width of movement are both strides, or a tuple of two int numbers that
             represent height and width of movement respectively. Default: 1.
-        padding (str): The optional value for pad mode, is "same" or "valid", not case sensitive.
+        pad_mode (str): The optional value for pad mode, is "same" or "valid", not case sensitive.
             Default: "valid".
 
             - same: Adopts the way of completion. The height and width of the output will be the same as
@@ -946,16 +926,95 @@ class MaxPoolGradGrad(_PoolGrad):
     """
 
     @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID"):
-        super(MaxPoolGradGrad, self).__init__(ksize, strides, padding)
+    def __init__(self, kernel_size=1, strides=1, pad_mode="VALID"):
+        super(MaxPoolGradGrad, self).__init__(kernel_size, strides, pad_mode)
 
     def infer_shape(self, x1_shape, x2_shape, grad_shape):
-        return x1_shape
+        return x2_shape
 
     def infer_dtype(self, x1_dtype, x2_dtype, grad_dtype):
         args = {'x1_dtype': x1_dtype, 'x2_dtype': x2_dtype, 'grad_dtype': grad_dtype}
         validator.check_tensors_dtypes_same_and_valid(args, [mstype.float16], self.name)
-        return x1_dtype
+        return x2_dtype
+
+
+def _get_max_pool3d_grad_pads_by_pad_mode(input_shape, kernel_size, strides, pad_mode):
+    """
+    helper for get max pool3d grad pads by pad_mode
+    """
+    def get_pad(origin_shape, ksize, stride):
+        tail = origin_shape % stride
+        pad = (ksize - tail) if tail > 0 else (ksize - stride)
+        pad = max(pad, 0)
+        pad1 = int(pad / 2)
+        pad2 = int(pad / 2) + pad % 2
+        return pad1, pad2
+
+    _, _, d, h, w = input_shape
+    _, _, kd, kh, kw = kernel_size
+    _, _, strd, strh, strw = strides
+
+    pads = (0, 0, 0, 0, 0, 0)
+    if pad_mode == 'SAME':
+        pads_d = get_pad(d, kd, strd)
+        pads_h = get_pad(h, kh, strh)
+        pads_w = get_pad(w, kw, strw)
+        pads = pads_d + pads_h + pads_w
+    return pads
+
+class MaxPool3DGrad(PrimitiveWithInfer):
+    """Gradients of the max pool3d operation."""
+
+    @prim_attr_register
+    def __init__(self, kernel_size=(1, 1, 1, 1, 1), strides=(1, 1, 1, 1, 1), pad_mode='VALID', data_format="NCDHW"):
+        validator.check_value_type('kernel_size', kernel_size, [int, tuple], self.name)
+        validator.check_value_type('strides', strides, [int, tuple], self.name)
+        validator.check_value_type('pad_mode', pad_mode, [str], self.name)
+        self.format = validator.check_string(data_format, ['NCDHW'], 'format', self.name)
+        self.pad_mode = validator.check_string(pad_mode.upper(), ['VALID', 'SAME'], 'pad_mode', self.name)
+        self.kernel_size = _check_3d_int_or_tuple("kernel_size", kernel_size, self.name, allow_five=True, ret_five=True)
+        self.add_prim_attr("kernel_size", self.kernel_size)
+        self.strides = _check_3d_int_or_tuple("strides", strides, self.name, allow_five=True, ret_five=True)
+        self.add_prim_attr("strides", self.strides)
+
+    def infer_shape(self, x_shape, y_shape, grad_shape):
+        validator.check_equal_int(len(x_shape), 5, "x rank", self.name)
+        return x_shape
+
+    def infer_dtype(self, x_dtype, y_dtype, grad_dtype):
+        args = {'x_dtype': x_dtype, 'y_dtype': y_dtype, 'grad_dtype': grad_dtype}
+        validator.check_tensors_dtypes_same_and_valid(args, [mstype.float16, mstype.float32], self.name)
+        return mstype.tensor_type(mstype.float32)
+
+
+class MaxPool3DGradGrad(PrimitiveWithInfer):
+    """Gradients of the max pool3d grad operation."""
+
+    @prim_attr_register
+    def __init__(self, kernel_size=(1, 1, 1, 1, 1), strides=(1, 1, 1, 1, 1), pad_mode='VALID', data_format="NCDHW"):
+        validator.check_value_type('kernel_size', kernel_size, [int, tuple], self.name)
+        validator.check_value_type('strides', strides, [int, tuple], self.name)
+        validator.check_value_type('pad_mode', pad_mode, [str], self.name)
+        self.format = validator.check_string(data_format, ['NCDHW'], 'format', self.name)
+        self.pad_mode = validator.check_string(pad_mode.upper(), ['VALID', 'SAME'], 'pad_mode', self.name)
+        self.kernel_size = _check_3d_int_or_tuple("kernel_size", kernel_size, self.name, allow_five=True, ret_five=True)
+        self.add_prim_attr("kernel_size", self.kernel_size)
+        self.strides = _check_3d_int_or_tuple("strides", strides, self.name, allow_five=True, ret_five=True)
+        self.add_prim_attr("strides", self.strides)
+
+    def infer_shape(self, x_shape, y_shape, grad_shape):
+        validator.check_equal_int(len(x_shape), 5, "x rank", self.name)
+        pad_list = _get_max_pool3d_grad_pads_by_pad_mode(x_shape, self.kernel_size, self.strides, self.pad_mode)
+        for pad in pad_list:
+            validator.check_non_negative_int(pad, 'element of pad_list', self.name)
+        self.add_prim_attr("pad_list", pad_list)
+        return y_shape
+
+    def infer_dtype(self, x_dtype, y_dtype, grad_dtype):
+        args = {'x_dtype': x_dtype, 'y_dtype': y_dtype}
+        validator.check_tensors_dtypes_same_and_valid(args, [mstype.float16, mstype.float32], self.name)
+        validator.check_tensor_dtype_valid('grad_dtype', grad_dtype, [mstype.float16, mstype.float32], self.name)
+        return x_dtype
 
 
 class MaximumGrad(Primitive):
@@ -970,9 +1029,9 @@ class MaxPoolGradWithArgmax(_PoolGrad):
     """Computes the gradients of MaxPoolWithArgmax."""
 
     @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID"):
+    def __init__(self, kernel_size=1, strides=1, pad_mode="VALID"):
         self.init_prim_io_names(inputs=['x', 'grad', 'argmax'], outputs=['output'])
-        super(MaxPoolGradWithArgmax, self).__init__(ksize, strides, padding)
+        super(MaxPoolGradWithArgmax, self).__init__(kernel_size, strides, pad_mode)
 
     def infer_shape(self, x_shape, grad_shape, argmax_shape):
         if not grad_shape:
@@ -988,13 +1047,13 @@ class MaxPoolGradGradWithArgmax(_PoolGrad):
     Computes the gradients of MaxPoolGradWithArgmax.
 
     Args:
-        ksize (Union[int, tuple[int]]): The size of kernel used to take the maximum value,
-            is an int number that represents height and width are both ksize, or a tuple
+        kernel_size (Union[int, tuple[int]]): The size of kernel used to take the maximum value,
+            is an int number that represents height and width are both kernel_size, or a tuple
             of two int numbers that represent height and width respectively. Default: 1.
         strides (Union[int, tuple[int]]): The distance of kernel moving, an int number that represents
             the height and width of movement are both strides, or a tuple of two int numbers that
             represent height and width of movement respectively. Default: 1.
-        padding (str): The optional value for pad mode, is "same" or "valid", not case sensitive.
+        pad_mode (str): The optional value for pad mode, is "same" or "valid", not case sensitive.
             Default: "valid".
 
             - same: Adopts the way of completion. The height and width of the output will be the same as
@@ -1016,9 +1075,9 @@ class MaxPoolGradGradWithArgmax(_PoolGrad):
     """
 
     @prim_attr_register
-    def __init__(self, ksize=1, strides=1, padding="VALID"):
+    def __init__(self, kernel_size=1, strides=1, pad_mode="VALID"):
         self.init_prim_io_names(inputs=['x', 'grad', 'argmax'], outputs=['output'])
-        super(MaxPoolGradGradWithArgmax, self).__init__(ksize, strides, padding)
+        super(MaxPoolGradGradWithArgmax, self).__init__(kernel_size, strides, pad_mode)
 
     def infer_shape(self, x_shape, grad_shape, argmax_shape):
         if not grad_shape:
@@ -1047,7 +1106,7 @@ class L2NormalizeGrad(PrimitiveWithInfer):
     Gradients of L2 normalize.
 
     Args:
-        axis (int): The begin axis for the input to apply L2 normalize. Default: 0.
+        axis (Union[list(int), tuple(int), int]): The begin axis for the input to apply L2 normalize. Default: 0.
         epsilon (float): A small value added for numerical stability. Default: 1e-4.
 
     Inputs:
@@ -1061,8 +1120,13 @@ class L2NormalizeGrad(PrimitiveWithInfer):
 
     @prim_attr_register
     def __init__(self, axis=0, epsilon=1e-4):
-        validator.check_value_type('axis', axis, [int], self.name)
+        axis = [axis] if isinstance(axis, int) else axis
+        validator.check_value_type('axis', axis, [list, tuple], self.name)
         validator.check_value_type('epsilon', epsilon, [int, float], self.name)
+        self.add_prim_attr('axis', axis)
+        self.init_attrs['axis'] = axis
+        if len(axis) != 1:
+            raise TypeError("The length of axis must be 1, later will support multiple axis!")
 
     def infer_shape(self, input_x, out, dout):
         validator.check('input_x shape', input_x, 'out shape', out, Rel.EQ, self.name)
@@ -1300,7 +1364,6 @@ class DynamicRNNGrad(PrimitiveWithInfer):
                  time_major=True,
                  forget_bias=0.0):
         self.forget_bias = validator.check_value_type("forget_bias", forget_bias, [float], self.name)
-        self.add_prim_attr("io_format", "ND")
 
     def infer_shape(self, x_shape, w_shape, b_shape, y_shape, init_h_shape, init_c_shape, h_shape,
                     c_shape, dy_shape, dh_shape, dc_shape, i_shape, j_shape, f_shape, o_shape, tanhc_shape):
@@ -1411,7 +1474,6 @@ class DynamicGRUV2Grad(PrimitiveWithInfer):
         self.direction = validator.check_string(direction, ['UNIDIRECTIONAL'], "direction", self.name)
         self.gate_order = validator.check_string(gate_order, ['zrh', 'rzh'], "gate_order", self.name)
         self.reset_after = validator.check_value_type("reset_after", reset_after, [bool], self.name)
-        self.add_prim_attr("io_format", "ND")
 
     def infer_shape(self, x_shape, winput_shape, whidden_shape, y_shape, init_h_shape, h_shape,
                     dy_shape, dh_shape, update_shape, reset_shape, new_shape, hnew_shape, seq_shape, mask_shape):
@@ -1746,12 +1808,44 @@ class SliceGrad(PrimitiveWithInfer):
                 'value': None}
 
 
+class NLLLossGrad(PrimitiveWithInfer):
+    """Computes the gradients of `NLLLoss`."""
+
+    @prim_attr_register
+    def __init__(self, reduction="mean"):
+        """Initialize NLLLoss"""
+        self.init_prim_io_names(inputs=['x', 'target', "weight"], outputs=['loss'])
+        self.reduction = validator.check_string(reduction, ['none', 'sum', 'mean'], 'reduction', self.name)
+        self.add_prim_attr('reduction', self.reduction)
+
+    def infer_shape(self, x_shape, y_grad_shape, t_shape, w_shape, tw_shape):
+        validator.check_int(len(x_shape), [1, 2], Rel.IN, "x rank", self.name)
+        validator.check_int(len(t_shape), 1, Rel.EQ, "target rank", self.name)
+        validator.check_int(len(w_shape), 1, Rel.EQ, "weight rank", self.name)
+        validator.check(f"input_shape[0]", x_shape[0], "target_shape", t_shape[0], Rel.EQ, self.name)
+        if len(x_shape) == 1:
+            validator.check(f"input_shape[0]", x_shape[0], "weight_shape", w_shape[0], Rel.EQ, self.name)
+        else:
+            validator.check(f"input_shape[1]", x_shape[1], "weight_shape", w_shape[0], Rel.EQ, self.name)
+        return x_shape
+
+    def infer_dtype(self, x_dtype, y_grad_dtype, t_dtype, w_dtype, tw_dtype):
+        valid_dtypes = (mstype.float16, mstype.float32)
+        validator.check_tensor_dtype_valid("x_dtype", x_dtype, valid_dtypes, self.name)
+        validator.check_tensor_dtype_valid("y_grad_dtype", y_grad_dtype, valid_dtypes, self.name)
+        validator.check_tensor_dtype_valid("t_dtype", t_dtype, mstype.int32, self.name)
+        validator.check_tensor_dtype_valid("w_dtype", w_dtype, valid_dtypes, self.name)
+        validator.check_tensor_dtype_valid("tw_dtype", tw_dtype, valid_dtypes, self.name)
+        validator.check('tw_shape_dtype', tw_dtype, 'w_shape_dtype', w_dtype, Rel.EQ, self.name)
+        return x_dtype
+
+
 class SmoothL1LossGrad(PrimitiveWithInfer):
     """Computes gradient for prediction on SmoothL1Loss."""
 
     @prim_attr_register
     def __init__(self, beta=1.0):
-        self.add_prim_attr('sigma', beta)
+        pass
 
     def infer_shape(self, prediction, target, dloss):
         validator.check('prediction shape', prediction, 'target shape', target, Rel.EQ, self.name)
@@ -1786,7 +1880,7 @@ class StridedSliceGrad(PrimitiveWithInfer):
                  ellipsis_mask=0,
                  new_axis_mask=0,
                  shrink_axis_mask=0):
-        """Initialize StrideSliceGrad"""
+        """Initialize StridedSliceGrad"""
         validator.check_value_type('begin_mask', begin_mask, [int], self.name)
         validator.check_value_type('end_mask', end_mask, [int], self.name)
         validator.check_value_type('ellipsis_mask', ellipsis_mask, [int], self.name)
@@ -1964,7 +2058,6 @@ class BasicLSTMCellCStateGrad(PrimitiveWithInfer):
     def __init__(self, forget_bias, activation):
         self.forget_bias = validator.check_value_type("forget_bias", forget_bias, [float], self.name)
         self.activation = validator.check_string(activation, ['tanh'], "activation", self.name)
-        self.add_prim_attr("io_format", "ND")
 
     def infer_shape(self, c_shape, dht_shape, dct_shape, it_shape, jt_shape, ft_shape, ot_shape, tanhct_shape):
         # dhy and dcy should be same shape
@@ -2011,10 +2104,9 @@ class BasicLSTMCellCStateGrad(PrimitiveWithInfer):
 
 class BasicLSTMCellWeightGrad(PrimitiveWithInfer):
     """Computes the weight gradients of BasicLSTM."""
-
     @prim_attr_register
     def __init__(self):
-        self.add_prim_attr("io_format", "HWCN")
+        pass
 
     def infer_shape(self, x_shape, h_shape, dgate_shape):
         validator.check_equal_int(len(x_shape), 2, "x rank", self.name)
@@ -2046,7 +2138,6 @@ class BasicLSTMCellInputGrad(PrimitiveWithInfer):
     def __init__(self, keep_prob):
         self.keep_prob = validator.check_value_type("keep_prob", keep_prob, [float], self.name)
         self.keep_prob = validator.check_float_range(keep_prob, 0.0, 1.0, Rel.INC_BOTH, "keep_prob", self.name)
-        self.add_prim_attr("io_format", "ND")
 
     def infer_shape(self, dgate_shape, w_shape):
         validator.check_equal_int(len(dgate_shape), 2, "dgate rank", self.name)

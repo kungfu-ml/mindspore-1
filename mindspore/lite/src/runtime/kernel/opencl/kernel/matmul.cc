@@ -17,18 +17,36 @@
 #include <set>
 #include <string>
 #include <map>
-#include "nnacl/fp32/common_func_fp32.h"
 #include "src/kernel_registry.h"
 #include "src/runtime/kernel/opencl/kernel/matmul.h"
+#include "src/runtime/kernel/opencl/kernel/strassen.h"
+
 #ifndef PROGRAM_WITH_IL
 #include "src/runtime/kernel/opencl/cl/matmul.cl.inc"
 #endif
 
 using mindspore::kernel::KERNEL_ARCH::kGPU;
 using mindspore::lite::KernelRegistrar;
+using mindspore::lite::RET_ERROR;
+using mindspore::lite::RET_OK;
 using mindspore::schema::PrimitiveType_MatMul;
 
 namespace mindspore::kernel {
+
+bool IsUseStrassenMatmul(const std::vector<lite::Tensor *> &in_tensors_) {
+  if (in_tensors_.at(0)->shape().size() == 2) {
+    auto shape0 = in_tensors_.at(0)->shape();
+    auto shape1 = in_tensors_.at(1)->shape();
+    if (in_tensors_.at(1)->IsConst() && (shape0[0] == shape0[1]) && (shape1[0] == shape1[1]) &&
+        (shape0[0] == shape1[0]) && (shape0[0] % 8 == 0)) {
+      return true;
+    } else {
+      return false;
+    }
+  } else {
+    return false;
+  }
+}
 
 int MatMulOpenCLKernel::CheckSpecs() {
   if (in_tensors_.size() != 2 || out_tensors_.size() != 1) {
@@ -39,7 +57,7 @@ int MatMulOpenCLKernel::CheckSpecs() {
   transposeA = param->a_transpose_;
   if (transposeA) {
     MS_LOG(ERROR) << "matmul only support a_transpose_=false yet.";
-    return mindspore::lite::RET_ERROR;
+    return RET_ERROR;
   }
   transposeB = param->b_transpose_;
   act_weight_ = !in_tensors_[1]->IsConst();
@@ -47,7 +65,7 @@ int MatMulOpenCLKernel::CheckSpecs() {
   if (in_tensors_[0]->shape().size() != out_tensors_[0]->shape().size() || in_tensors_[0]->shape().size() < 2 ||
       in_tensors_[0]->shape().size() > 4) {
     MS_LOG(ERROR) << "matmul only support input shape size= 2, 3 or 4.";
-    return mindspore::lite::RET_ERROR;
+    return RET_ERROR;
   }
   return RET_OK;
 }
@@ -75,19 +93,16 @@ int MatMulOpenCLKernel::Prepare() {
   std::string program_name = "MatMul";
   ocl_runtime_->LoadSource(program_name, source);
   ocl_runtime_->BuildKernel(kernel_, program_name, kernel_name);
+
 #endif
-  auto ret = InitWeights();
-  if (ret != RET_OK) {
-    return ret;
-  }
   SetConstArgs();
   SetGlobalLocal();
   MS_LOG(DEBUG) << kernel_name << " Init Done!";
-  return mindspore::lite::RET_OK;
+  return RET_OK;
 }
 
 int MatMulOpenCLKernel::InitWeights() {
-  if (act_weight_) {
+  if (!in_tensors_[1]->IsConst()) {
     return RET_OK;
   }
   // ABMCI @ ABCICO = ABMCO
@@ -96,12 +111,27 @@ int MatMulOpenCLKernel::InitWeights() {
     return ret;
   }
   auto allocator = ocl_runtime_->GetAllocator();
-  int ci = inShape[3];
+  auto weight_shape = in_tensors_[1]->shape();
+  int weight_ndim = weight_shape.size();
+  std::vector<int> weight_shape_4d(MAX_DIMS, 1);
+  for (int i = 0; i < weight_ndim; i++) {
+    weight_shape_4d[MAX_DIMS - weight_ndim + i] = weight_shape[i];
+  }
+  auto param = reinterpret_cast<MatMulParameter *>(op_parameter_);
+  transposeB = param->b_transpose_;
+  enable_fp16_ = ocl_runtime_->GetFp16Enable();
+  int ci, co;
+  if (transposeB) {
+    ci = weight_shape_4d[3];
+    co = weight_shape_4d[2];
+  } else {
+    ci = weight_shape_4d[2];
+    co = weight_shape_4d[3];
+  }
   int ci4 = UP_DIV(ci, C4NUM);
-  int co = outShape[3];
   int co4 = UP_DIV(co, C4NUM);
-  int a = inShape[0];
-  int b = inShape[1];
+  int a = weight_shape_4d[0];
+  int b = weight_shape_4d[1];
 
   size_t dtype_size = enable_fp16_ ? sizeof(uint16_t) : sizeof(float);
   padWeight_ = allocator->Malloc(a * b * ci4 * co4 * C4NUM * C4NUM * dtype_size);
@@ -112,7 +142,6 @@ int MatMulOpenCLKernel::InitWeights() {
   auto originWeightFp32 = reinterpret_cast<float *>(in_tensors_.at(kWeightIndex)->data_c());
   auto originWeightFp16 = reinterpret_cast<float16_t *>(in_tensors_.at(kWeightIndex)->data_c());
   bool isModelFp16 = in_tensors_.at(kWeightIndex)->data_type() == kNumberTypeFloat16;
-
   // pad weight
   // ABCICO -> AB(CI4)(CO4)(4 from CO)(4 from CI)
   // if tranposeB, ABCOCI -> AB(CI4)(CO4)(4 from CO)(4 from CI)
@@ -153,6 +182,7 @@ int MatMulOpenCLKernel::InitWeights() {
       }
     }
   }
+
   allocator->UnmapBuffer(padWeight_);
   FreeDequantedWeight();
   return RET_OK;
@@ -161,6 +191,7 @@ int MatMulOpenCLKernel::InitWeights() {
 void MatMulOpenCLKernel::SetGlobalLocal() {
   // local size should less than MAX_GROUP_SIZE
   local_size_ = {32, 4, 1};
+  global_size_ = {1, 1, 1};
   global_size_ = {UP_DIV(static_cast<size_t>(outShape[3]), C4NUM),
                   4 * static_cast<size_t>(outShape[0]) * static_cast<size_t>(outShape[1]),
                   static_cast<size_t>(outShape[2])};
@@ -189,9 +220,38 @@ int MatMulOpenCLKernel::Run() {
     ocl_runtime_->SetKernelArg(kernel_, arg_count++, in_tensors_[1]->data_c());
   }
   ocl_runtime_->RunKernel(kernel_, global_range_, local_range_, nullptr, &event_);
-  return mindspore::lite::RET_OK;
+  return RET_OK;
 }
 
-REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_MatMul, OpenCLKernelCreator<MatMulOpenCLKernel>)
-REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_MatMul, OpenCLKernelCreator<MatMulOpenCLKernel>)
+kernel::LiteKernel *OpenCLMatMulKernelCreator(const std::vector<lite::Tensor *> &inputs,
+                                              const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
+                                              const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
+  kernel::OpenCLKernel *kernel = nullptr;
+  bool infer_shape_done = opParameter->infer_flag_;
+  if (infer_shape_done && IsUseStrassenMatmul(inputs)) {
+    MS_LOG(DEBUG) << "use_matmul_strassen";
+    kernel = new (std::nothrow) StrassenOpenCLKernel(opParameter, inputs, outputs, ctx);
+  } else {
+    kernel = new (std::nothrow) MatMulOpenCLKernel(opParameter, inputs, outputs, ctx);
+  }
+  if (kernel == nullptr) {
+    MS_LOG(ERROR) << "kernel " << opParameter->name_ << "is nullptr.";
+    free(opParameter);
+    return nullptr;
+  }
+  if (!infer_shape_done) {
+    MS_LOG(WARNING) << "kernel don't infer shape yet!";
+    return kernel;
+  }
+  if (kernel->CheckSpecs() != RET_OK || kernel->OpenCLKernel::CheckSpecs() != RET_OK) {
+    MS_LOG(ERROR) << "Check " << opParameter->name_ << " specification failed!";
+    delete kernel;
+    return nullptr;
+  }
+  return kernel;
+}
+
+REG_KERNEL(kGPU, kNumberTypeFloat32, PrimitiveType_MatMul, OpenCLMatMulKernelCreator)
+REG_KERNEL(kGPU, kNumberTypeFloat16, PrimitiveType_MatMul, OpenCLMatMulKernelCreator)
+
 }  // namespace mindspore::kernel

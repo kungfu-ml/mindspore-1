@@ -75,7 +75,12 @@ class TraceManager {
   // debug trace with a cloned trace info with debug_info
   static void DebugTrace(const DebugInfoPtr &debug_info, const TraceInfoPtr &trace_info);
   static void EndTrace();
+
+  static void ClearParseOrResolveDebugInfo();
+  static DebugInfoPtr GetParseOrResolveDebugInfo();
+
   static std::stack<TraceContextPtr> trace_context_stack_;
+  static DebugInfoPtr parse_or_resolve_debug_info_;
 };
 
 class TraceGuard {

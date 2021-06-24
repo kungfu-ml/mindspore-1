@@ -58,7 +58,7 @@ def test_tensoradd_reshape_matmul():
     class Net(nn.Cell):
         def __init__(self, strategy1, strategy2):
             super().__init__()
-            self.add = P.TensorAdd().shard(strategy1)
+            self.add = P.Add().shard(strategy1)
             self.reshape = P.Reshape()
             self.matmul = P.MatMul().shard(strategy2)
 
@@ -73,7 +73,7 @@ def test_tensoradd_reshape_matmul():
     strategy2 = ((8, 1), (1, 8))
     net = GradWrap(NetWithLoss(Net(strategy1, strategy2)))
     context.set_auto_parallel_context(parallel_mode="semi_auto_parallel")
-    context.set_context(save_graphs=True)
+    context.set_context(save_graphs=False)
 
     x = Tensor(np.ones([32, 8, 16]), dtype=ms.float32)
     y = Tensor(np.ones([32, 8, 16]), dtype=ms.float32)
@@ -99,7 +99,7 @@ def test_two_matmul():
     strategy2 = ((8, 1), (1, 1))
     net = GradWrap(NetWithLoss(Net(strategy1, strategy2)))
     context.set_auto_parallel_context(parallel_mode="semi_auto_parallel")
-    context.set_context(save_graphs=True)
+    context.set_context(save_graphs=False)
 
     x = Tensor(np.ones([128, 32]), dtype=ms.float32)
     y = Tensor(np.ones([32, 64]), dtype=ms.float32)

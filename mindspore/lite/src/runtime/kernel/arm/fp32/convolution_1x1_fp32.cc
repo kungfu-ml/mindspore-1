@@ -44,10 +44,13 @@ void Convolution1x1CPUKernel::FreeTmpBuffer() {
 
 int Convolution1x1CPUKernel::ReSize() {
   FreeTmpBuffer();
-  ConvolutionBaseCPUKernel::Init();
+  auto error_code = ConvolutionBaseCPUKernel::Init();
+  if (error_code != RET_OK) {
+    MS_LOG(ERROR) << "conv base init failed.";
+    return error_code;
+  }
   InitConv1x1MatmulParam();
-
-  int error_code = InitConv1x1Param();
+  error_code = InitConv1x1Param();
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "Convolution base init failed.";
     return error_code;
@@ -59,11 +62,8 @@ void Convolution1x1CPUKernel::InitConv1x1MatmulParam() {
   matmul_param_->row_ = conv_param_->output_h_ * conv_param_->output_w_;
   matmul_param_->col_ = conv_param_->output_channel_;
   matmul_param_->deep_ = conv_param_->input_channel_;
-  matmul_param_->row_4_ = UP_ROUND(matmul_param_->row_, C4NUM);
-  matmul_param_->row_6_ = UP_ROUND(matmul_param_->row_, C6NUM);
-  matmul_param_->row_12_ = UP_ROUND(matmul_param_->row_, C12NUM);
   matmul_param_->row_align_ = UP_ROUND(matmul_param_->row_, row_tile_);
-  matmul_param_->col_8_ = UP_ROUND(matmul_param_->col_, C8NUM);
+  matmul_param_->col_align_ = UP_ROUND(matmul_param_->col_, col_tile_);
   matmul_param_->act_type_ = conv_param_->act_type_;
   return;
 }
@@ -73,20 +73,6 @@ int Convolution1x1CPUKernel::InitConv1x1BiasWeight() {
   auto input_channel = filter_tensor->Channel();
   auto output_channel = filter_tensor->Batch();
 
-#ifdef ENABLE_AVX
-  row_tile_ = C6NUM;
-  col_tile_ = C16NUM;
-#elif defined(ENABLE_SSE)
-  row_tile_ = C4NUM;
-  col_tile_ = C8NUM;
-#elif defined(ENABLE_ARM32)
-  row_tile_ = C12NUM;
-  col_tile_ = C4NUM;
-#else
-  row_tile_ = C12NUM;
-  col_tile_ = C8NUM;
-#endif
-
   if (in_tensors_.size() == 3) {
     int size = UP_ROUND(output_channel, col_tile_) * sizeof(float);
     int weight_size = output_channel * sizeof(float);
@@ -95,7 +81,7 @@ int Convolution1x1CPUKernel::InitConv1x1BiasWeight() {
       MS_LOG(ERROR) << "Conv1x1 Malloc bias_ptr_ error!";
       return RET_ERROR;
     }
-    memcpy(bias_data_, in_tensors_[kBiasIndex]->MutableData(), weight_size);
+    memcpy(bias_data_, origin_bias_, weight_size);
     memset(reinterpret_cast<char *>(bias_data_) + weight_size, 0, size - weight_size);
   }
 
@@ -108,14 +94,11 @@ int Convolution1x1CPUKernel::InitConv1x1BiasWeight() {
   }
   memset(reinterpret_cast<char *>(weight_ptr_) + down_size, 0, size - down_size);
 #ifdef ENABLE_AVX
-  RowMajor2Col16Major(reinterpret_cast<float *>(filter_tensor->MutableData()), weight_ptr_, output_channel,
-                      input_channel);
+  RowMajor2Col16Major(origin_weight_, weight_ptr_, output_channel, input_channel);
 #elif defined(ENABLE_ARM32)
-  RowMajor2Col4Major(reinterpret_cast<float *>(filter_tensor->MutableData()), weight_ptr_, output_channel,
-                     input_channel);
+  RowMajor2Col4Major(origin_weight_, weight_ptr_, output_channel, input_channel);
 #else
-  RowMajor2Col8Major(reinterpret_cast<float *>(filter_tensor->MutableData()), weight_ptr_, output_channel,
-                     input_channel);
+  RowMajor2Col8Major(origin_weight_, weight_ptr_, output_channel, input_channel);
 #endif
   return RET_OK;
 }
@@ -146,6 +129,19 @@ int Convolution1x1CPUKernel::InitConv1x1Param() {
 }
 
 int Convolution1x1CPUKernel::Init() {
+#ifdef ENABLE_AVX
+  row_tile_ = C6NUM;
+  col_tile_ = C16NUM;
+#elif defined(ENABLE_SSE)
+  row_tile_ = C4NUM;
+  col_tile_ = C8NUM;
+#elif defined(ENABLE_ARM32)
+  row_tile_ = C12NUM;
+  col_tile_ = C4NUM;
+#else
+  row_tile_ = C12NUM;
+  col_tile_ = C8NUM;
+#endif
   matmul_param_ = new (std::nothrow) MatMulParameter;
   if (matmul_param_ == nullptr) {
     MS_LOG(ERROR) << "Memory allocation failed";
@@ -153,13 +149,10 @@ int Convolution1x1CPUKernel::Init() {
   }
   int error_code = InitConv1x1BiasWeight();
   if (error_code != RET_OK) {
-    MS_LOG(ERROR) << "Convolution base init failed.";
+    MS_LOG(ERROR) << "Convolution1x1 init weight and bias failed.";
     return error_code;
   }
-  if (!InferShapeDone()) {
-    return RET_OK;
-  }
-  return ReSize();
+  return RET_OK;
 }
 
 void Convolution1x1CPUKernel::PackMatmulInput(const float *src_ptr, float *dst_ptr, int row, int col) {
@@ -240,6 +233,9 @@ int Convolution1x1CPUKernel::Run() {
     MS_LOG(ERROR) << "Conv1x1 Malloc pack_input_ error!";
     return RET_MEMORY_FAILED;
   }
+  if (IsTrain() && is_trainable()) {
+    PackWeight();
+  }
 
   for (int batch_index = 0; batch_index < conv_param_->input_batch_; batch_index++) {
     output_ptr_ = src_out + batch_index * matmul_param_->row_ * matmul_param_->col_;
@@ -264,4 +260,33 @@ int Convolution1x1CPUKernel::Run() {
   }
   return RET_OK;
 }
+
+void Convolution1x1CPUKernel::PackWeight() {
+  auto filter_tensor = in_tensors_.at(kWeightIndex);
+  auto input_channel = filter_tensor->Channel();
+  auto output_channel = filter_tensor->Batch();
+
+  int size = input_channel * UP_ROUND(output_channel, col_tile_) * sizeof(float);
+  int down_size = input_channel * DOWN_DIV(output_channel, col_tile_) * col_tile_ * sizeof(float);
+  memset(reinterpret_cast<char *>(weight_ptr_) + down_size, 0, size - down_size);
+#ifdef ENABLE_AVX
+  RowMajor2Col16Major(reinterpret_cast<float *>(filter_tensor->MutableData()), weight_ptr_, output_channel,
+                      input_channel);
+#elif defined(ENABLE_ARM32)
+  RowMajor2Col4Major(reinterpret_cast<float *>(filter_tensor->MutableData()), weight_ptr_, output_channel,
+                     input_channel);
+#else
+  RowMajor2Col8Major(reinterpret_cast<float *>(filter_tensor->MutableData()), weight_ptr_, output_channel,
+                     input_channel);
+#endif
+}
+
+int Convolution1x1CPUKernel::Eval() {
+  LiteKernel::Eval();
+  if (is_trainable()) {
+    PackWeight();
+  }
+  return RET_OK;
+}
+
 }  // namespace mindspore::kernel

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <memory>
 #include <unordered_map>
 #include <algorithm>
+#include <iomanip>
 #include "ir/graph_utils.h"
 #include "utils/symbolic.h"
 #include "ir/meta_func_graph.h"
@@ -39,6 +40,7 @@
 #include "utils/ms_context.h"
 #include "frontend/operator/ops.h"
 #include "pipeline/jit/base.h"
+#include "debug/common.h"
 
 using mindspore::tensor::TensorPy;
 
@@ -188,6 +190,14 @@ std::string AnfExporter::GetMultitypeFuncGraphText(const prim::MultitypeFuncGrap
   return oss.str();
 }
 
+inline bool Skip(const MetaFuncGraphPtr &meta_func_graph) {
+  return meta_func_graph->isa<prim::Tail>() || meta_func_graph->isa<prim::MakeTupleGradient>() ||
+         meta_func_graph->isa<prim::MakeListGradient>() || meta_func_graph->isa<prim::TupleAdd>() ||
+         meta_func_graph->isa<prim::TupleSlice>() || meta_func_graph->isa<prim::UnpackCall>() ||
+         meta_func_graph->isa<prim::ZipOperation>() || meta_func_graph->isa<prim::ListAppend>() ||
+         meta_func_graph->isa<prim::DoSignatureMetaFuncGraph>();
+}
+
 /* inherit relation of MetaFuncGraph
  *
  * MetaGraph
@@ -238,23 +248,7 @@ std::string AnfExporter::GetMetaFuncGraphText(const MetaFuncGraphPtr &meta_func_
     prim::GradOperationPtr grad_op = meta_func_graph->cast<prim::GradOperationPtr>();
     oss << "{get_all=" << grad_op->get_all_ << ", get_by_list=" << grad_op->get_by_list_
         << ", sens_param=" << grad_op->sens_param_ << "}";
-  } else if (meta_func_graph->isa<prim::Tail>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::MakeTupleGradient>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::MakeListGradient>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::TupleAdd>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::TupleSlice>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::UnpackCall>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::ZipOperation>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::ListAppend>()) {
-    // do nothing
-  } else if (meta_func_graph->isa<prim::DoSignatureMetaFuncGraph>()) {
+  } else if (Skip(meta_func_graph)) {
     // do nothing
   } else {
     MS_LOG(EXCEPTION) << "Unknown MetaFuncGraph type " << meta_func_graph->type_name();
@@ -447,7 +441,8 @@ std::string AnfExporter::GetAnfNodeText(const FuncGraphPtr &func_graph, const An
     }
     oss << "%" << iter->second;
   } else if (node->isa<Parameter>()) {
-    oss << "%para" << GetParamIndex(func_graph, node, check_integrity_);
+    // Parameter maybe a free variable, so check it in its own funcgraph.
+    oss << "%para" << GetParamIndex(node->func_graph(), node, check_integrity_);
   } else if (IsValueNode<FuncGraph>(node)) {
     FuncGraphPtr fg = GetValueNode<FuncGraphPtr>(node);
     oss << fg->type_name() << "::fg_" << fg->debug_info()->get_id();
@@ -594,8 +589,23 @@ void AnfExporter::OutputCNodes(std::ofstream &ofs, const std::vector<AnfNodePtr>
       ofs << trace::GetDebugInfo(cnode->debug_info(), "      # ", kSourceLineTipDiscard) << "#"
           << label_manage::Label(cnode->debug_info()) << "\n";
     } else {
-      ofs << trace::GetDebugInfo(cnode->debug_info(), "      # ", kSourceLineTipDiscard) << "\n";
+      ofs << trace::GetDebugInfo(cnode->debug_info(), "      # ", kSourceLineTipDiscard) << "#" << cnode->ToString()
+          << "\n";
     }
+  }
+}
+
+void AnfExporter::OutputOrderList(std::ofstream &ofs, const FuncGraphPtr &func_graph) {
+  auto &order_list = func_graph->order_list();
+  if (order_list.empty()) {
+    return;
+  }
+  constexpr int width = 4;
+  ofs << "# order:\n";
+  int i = 1;
+  for (auto &node : order_list) {
+    ofs << '#' << std::setw(width) << i << ": " << node->DebugString() << '\n';
+    ++i;
   }
 }
 
@@ -634,6 +644,8 @@ void AnfExporter::ExportOneFuncGraph(std::ofstream &ofs, const FuncGraphPtr &fun
   OutputCNodes(ofs, nodes, func_graph);
 
   ofs << "}\n";
+
+  OutputOrderList(ofs, func_graph);
 }
 
 void AnfExporter::ExportFuncGraph(const std::string &filename, const FuncGraphPtr &func_graph) {
@@ -692,7 +704,7 @@ void ExportIR(const std::string &filename, const std::string &id, const FuncGrap
     return;
   }
 
-  auto real_filename = pipeline::GetSaveGraphsPathName(filename);
+  auto real_filename = pipeline::GetSaveGraphsPathName(Common::AddId(filename, ".dat"));
   AnfExporter exporter(id);
   ChangeFileMode(real_filename, S_IRWXU);
   exporter.ExportFuncGraph(real_filename, func_graph);
@@ -701,7 +713,7 @@ void ExportIR(const std::string &filename, const std::string &id, const FuncGrap
 }
 
 void ExportIR(const std::string &filename, const std::vector<TaggedGraph> &graphs) {
-  auto real_filename = pipeline::GetSaveGraphsPathName(filename);
+  auto real_filename = pipeline::GetSaveGraphsPathName(Common::AddId(filename, ".dat"));
   AnfExporter exporter("", false);
   ChangeFileMode(real_filename, S_IRWXU);
   exporter.ExportFuncGraph(real_filename, graphs);
@@ -1275,7 +1287,7 @@ class IrParser {
       return nullptr;
     }
 
-    PrimitivePtr prim = std::make_shared<Primitive>("return");
+    PrimitivePtr prim = std::make_shared<Primitive>("Return");
     ValueNodePtr input0 = std::make_shared<ValueNode>(prim);
     std::vector<AnfNodePtr> inputs;
     inputs.push_back(input0);
@@ -2134,7 +2146,7 @@ class IrParser {
 
     std::vector<ValuePtr> elems;
     std::vector<AnfNodePtr> nodes;
-    nodes.push_back(std::make_shared<ValueNode>(std::make_shared<Primitive>("make_tuple")));
+    nodes.push_back(std::make_shared<ValueNode>(std::make_shared<Primitive>("MakeTuple")));
     ValuePtr elem = nullptr;
     AnfNodePtr node = nullptr;
     bool node_is_valid = false;

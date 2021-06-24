@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,9 +58,19 @@ Status RenameNode::ValidateParams() {
 }
 
 Status RenameNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops) {
-  node_ops->push_back(std::make_shared<RenameOp>(input_columns_, output_columns_, connector_que_size_));
+  auto op = std::make_shared<RenameOp>(input_columns_, output_columns_, connector_que_size_);
+  op->set_total_repeats(GetTotalRepeats());
+  op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
+  node_ops->push_back(op);
   return Status::OK();
 }
 
+Status RenameNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["input_columns"] = input_columns_;
+  args["output_columns"] = output_columns_;
+  *out_json = args;
+  return Status::OK();
+}
 }  // namespace dataset
 }  // namespace mindspore

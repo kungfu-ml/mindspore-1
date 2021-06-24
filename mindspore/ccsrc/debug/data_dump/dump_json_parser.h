@@ -34,6 +34,7 @@ class DumpJsonParser {
 
   void Parse();
   static bool DumpToFile(const std::string &filename, const void *data, size_t len);
+  void CopyJsonToDir();
   bool NeedDump(const std::string &op_full_name) const;
   void MatchKernel(const std::string &kernel_name);
   void PrintUnusedKernel();
@@ -49,6 +50,7 @@ class DumpJsonParser {
   bool trans_flag() const { return trans_flag_; }
   uint32_t cur_dump_iter() const { return cur_dump_iter_; }
   void UpdateDumpIter() { ++cur_dump_iter_; }
+  bool GetIterDumpFlag();
   bool InputNeedDump() const;
   bool OutputNeedDump() const;
   std::string GetOpOverflowBinPath(uint32_t graph_id, uint32_t device_id) const;

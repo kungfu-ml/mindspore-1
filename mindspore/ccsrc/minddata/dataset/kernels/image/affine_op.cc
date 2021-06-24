@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,11 @@
 #include <vector>
 
 #include "minddata/dataset/kernels/image/affine_op.h"
+#ifndef ENABLE_ANDROID
 #include "minddata/dataset/kernels/image/image_utils.h"
+#else
+#include "minddata/dataset/kernels/image/lite_image_utils.h"
+#endif
 #include "minddata/dataset/kernels/image/math_utils.h"
 #include "minddata/dataset/util/random.h"
 
@@ -53,7 +57,6 @@ Status AffineOp::Compute(const std::shared_ptr<Tensor> &input, std::shared_ptr<T
   float_t shear_y = shear_[1];
   DegreesToRadians(shear_x, &shear_x);
   DegreesToRadians(-1 * shear_y, &shear_y);
-  std::shared_ptr<CVTensor> input_cv = CVTensor::AsCVTensor(input);
 
   // Apply Affine Transformation
   //       T is translation matrix: [1, 0, tx | 0, 1, ty | 0, 0, 1]
@@ -71,8 +74,9 @@ Status AffineOp::Compute(const std::shared_ptr<Tensor> &input, std::shared_ptr<T
   //
   // Thus, the affine matrix is M = T * C * RSS * C^-1
 
-  float_t cx = ((input_cv->mat().cols - 1) / 2.0);
-  float_t cy = ((input_cv->mat().rows - 1) / 2.0);
+  // image is hwc, rows = shape()[0]
+  float_t cx = ((input->shape()[1] - 1) / 2.0);
+  float_t cy = ((input->shape()[0] - 1) / 2.0);
   // Calculate RSS
   std::vector<float_t> matrix{
     static_cast<float>(scale_ * cos(degrees + shear_y) / cos(shear_y)),
@@ -84,16 +88,7 @@ Status AffineOp::Compute(const std::shared_ptr<Tensor> &input, std::shared_ptr<T
   // Compute T * C * RSS * C^-1
   matrix[2] = (1 - matrix[0]) * cx - matrix[1] * cy + translation_x;
   matrix[5] = (1 - matrix[4]) * cy - matrix[3] * cx + translation_y;
-  cv::Mat affine_mat(matrix);
-  affine_mat = affine_mat.reshape(1, {2, 3});
-
-  std::shared_ptr<CVTensor> output_cv;
-  RETURN_IF_NOT_OK(CVTensor::CreateEmpty(input_cv->shape(), input_cv->type(), &output_cv));
-  RETURN_UNEXPECTED_IF_NULL(output_cv);
-  cv::warpAffine(input_cv->mat(), output_cv->mat(), affine_mat, input_cv->mat().size(),
-                 GetCVInterpolationMode(interpolation_), cv::BORDER_CONSTANT,
-                 cv::Scalar(fill_value_[0], fill_value_[1], fill_value_[2]));
-  (*output) = std::static_pointer_cast<Tensor>(output_cv);
+  RETURN_IF_NOT_OK(Affine(input, output, matrix, interpolation_, fill_value_[0], fill_value_[1], fill_value_[2]));
   return Status::OK();
 }
 }  // namespace dataset

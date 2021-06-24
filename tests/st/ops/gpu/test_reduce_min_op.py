@@ -21,6 +21,8 @@ import mindspore.nn as nn
 from mindspore import Tensor
 from mindspore.common.api import ms_function
 from mindspore.ops import operations as P
+from mindspore.ops.operations import _inner_ops as inner
+
 
 x0 = np.random.rand(2, 3, 4, 4).astype(np.float32)
 axis0 = 3
@@ -175,3 +177,39 @@ def test_ReduceMin():
     diff8 = abs(output[8].asnumpy() - expect8)
     error8 = np.ones(shape=expect8.shape) * 1.0e-5
     assert np.all(diff8 < error8)
+
+
+x_1 = x8
+axis_1 = 0
+x_2 = x1
+axis_2 = 0
+
+
+class ReduceMinDynamic(nn.Cell):
+    def __init__(self, x, axis):
+        super(ReduceMinDynamic, self).__init__()
+        self.reducemin = P.ReduceMin(False)
+        self.test_dynamic = inner.GpuConvertToDynamicShape()
+        self.x = x
+        self.axis = axis
+
+    def construct(self):
+        dynamic_x = self.test_dynamic(self.x)
+        return self.reducemin(dynamic_x, self.axis)
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_reduce_min_dynamic():
+    context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+    net1 = ReduceMinDynamic(Tensor(x_1), axis_1)
+    net2 = ReduceMinDynamic(Tensor(x_2), axis_2)
+
+    expect_1 = np.min(x_1, axis=0, keepdims=False)
+    expect_2 = np.min(x_2, axis=0, keepdims=False)
+
+    output1 = net1()
+    output2 = net2()
+
+    np.testing.assert_almost_equal(output1.asnumpy(), expect_1)
+    np.testing.assert_almost_equal(output2.asnumpy(), expect_2)

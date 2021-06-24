@@ -224,7 +224,7 @@ int32_t Tensor::ElementsC4Num() const {
   if (this->category_ == CONST_SCALAR) {
     return 1;
   }
-  int32_t result = 0;
+  int32_t result = 1;
   if (this->shape_.size() == 4) {
     result = Batch() * Height() * Width() * ((Channel() + 3) / 4 * 4);
   } else if (this->shape_.size() == 2) {
@@ -282,25 +282,23 @@ int Tensor::set_root_tensor(Tensor *tensor) {
     return RET_OK;
   }
   if (this->root_tensor_ == nullptr) {
-    MS_LOG(ERROR) << "root tensor is nullptr";
-    return RET_NULL_PTR;
+    return RET_OK;
   }
   this->shape_ = this->root_tensor_->shape_;
   this->format_ = this->root_tensor_->format_;
   this->data_type_ = this->root_tensor_->data_type_;
-  this->allocator_ = this->root_tensor_->allocator_;
   this->category_ = this->root_tensor_->category_;
   this->quant_params_ = this->root_tensor_->quant_params_;
   this->quant_clusters_ = this->root_tensor_->quant_clusters_;
   return RET_OK;
 }
 
-int Tensor::MallocData(const mindspore::lite::Allocator *allocator) {
+int Tensor::MallocData(const mindspore::Allocator *allocator) {
   if (nullptr != this->data_) {
     return RET_OK;
   }
   if (allocator != nullptr) {
-    allocator_ = const_cast<mindspore::lite::Allocator *>(allocator);
+    allocator_ = const_cast<mindspore::Allocator *>(allocator);
   }
   if (allocator_ == nullptr) {
     this->data_ = malloc(this->Size());
@@ -368,10 +366,30 @@ std::vector<float> Tensor::quant_clusters() const { return this->quant_clusters_
 
 void Tensor::set_quant_clusters(const std::vector<float> &clusters) { this->quant_clusters_ = clusters; }
 
+bool Tensor::enable_huffman_code() const { return enable_huffman_code_; }
+
+void Tensor::set_enable_huffman_code(bool enable_huffman_code) { this->enable_huffman_code_ = enable_huffman_code; }
+
 std::vector<tensor::MSTensor *> TensorVectorCast(const std::vector<Tensor *> &src) {
   std::vector<tensor::MSTensor *> target(src.size());
   std::transform(src.begin(), src.end(), target.begin(), [](Tensor *t) { return dynamic_cast<tensor::MSTensor *>(t); });
   return target;
 }
+
 }  // namespace lite
+
+tensor::MSTensor *tensor::MSTensor::CreateTensor(const std::string &name, TypeId type, const std::vector<int> &shape,
+                                                 const void *data, size_t data_len) {
+  auto tensor = new (std::nothrow) lite::Tensor();
+  if (tensor == nullptr) {
+    MS_LOG(ERROR) << "Failed to allocate tensor.";
+    return nullptr;
+  }
+  tensor->set_data(const_cast<void *>(data));
+  tensor->set_shape(shape);
+  tensor->set_tensor_name(name);
+  tensor->set_data_type(type);
+  return tensor;
+}
+
 }  // namespace mindspore

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,10 @@
 #include <unordered_map>
 
 #include "minddata/dataset/core/config_manager.h"
-#include "minddata/dataset/core/constants.h"
+#include "minddata/dataset/include/constants.h"
 #include "minddata/dataset/core/global_context.h"
 #include "minddata/dataset/engine/data_buffer.h"
 #include "minddata/dataset/engine/db_connector.h"
-#include "minddata/dataset/engine/opt/pass.h"
 #include "minddata/dataset/util/log_adapter.h"
 
 namespace mindspore {
@@ -171,10 +170,5 @@ Status RenameOp::EoeReceived(int32_t) {
   return Status::OK();
 }
 
-// Visitor accept method for NodePass
-Status RenameOp::Accept(NodePass *p, bool *modified) {
-  // Downcast shared pointer then call visitor
-  return p->RunOnNode(shared_from_base<RenameOp>(), modified);
-}
 }  // namespace dataset
 }  // namespace mindspore

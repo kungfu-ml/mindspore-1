@@ -15,6 +15,7 @@
  */
 
 #include <string>
+#include <nlohmann/json.hpp>
 #include "minddata/dataset/include/datasets.h"
 #include "minddata/dataset/engine/opt/pre/deep_copy_pass.h"
 #include "minddata/dataset/engine/ir/datasetops/root_node.h"
@@ -27,7 +28,7 @@ DeepCopyPass::DeepCopyPass() {
   parent_ = root_.get();
 }
 
-Status DeepCopyPass::Visit(std::shared_ptr<DatasetNode> node, bool *modified) {
+Status DeepCopyPass::Visit(std::shared_ptr<DatasetNode> node, bool *const modified) {
   *modified = true;
   // Do a nested-loop walk to check whether a node has the same child more than once.
   // This is an artificial restriction. We can support it since we will do a clone of the input tree in this pass.
@@ -52,17 +53,17 @@ Status DeepCopyPass::Visit(std::shared_ptr<DatasetNode> node, bool *modified) {
   new_node->SetNumWorkers(node->num_workers());
   // This method below assumes a DFS walk and from the first child to the last child.
   // Future: A more robust implementation that does not depend on the above assumption.
-  parent_->AppendChild(new_node);
+  RETURN_IF_NOT_OK(parent_->AppendChild(new_node));
 
   // Then set this node to be a new parent to accept a copy of its next child
   parent_ = new_node.get();
   return Status::OK();
 }
 
-Status DeepCopyPass::VisitAfter(std::shared_ptr<DatasetNode> node, bool *modified) {
+Status DeepCopyPass::VisitAfter(std::shared_ptr<DatasetNode> node, bool *const modified) {
   *modified = true;
   // After visit the node, move up to its parent
-  parent_ = parent_->Parent();
+  parent_ = parent_->parent_;
   return Status::OK();
 }
 }  // namespace dataset

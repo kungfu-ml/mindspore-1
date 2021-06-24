@@ -21,6 +21,9 @@
 #include "utils/ms_utils.h"
 #include "runtime/device/ascend/profiling/profiling_utils.h"
 #include "runtime/device/ascend/profiling/profiling_manager.h"
+#ifdef ENABLE_DUMP_IR
+#include "debug/rdr/running_data_recorder.h"
+#endif
 
 namespace mindspore {
 namespace device {
@@ -36,6 +39,10 @@ bool TaskGenerator::GenTasks(const std::vector<CNodePtr> &anf_node_list, std::ve
     return false;
   }
   MS_LOG(INFO) << "GenTasks end...";
+#ifdef ENABLE_DUMP_IR
+  string task_info_name = "task_info_graph." + std::to_string(graph_id);
+  mindspore::RDR::RecordTaskDebugInfo(SUBMODULE_ID, task_info_name, task_debug_info_list_);
+#endif
   auto context_ptr = MsContext::GetInstance();
   MS_EXCEPTION_IF_NULL(context_ptr);
   bool save_graphs = context_ptr->get_param<bool>(MS_CTX_SAVE_GRAPHS_FLAG);
@@ -58,7 +65,7 @@ void TaskGenerator::LaunchAddrCleanAkgKernel(const CNodePtr &anf_node_ptr, Addre
     MS_EXCEPTION_IF_NULL(graph);
     auto manager = graph->manager();
     MS_EXCEPTION_IF_NULL(manager);
-    auto node_users = manager->node_users();
+    auto &node_users = manager->node_users();
     if (node_users[anf_node_ptr].empty()) {
       MS_LOG(EXCEPTION) << "Node users of " << anf_node_ptr->ToString() << " is empty.";
     }
@@ -136,8 +143,14 @@ bool TaskGenerator::LaunchKernel(const CNodePtr &anf_node_ptr, uint32_t stream_i
   MS_EXCEPTION_IF_NULL(kernel_mod);
   kernel_mod->set_kernel_name(anf_node_ptr->fullname_with_scope());
   auto op_name = AnfAlgo::GetCNodeName(anf_node_ptr);
-  if (AnfAlgo::GetCNodeName(anf_node_ptr) != kAtomicAddrCleanOpName) {
-    for (size_t i = 0; i < AnfAlgo::GetInputTensorNum(anf_node_ptr); ++i) {
+  if ((op_name == kSplitOpName || op_name == kSplitVOpName) && AnfAlgo::HasNodeAttr(kAttrNonTask, anf_node_ptr)) {
+    MS_LOG(INFO) << "Skip task generation for NonTask op " << anf_node_ptr->fullname_with_scope();
+    return true;
+  }
+
+  if (op_name != kAtomicAddrCleanOpName) {
+    size_t input_num = AnfAlgo::GetInputTensorNum(anf_node_ptr);
+    for (size_t i = 0; i < input_num; ++i) {
       if (op_name == kDynamicRNNOpName && i == 3) {
         continue;
       }
@@ -153,15 +166,35 @@ bool TaskGenerator::LaunchKernel(const CNodePtr &anf_node_ptr, uint32_t stream_i
       AddressPtr input = std::make_shared<Address>();
       input->addr = device_address->ptr_;
       input->size = device_address->size_;
+
+      auto prenode_with_index = AnfAlgo::GetPrevNodeOutput(anf_node_ptr, i);
+      if (AnfAlgo::IsRealCNodeKernel(prenode_with_index.first)) {
+        if ((AnfAlgo::GetCNodeName(prenode_with_index.first) == kSplitOpName ||
+             AnfAlgo::GetCNodeName(prenode_with_index.first) == kSplitVOpName) &&
+            AnfAlgo::HasNodeAttr(kAttrNonTask, prenode_with_index.first->cast<CNodePtr>())) {
+          // use memory offset to implement NonTask Type Split op
+          // when op A -> split(NonTask) -> op B, op B's input addr is split's input0's addr + offset
+          // offset is split's output index * split's output size
+          auto split_input0_device_address = AnfAlgo::GetPrevNodeOutputAddr(prenode_with_index.first, 0);
+          input->addr =
+            static_cast<uint8_t *>(split_input0_device_address->ptr_) + (prenode_with_index.second * input->size);
+          MS_LOG(INFO) << "Change " << anf_node_ptr->fullname_with_scope() << "'s input " << i << " address to "
+                       << split_input0_device_address->ptr_ << " + " << prenode_with_index.second * input->size;
+        }
+      }
       kernel_inputs.push_back(input);
     }
 
-    for (size_t i = 0; i < AnfAlgo::GetOutputTensorNum(anf_node_ptr); ++i) {
-      auto it = AnfAlgo::GetOutputAddr(anf_node_ptr, i);
-      AddressPtr output = std::make_shared<Address>();
-      output->addr = it->ptr_;
-      output->size = it->size_;
-      kernel_outputs.push_back(output);
+    // No kernel output if output of the cnode is monad, such as LabelSwitch.
+    if (!HasAbstractMonad(anf_node_ptr)) {
+      size_t output_num = AnfAlgo::GetOutputTensorNum(anf_node_ptr);
+      for (size_t i = 0; i < output_num; ++i) {
+        auto it = AnfAlgo::GetOutputAddr(anf_node_ptr, i);
+        AddressPtr output = std::make_shared<Address>();
+        output->addr = it->ptr_;
+        output->size = it->size_;
+        kernel_outputs.push_back(output);
+      }
     }
 
     for (size_t i = 0; i < kernel_mod->GetWorkspaceSizeList().size(); ++i) {
@@ -224,6 +257,56 @@ bool TaskGenerator::LaunchAllKernel(const std::vector<CNodePtr> &anf_node_list,
 }
 
 #ifdef ENABLE_DUMP_IR
+void TaskGenerator::DumpTaskInfo(const string &real_filename,
+                                 const std::vector<TaskDebugInfoPtr> &task_debug_info_list) {
+  OrderedMap<AnfNodePtr, int32_t> para_map;
+  ChangeFileMode(real_filename, S_IRWXU);
+  std::ofstream fout(real_filename);
+
+  if (!fout.is_open()) {
+    MS_LOG(ERROR) << "Open dump file '" << real_filename << "' failed!";
+    return;
+  }
+
+  size_t index = 0;
+  for (auto &task_debug_info : task_debug_info_list) {
+    fout << "op_name:" << task_debug_info->op_name_ << "\n"
+         << "task_index:" << index << "\t"
+         << "task_num:" << task_debug_info->task_num_ << "\t"
+         << "task0_stream_id:" << task_debug_info->stream_id_ << "\t"
+         << "task0_type:" << task_debug_info->type_ << "\t"
+         << "task0_dump_flag:" << task_debug_info->dump_flag_ << "\n";
+    index++;
+    if (task_debug_info->input_addrs_.size()) {
+      fout << "input address:";
+      for (auto &input : task_debug_info->input_addrs_) {
+        fout << input->addr << "(" << input->size << ")\t";
+      }
+      fout << "\n";
+    }
+
+    if (task_debug_info->output_addrs_.size()) {
+      fout << "output address:";
+      for (auto &output : task_debug_info->output_addrs_) {
+        fout << output->addr << "(" << output->size << ")\t";
+      }
+      fout << "\n";
+    }
+
+    if (task_debug_info->workspace_addrs_.size()) {
+      fout << "workspace address:";
+      for (auto &workspace : task_debug_info->workspace_addrs_) {
+        fout << workspace->addr << "(" << workspace->size << ")\t";
+      }
+      fout << "\n";
+    }
+    fout << "\n";
+  }
+
+  fout.close();
+  // set file mode to read only by user
+  ChangeFileMode(real_filename, S_IRUSR);
+}
 void TaskGenerator::DumpTaskInfo(const std::string &real_filename) {
   if (real_filename.size() > PATH_MAX) {
     MS_LOG(ERROR) << "File path " << real_filename << " is too long.";
@@ -296,8 +379,18 @@ void TaskGenerator::DumpTaskInfo(const std::string &real_filename) {
     return;
   }
   already_printed = true;
-  MS_LOG(WARNING) << "The functionality of dumping function graph IR is disabled, "
-                  << "please recompile source to enable it. See help of building script.";
+  MS_LOG(WARNING) << "The functionality of dumping task debug info is disabled, "
+                  << "please enable ENABLE_DUMP_IR with '-D on' and recomiple source.";
+}
+void TaskGenerator::DumpTaskInfo(const string &real_filename,
+                                 const std::vector<TaskDebugInfoPtr> &task_debug_info_list) {
+  static bool already_printed = false;
+  if (already_printed) {
+    return;
+  }
+  already_printed = true;
+  MS_LOG(WARNING) << "The functionality of dumping task debug info is disabled, "
+                  << "please enable ENABLE_DUMP_IR with '-D on' and recomiple source.";
 }
 #endif
 }  // namespace tasksink

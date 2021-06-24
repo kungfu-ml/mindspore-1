@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -193,18 +193,6 @@ class BatchOp : public ParallelOp {
   // @return Status The status code returned
   Status operator()() override;
 
-  // Base-class override for NodePass visitor acceptor.
-  // @param p - Pointer to the NodePass to be accepted.
-  // @param modified - Whether this node visit modified the pipeline.
-  // @return - Status of the node visit.
-  Status Accept(NodePass *p, bool *modified) override;
-
-  // Base-class override for NodePass visitor acceptor.
-  // @param p - Pointer to the NodePass to be accepted.
-  // @param modified - Whether this node visit modified the pipeline.
-  // @return - Status of the node visit.
-  Status PreAccept(NodePass *p, bool *modified) override;
-
   // Op name getter
   // @return Name of the current Op
   std::string Name() const override { return kBatchOp; }
@@ -271,6 +259,11 @@ class BatchOp : public ParallelOp {
   // @return Status The status code returned
   Status LaunchThreadsAndInitOp();
 
+  /// \brief Gets the next row
+  /// \param row[out] - Fetched TensorRow
+  /// \return Status The status code returned
+  Status GetNextRow(TensorRow *const row) override;
+
 #ifdef ENABLE_PYTHON
   // Invoke batch size function with current BatchInfo to generate batch size.
   // @return Status The status code returned
@@ -290,6 +283,8 @@ class BatchOp : public ParallelOp {
   std::unique_ptr<ChildIterator> child_iterator_;       // child iterator for fetching TensorRows 1 by 1
   std::unordered_map<std::string, int32_t> child_map_;  // col_name_id_map of the child node
   QueueList<std::pair<std::unique_ptr<TensorQTable>, CBatchInfo>> worker_queues_;  // internal queue for syncing worker
+  int64_t batch_num_;
+  int64_t batch_cnt_;
 #ifdef ENABLE_PYTHON
   py::function batch_size_func_;  // Function pointer of batch size function
   py::function batch_map_func_;   // Function pointer of per batch map function

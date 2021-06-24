@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <functional>
 #include "tools/common/graph_util.h"
 #include "tools/converter/optimizer.h"
 
@@ -28,9 +29,14 @@ namespace mindspore {
 namespace lite {
 class SelectPass : public GraphPass {
  public:
-  SelectPass() = default;
+  explicit SelectPass(schema::MetaGraphT *graph) : graph_(graph) {}
   ~SelectPass() override = default;
   STATUS Run(schema::MetaGraphT *graph) override;
+  STATUS RemoveSelectNodes();
+
+ private:
+  std::vector<uint32_t> select_indices_;
+  schema::MetaGraphT *graph_ = nullptr;
 };
 
 class SingleSelectPass {

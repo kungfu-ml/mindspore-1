@@ -18,18 +18,18 @@
 #define MINDSPORE_LITE_SRC_RUNTIME_KERNEL_ARM_BASE_DEPTH_TO_SPACE_BASE_H_
 
 #include <vector>
-#include "include/errorcode.h"
 #include "src/lite_kernel.h"
-#include "nnacl/depth_to_space.h"
+#include "include/errorcode.h"
+#include "include/context.h"
+#include "nnacl/nnacl_common.h"
 #include "nnacl/depth_to_space_parameter.h"
 
 namespace mindspore::kernel {
 class DepthToSpaceBaseCPUKernel : public LiteKernel {
  public:
   DepthToSpaceBaseCPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                            const mindspore::lite::PrimitiveC *primitive)
-      : LiteKernel(parameter, inputs, outputs, ctx, primitive) {
+                            const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     param_ = reinterpret_cast<DepthToSpaceParameter *>(op_parameter_);
   }
   virtual ~DepthToSpaceBaseCPUKernel() = default;

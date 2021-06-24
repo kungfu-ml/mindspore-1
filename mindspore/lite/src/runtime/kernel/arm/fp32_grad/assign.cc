@@ -32,11 +32,18 @@ namespace mindspore::kernel {
 int AssignCPUKernel::ReSize() { return RET_OK; }
 
 int AssignCPUKernel::Execute(int task_id) {
-  auto x = reinterpret_cast<float *>(in_tensors_[0]->MutableData());
-  auto y = reinterpret_cast<float *>(in_tensors_[1]->MutableData());
-  size_t size = in_tensors_[0]->Size();
+  auto x = reinterpret_cast<float *>(in_tensors_.at(0)->MutableData());
+  auto y = reinterpret_cast<float *>(in_tensors_.at(1)->MutableData());
+  int length = in_tensors_.at(0)->ElementsNum();
 
-  memcpy(x, y, size);
+  int stride = UP_DIV(length, thread_count_);
+  int count = MSMIN(stride, length - stride * task_id);
+
+  int start = stride * task_id;
+
+  if (count > 0) {
+    memcpy(&(x[start]), &(y[start]), count * sizeof(float));
+  }
   return RET_OK;
 }
 
@@ -52,7 +59,7 @@ int AssignRun(void *cdata, int task_id) {
 }
 
 int AssignCPUKernel::Run() {
-  int error_code = ParallelLaunch(this->context_->thread_pool_, AssignRun, this, 1);
+  int error_code = ParallelLaunch(this->context_->thread_pool_, AssignRun, this, thread_count_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "Assign function error error_code[" << error_code << "]";
     return RET_ERROR;
@@ -64,10 +71,9 @@ int AssignCPUKernel::Init() { return RET_OK; }
 
 kernel::LiteKernel *CpuAssignFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                               const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                               const lite::PrimitiveC *primitive) {
+                                               const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
   MS_ASSERT(desc.type == schema::PrimitiveType_Assign);
-  auto *kernel = new (std::nothrow) AssignCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  auto *kernel = new (std::nothrow) AssignCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "new AssignCPUKernel fail!";
     free(opParameter);

@@ -16,7 +16,7 @@
 """Unpack op"""
 from mindspore.ops.op_info_register import op_info_register, TBERegOp, DataType
 
-unpack_op_info = TBERegOp("Unpack") \
+unstack_op_info = TBERegOp("Unstack") \
     .fusion_type("OPAQUE") \
     .async_flag(False) \
     .binfile_name("unpack.so") \
@@ -27,12 +27,12 @@ unpack_op_info = TBERegOp("Unpack") \
     .attr("axis", "required", "int", "all") \
     .input(0, "x", False, "required", "all") \
     .output(0, "y", False, "dynamic", "all") \
-    .op_pattern("dynamicFormat") \
+    .is_dynamic_format(True) \
     .dtype_format(DataType.None_None, DataType.None_None) \
     .get_op_info()
 
 
-@op_info_register(unpack_op_info)
+@op_info_register(unstack_op_info)
 def _unpack_tbe():
     """Unpack TBE register"""
     return

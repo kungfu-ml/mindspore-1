@@ -52,25 +52,28 @@ static bool IsInWhiteList(const CNodePtr &cnode) {
   return false;
 }
 
-static void SetGradTag(const AnfNodePtr &node, NodeUsersMap node_users_map) {
-  auto node_users = node_users_map[node];
+static void SetGradTag(const AnfNodePtr &node, const FuncGraphManagerPtr &manager, size_t accum = 0) {
+  accum += 1;
+  if (accum > MAX_RECURSIVE_DEPTH) {
+    return;
+  }
+  const auto &node_users = manager->node_users()[node];
   for (auto &user_pair : node_users) {
     auto user_node = user_pair.first;
     if (!user_node->grad()) {
       user_node->set_grad(true);
-      SetGradTag(user_node, node_users_map);
+      SetGradTag(user_node, manager, accum);
     }
   }
 }
 
 void PipelineTransformer::LabelRequiredGradCNode() {
   auto parameters = root_->parameters();
-  auto node_users_map = manager_->node_users();
   for (auto parameter : parameters) {
     if (!ParameterRequireGrad(parameter)) {
       continue;
     }
-    SetGradTag(parameter, node_users_map);
+    SetGradTag(parameter, manager_);
   }
 }
 
@@ -200,16 +203,37 @@ std::pair<OperatorInfoPtr, TensorInfoPtr> PipelineTransformer::GetOpInfo(const A
   return std::make_pair(op_info, std::make_shared<TensorInfo>(tensor_info));
 }
 
-std::pair<OperatorInfoPtr, TensorInfoPtr> PipelineTransformer::GetParameterPair(const AnfNodePtr &node) {
+CNodePtr PipelineTransformer::HandleMonadLoad(const AnfNodePtr &node) {
   MS_EXCEPTION_IF_NULL(node);
-  auto node_users = manager_->node_users()[node];
+  auto &node_users = manager_->node_users()[node];
   for (auto &user_pair : node_users) {
     auto user_node = user_pair.first->cast<CNodePtr>();
     MS_EXCEPTION_IF_NULL(user_node);
-    if (!IsPipelineCareNode(user_node)) {
-      continue;
+    if (IsPipelineCareNode(user_node)) {
+      return user_node;
     }
-    auto op_info = CreateOpInfo(user_node);
+  }
+  return nullptr;
+}
+
+std::pair<OperatorInfoPtr, TensorInfoPtr> PipelineTransformer::GetParameterPair(const AnfNodePtr &node) {
+  MS_EXCEPTION_IF_NULL(node);
+  auto &node_users = manager_->node_users()[node];
+  for (auto &user_pair : node_users) {
+    auto care_node = user_pair.first;
+    auto care_cnode = care_node->cast<CNodePtr>();
+    if (IsPrimitiveCNode(care_node, prim::kPrimLoad)) {
+      care_cnode = HandleMonadLoad(care_node);
+      if (!care_cnode) {
+        continue;
+      }
+    } else {
+      if (!IsPipelineCareNode(care_cnode)) {
+        continue;
+      }
+    }
+    MS_EXCEPTION_IF_NULL(care_cnode);
+    auto op_info = CreateOpInfo(care_cnode);
     MS_EXCEPTION_IF_NULL(op_info);
     auto tensor_info = op_info->inputs_tensor_info()[IntToSize(user_pair.second) - 1];
     return std::make_pair(nullptr, std::make_shared<TensorInfo>(tensor_info));
@@ -222,7 +246,7 @@ void PipelineTransformer::DoBroadCast(const FuncGraphPtr &func) {
   while (need_coloring) {
     need_coloring = false;
     auto all_nodes = func->nodes();
-    auto node_users = manager_->node_users();
+    auto &node_users = manager_->node_users();
     for (auto &node : all_nodes) {
       if (node->isa<CNode>() || node->stage() == -1) {
         continue;
@@ -334,13 +358,22 @@ static std::pair<ValueListPtr, TypePtr> GetShapeType(const AnfNodePtr &node, con
   return std::make_pair(shape_list, dtype);
 }
 
+AnfNodePtr PipelineTransformer::HandleMonadDepend(const AnfNodePtr &node) {
+  MS_EXCEPTION_IF_NULL(node);
+  if (IsPrimitiveCNode(node, prim::kPrimDepend)) {
+    auto cnode = node->cast<CNodePtr>();
+    return HandleMonadDepend(cnode->input(1));
+  }
+  return node;
+}
+
 AnfNodePtr PipelineTransformer::FindPipelineCareNode(const AnfNodePtr &node) {
   MS_EXCEPTION_IF_NULL(node);
   auto cnode = node->cast<CNodePtr>();
   MS_EXCEPTION_IF_NULL(cnode);
   if (IsValueNode<FuncGraph>(cnode->input(0))) {
     auto graph = GetValueNode<FuncGraphPtr>(cnode->input(0));
-    auto output = graph->output();
+    auto output = HandleMonadDepend(graph->output());
     MS_EXCEPTION_IF_NULL(output);
     if (output->isa<Parameter>()) {
       return output;

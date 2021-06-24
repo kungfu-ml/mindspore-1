@@ -60,17 +60,20 @@ class TbeKernelBuild {
                                         std::vector<nlohmann::json> *input_desc_list, size_t *index);
   static std::vector<size_t> GetDescOutputIndex(const std::vector<int64_t> &output_used_nums);
   static bool GenFusionComputeOutputJson(const mindspore::CNodePtr &cnode,
-                                         std::vector<nlohmann::json> *output_desc_list);
+                                         std::vector<nlohmann::json> *output_desc_list,
+                                         std::vector<nlohmann::json> *output_data_desc_list);
   static void GenPreDescJson(nlohmann::json *output_desc);
   static void GenFusionComputeCommonJson(const mindspore::CNodePtr &cnode, nlohmann::json *compute_op_str,
                                          std::string *fusion_kernel_name);
-  static void GenFusionComputePreBuildJson(const mindspore::CNodePtr &cnode, nlohmann::json *compute_op_str);
   static void GenDescJson(const std::shared_ptr<mindspore::AnfNode> &anf_node, size_t node_out_idx,
                           size_t desc_output_idx, nlohmann::json *output_desc,
                           FusionDataType fusion_data_type = kFusionNormal);
+  static void GenFusionOutputDescJson(const std::shared_ptr<mindspore::AnfNode> &anf_node, size_t node_out_idx,
+                                      size_t desc_output_idx, nlohmann::json *output_desc,
+                                      nlohmann::json *output_data_desc);
   static void GenSuffixDescJson(nlohmann::json *output_desc);
   static void GenReusedOutputDesc(const std::shared_ptr<mindspore::AnfNode> &anf_node, size_t index,
-                                  size_t output_index, nlohmann::json *output_desc);
+                                  size_t output_index, nlohmann::json *output_desc, const size_t out_size);
   static size_t GetIOSizeImpl(const nlohmann::json &desc);
   static bool GetSpecInputLayers(const std::string &op_name, const std::vector<mindspore::AnfNodePtr> &reorder_layer,
                                  std::map<const AnfNodePtr, FusionDataType> *spec_data_input);
@@ -99,7 +102,9 @@ class TbeKernelJsonCreator {
                         nlohmann::json *inputs_json);
   bool GenTbeOutputsJson(const std::shared_ptr<AnfNode> &anf_node, const std::shared_ptr<OpInfo> &op_info,
                          nlohmann::json *outputs_json);
+  void GenSocInfo(nlohmann::json *soc_info_json);
   static void ParseAttrValue(const std::string &type, const ValuePtr &value, nlohmann::json *attr_obj);
+  static void ParseAttrDefaultValue(const std::string &type, const std::string &value, nlohmann::json *attr_obj);
   bool GenInputDescJson(const std::shared_ptr<AnfNode> &anf_node, size_t real_input_index, bool value,
                         const std::shared_ptr<OpIOInfo> &input_ptr, const string &op_input_name, size_t input_i,
                         std::vector<nlohmann::json> *input_list);

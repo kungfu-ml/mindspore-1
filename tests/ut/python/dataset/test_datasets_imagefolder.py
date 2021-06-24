@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 # ==============================================================================
 import pytest
 import mindspore.dataset as ds
+import mindspore.dataset.vision.c_transforms as vision
 from mindspore import log as logger
 
 DATA_DIR = "../data/dataset/testPK/data"
@@ -390,30 +391,33 @@ def test_weighted_random_sampler_exception():
     Test error cases for WeightedRandomSampler
     """
     logger.info("Test error cases for WeightedRandomSampler")
-    error_msg_1 = "type of weights element should be number"
+    error_msg_1 = "type of weights element must be number"
     with pytest.raises(TypeError, match=error_msg_1):
         weights = ""
         ds.WeightedRandomSampler(weights)
 
-    error_msg_2 = "type of weights element should be number"
+    error_msg_2 = "type of weights element must be number"
     with pytest.raises(TypeError, match=error_msg_2):
         weights = (0.9, 0.8, 1.1)
         ds.WeightedRandomSampler(weights)
 
-    error_msg_3 = "weights size should not be 0"
-    with pytest.raises(ValueError, match=error_msg_3):
+    error_msg_3 = "WeightedRandomSampler: weights vector must not be empty"
+    with pytest.raises(RuntimeError, match=error_msg_3):
         weights = []
-        ds.WeightedRandomSampler(weights)
+        sampler = ds.WeightedRandomSampler(weights)
+        sampler.parse()
 
-    error_msg_4 = "weights should not contain negative numbers"
-    with pytest.raises(ValueError, match=error_msg_4):
+    error_msg_4 = "WeightedRandomSampler: weights vector must not contain negative number, got: "
+    with pytest.raises(RuntimeError, match=error_msg_4):
         weights = [1.0, 0.1, 0.02, 0.3, -0.4]
-        ds.WeightedRandomSampler(weights)
+        sampler = ds.WeightedRandomSampler(weights)
+        sampler.parse()
 
-    error_msg_5 = "elements of weights should not be all zero"
-    with pytest.raises(ValueError, match=error_msg_5):
+    error_msg_5 = "WeightedRandomSampler: elements of weights vector must not be all zero"
+    with pytest.raises(RuntimeError, match=error_msg_5):
         weights = [0, 0, 0, 0, 0]
-        ds.WeightedRandomSampler(weights)
+        sampler = ds.WeightedRandomSampler(weights)
+        sampler.parse()
 
 
 def test_chained_sampler_01():
@@ -716,6 +720,46 @@ def test_imagefolder_zip():
     assert num_iter == 10
 
 
+def test_imagefolder_exception():
+    logger.info("Test imagefolder exception")
+
+    def exception_func(item):
+        raise Exception("Error occur!")
+
+    def exception_func2(image, label):
+        raise Exception("Error occur!")
+
+    try:
+        data = ds.ImageFolderDataset(DATA_DIR)
+        data = data.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data = ds.ImageFolderDataset(DATA_DIR)
+        data = data.map(operations=exception_func2, input_columns=["image", "label"],
+                        output_columns=["image", "label", "label1"],
+                        column_order=["image", "label", "label1"], num_parallel_workers=1)
+        for _ in data.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+    try:
+        data = ds.ImageFolderDataset(DATA_DIR)
+        data = data.map(operations=vision.Decode(), input_columns=["image"], num_parallel_workers=1)
+        data = data.map(operations=exception_func, input_columns=["image"], num_parallel_workers=1)
+        for _ in data.__iter__():
+            pass
+        assert False
+    except RuntimeError as e:
+        assert "map operation: [PyFunc] failed. The corresponding data files" in str(e)
+
+
 if __name__ == '__main__':
     test_imagefolder_basic()
     logger.info('test_imagefolder_basic Ended.\n')
@@ -797,3 +841,6 @@ if __name__ == '__main__':
 
     test_imagefolder_zip()
     logger.info('test_imagefolder_zip Ended.\n')
+
+    test_imagefolder_exception()
+    logger.info('test_imagefolder_exception Ended.\n')

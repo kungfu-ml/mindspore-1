@@ -171,7 +171,7 @@ class AreaGraph {
   // Build an area graph to maintain the relation between areas.
   // Input node_groups: A group list, each element is a AnfNode list representing the node set in this group.
   static AreaGraphPtr BuildAreaGraph(const std::vector<AnfNodePtrList> &node_groups) {
-    auto area_graph = AreaGraphPtr(new AreaGraph(node_groups));
+    auto area_graph = std::make_shared<AreaGraph>(node_groups);
     if (area_graph == nullptr) return nullptr;
     if (!area_graph->TopoSort()) {
       MS_LOG(WARNING) << "The groups have a cycle.";
@@ -208,9 +208,6 @@ class AreaGraph {
     return;
   }
 
-  ~AreaGraph() = default;
-
- private:
   explicit AreaGraph(const std::vector<AnfNodePtrList> &node_groups) : edge_prev_(node_groups.size()) {
     for (size_t i = 0; i < node_groups.size(); ++i) {
       areas_.emplace_back(node_groups[i]);
@@ -236,7 +233,9 @@ class AreaGraph {
       }
     }
   }
+  ~AreaGraph() = default;
 
+ private:
   // Topological sort the areas.
   bool TopoSort() {
     std::vector<int> out_degree(edge_prev_.size(), 0);
@@ -349,14 +348,19 @@ class Splitter {
     MS_EXCEPTION_IF_NULL(main_cnode);
     MS_EXCEPTION_IF_NULL(main_cnode->func_graph());
     MS_EXCEPTION_IF_NULL(split_schemer);
-    return SplitterPtr(new Splitter(main_cnode, split_schemer));
+    return std::make_shared<Splitter>(main_cnode, split_schemer);
   }
 
+  Splitter(const CNodePtr &main_cnode, SplitSchemerPtr split_schemer)
+      : main_func_graph_(main_cnode->func_graph()), old_subgraph_cnode_(main_cnode), split_schemer_(split_schemer) {}
   ~Splitter() = default;
 
  private:
-  Splitter(const CNodePtr &main_cnode, SplitSchemerPtr split_schemer)
-      : main_func_graph_(main_cnode->func_graph()), old_subgraph_cnode_(main_cnode), split_schemer_(split_schemer) {}
+  void ResetInlinedNodesKernelInfo() {
+    for (const auto &node : inlined_nodes_) {
+      ResetKernelInfo(node);
+    }
+  }
 
   // Maintain new subgraphs in main graph.
   void RebuildGraph(const std::vector<size_t> &cnodes_group_id) {
@@ -364,6 +368,7 @@ class Splitter {
     RecoverParameter();
     ConnectToMainGraph(cnodes_group_id);
     UpdateSubGraphInfo();
+    ResetInlinedNodesKernelInfo();
   }
 
   // Rebind nodes to its new sub_func_graph
@@ -419,7 +424,7 @@ class Splitter {
           }
         }
         if (AnfAlgo::IsRealKernel(node)) {
-          ResetKernelInfo(node);
+          inlined_nodes_.push_back(node);
         }
       }
     }
@@ -532,6 +537,7 @@ class Splitter {
   FuncGraphPtr main_func_graph_;
   CNodePtr old_subgraph_cnode_;                // The cnode that holds the original sub_func_graph
   std::vector<CNodePtr> new_subgraph_cnodes_;  // The cnode list that hold the new sub_func_graph
+  std::vector<AnfNodePtr> inlined_nodes_;
   SplitSchemerPtr split_schemer_;
   std::unordered_map<ParameterPtr, AnfNodePtr> param_to_main_graph_node_map_;
 };
@@ -629,7 +635,7 @@ class CostModelSplitSchemer : public Splitter::SplitSchemer {
     }
     GetValidKernelNodes();
     // call CostModel to get a split plan.
-    if (!SplitByCostModel() || split_plan_.size() != need_inline_.size()) {
+    if (!SplitByCostModel() || split_plan_.size() != need_inline_.size() || split_plan_.empty()) {
       split_plan_.clear();
       need_inline_.clear();
       return;
@@ -639,7 +645,7 @@ class CostModelSplitSchemer : public Splitter::SplitSchemer {
       need_inline_.clear();
       return;
     } else {
-      MS_LOG(INFO) << "CostModel split successed. The kernel is split to " << split_plan_.size() << " parts.";
+      MS_LOG(INFO) << "CostModel split success. The kernel is split to " << split_plan_.size() << " parts.";
     }
     MapNodeGroup();
     GroupReturnNode();
@@ -740,7 +746,7 @@ bool GraphKernelSplitter::Run(const FuncGraphPtr &func_graph) {
   auto todos = TopoSort(func_graph->get_return());
 
   // Split subgraphs in reversed topo order,
-  // since the nodes behind the processing node may be modified when spliting.
+  // since the nodes behind the processing node may be modified when splitting.
   bool changed = false;
   for (auto iter = todos.crbegin(); iter != todos.crend(); ++iter) {
     auto node = (*iter)->cast<CNodePtr>();

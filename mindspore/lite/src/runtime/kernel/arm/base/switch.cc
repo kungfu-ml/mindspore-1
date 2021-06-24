@@ -30,7 +30,6 @@ int SwitchCPUKernel::PostProcess() {
   MS_ASSERT(bool_tensor != nullptr);
   MS_ASSERT(bool_tensor->data_type() == kNumberTypeBool);
   MS_ASSERT(bool_tensor->Size() == 1);
-  MS_ASSERT(bool_tensor->Size() == 1);
   auto active = static_cast<bool *>(bool_tensor->data_c());
   if (active == nullptr) {
     MS_LOG(ERROR) << "data of bool tensor is nullptr";
@@ -68,7 +67,6 @@ int SwitchCPUKernel::Run() {
   MS_ASSERT(bool_tensor != nullptr);
   MS_ASSERT(bool_tensor->data_type() == kNumberTypeBool);
   MS_ASSERT(bool_tensor->Size() == 1);
-  MS_ASSERT(bool_tensor->Size() == 1);
   auto active = static_cast<bool *>(bool_tensor->data_c());
   if (active == nullptr) {
     MS_LOG(ERROR) << "data of bool tensor is nullptr";
@@ -93,6 +91,7 @@ int SwitchCPUKernel::Run() {
 }
 
 REG_KERNEL(kCPU, kNumberTypeFloat32, PrimitiveType_Switch, LiteKernelCreator<SwitchCPUKernel>)
+REG_KERNEL(kCPU, kNumberTypeFloat16, PrimitiveType_Switch, LiteKernelCreator<SwitchCPUKernel>)
 REG_KERNEL(kCPU, kNumberTypeBool, PrimitiveType_Switch, LiteKernelCreator<SwitchCPUKernel>)
 REG_KERNEL(kCPU, kNumberTypeInt32, PrimitiveType_Switch, LiteKernelCreator<SwitchCPUKernel>)
 }  // namespace mindspore::kernel

@@ -122,9 +122,9 @@ std::string CommUtil::NodeRoleToString(const NodeRole &role) {
   }
 }
 bool CommUtil::ValidateRankId(const enum NodeRole &node_role, const uint32_t &rank_id) {
-  if (node_role == NodeRole::SERVER && (rank_id > ClusterConfig::server_num() - 1)) {
+  if (node_role == NodeRole::SERVER && (rank_id > ClusterMetadata::instance()->total_server_num() - 1)) {
     return false;
-  } else if (node_role == NodeRole::WORKER && (rank_id > ClusterConfig::worker_num() - 1)) {
+  } else if (node_role == NodeRole::WORKER && (rank_id > ClusterMetadata::instance()->total_worker_num() - 1)) {
     return false;
   }
   return true;
@@ -138,6 +138,22 @@ bool CommUtil::Retry(const std::function<bool()> &func, size_t max_attempts, siz
     std::this_thread::sleep_for(std::chrono::milliseconds(interval_milliseconds));
   }
   return false;
+}
+
+void CommUtil::LogCallback(int severity, const char *msg) {
+  switch (severity) {
+    case EVENT_LOG_MSG:
+      MS_LOG(INFO) << kLibeventLogPrefix << msg;
+      break;
+    case EVENT_LOG_WARN:
+      MS_LOG(WARNING) << kLibeventLogPrefix << msg;
+      break;
+    case EVENT_LOG_ERR:
+      MS_LOG(ERROR) << kLibeventLogPrefix << msg;
+      break;
+    default:
+      break;
+  }
 }
 }  // namespace core
 }  // namespace ps

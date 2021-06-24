@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -165,12 +165,6 @@ class CifarOp : public ParallelOp, public RandomAccessOp {
   // @return
   static Status CountTotalRows(const std::string &dir, const std::string &usage, bool isCIFAR10, int64_t *count);
 
-  /// \brief Base-class override for NodePass visitor acceptor
-  /// \param[in] p Pointer to the NodePass to be accepted
-  /// \param[out] modified Indicator if the node was changed at all
-  /// \return Status of the node visit
-  Status Accept(NodePass *p, bool *modified) override;
-
   // Op name getter
   // @return Name of the current Op
   std::string Name() const override { return "CifarOp"; }
@@ -219,7 +213,7 @@ class CifarOp : public ParallelOp, public RandomAccessOp {
   // @return
   Status ParseCifarData();
 
-  // Method derived from RandomAccess Op, enable Sampler to get all ids for each calss
+  // Method derived from RandomAccess Op, enable Sampler to get all ids for each class
   // @param (std::map<uint64_t, std::vector<uint64_t >> * map - key label, val all ids for this class
   // @return Status The status code returned
   Status GetClassIds(std::map<int32_t, std::vector<int64_t>> *cls_ids) const override;
@@ -238,6 +232,7 @@ class CifarOp : public ParallelOp, public RandomAccessOp {
   const std::string usage_;  // can only be either "train" or "test"
   std::unique_ptr<Queue<std::vector<unsigned char>>> cifar_raw_data_block_;
   std::vector<std::string> cifar_files_;
+  std::vector<std::string> path_record_;
   std::vector<std::pair<std::shared_ptr<Tensor>, std::vector<uint32_t>>> cifar_image_label_pairs_;
 };
 }  // namespace dataset

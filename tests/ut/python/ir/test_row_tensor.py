@@ -40,7 +40,11 @@ from mindspore.nn.optim import Momentum
 from mindspore.train import Model
 from ....dataset_mock import MindData
 
-context.set_context(mode=context.GRAPH_MODE, enable_sparse=True)
+@pytest.fixture(scope="module", autouse=True)
+def setup_teardown():
+    context.set_context(mode=context.GRAPH_MODE, enable_sparse=True)
+    yield
+    context.set_context(enable_sparse=False)
 
 reduce_sum = P.ReduceSum()
 unsorted_segment_sum = P.UnsortedSegmentSum()
@@ -347,7 +351,7 @@ def test_row_tensor_model_train():
         def __init__(self, in_features, out_features):
             super(Net, self).__init__()
             self.weight = Parameter(Tensor(np.ones([out_features, in_features]).astype(np.float32)), name="weight")
-            self.add = P.TensorAdd()
+            self.add = P.Add()
             self.cast = P.Cast()
             self.flag = True
 

@@ -44,25 +44,27 @@ class MemoryManager {
   virtual void ClearGlobalIdleMem() {}
 
   void MallocReusedDynamicMem(const session::KernelGraph *graph);
-  void MallocSomasDynamicMem(const session::KernelGraph *graph);
+  virtual void MallocSomasDynamicMem(const session::KernelGraph *graph);
   uint8_t *MallocOutputMem(const AnfNodePtr &node, size_t index, MemType type, size_t size,
                            const DeviceAddressPtr &address, bool comm_mem);
   uint8_t *MallocWorkSpaceMem(const AnfNodePtr &node, size_t index, MemType type, size_t size);
-  virtual uint8_t *MallocMem(MemType type, size_t size, const DeviceAddressPtr &address);
+  virtual uint8_t *MallocMem(MemType type, size_t size, const DeviceAddressPtr &address,
+                             uint32_t graph_id = kInvalidGraphId);
 
   virtual bool MallocMemFromMemPool(const DeviceAddressPtr address, size_t size);
   virtual void *MallocMemFromMemPool(size_t size);
+  virtual uint8_t *MallocCommunicationMemFromMemPool(size_t size) { return nullptr; }
   virtual void FreeMemFromMemPool(const DeviceAddressPtr address);
   virtual void FreeMemFromMemPool(void *device_ptr);
   virtual bool MallocContinuousMemFromMemPool(const DeviceAddressPtrList addr_list, size_t total_size,
                                               std::vector<size_t> size_list);
   virtual std::vector<void *> MallocContinuousMemFromMemPool(size_t total_size, std::vector<size_t> size_list);
 
-  size_t GetCommonAlignSize(size_t input_size) const;
+  static size_t GetCommonAlignSize(size_t input_size);
   size_t GetCommunicationAlignSize(size_t input_size) const;
 
  protected:
-  virtual uint8_t *MallocStaticMem(size_t size, bool communication_mem);
+  virtual uint8_t *MallocStaticMem(size_t size, bool communication_mem, uint32_t graph_id = kInvalidGraphId);
   virtual uint8_t *MallocDynamicMem(size_t size, bool communication_mem);
   uint8_t *device_mem_base_{nullptr};
   uint64_t device_mem_size_{0};

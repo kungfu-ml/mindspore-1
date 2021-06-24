@@ -24,9 +24,10 @@
 #include <string>
 #include "src/lite_kernel.h"
 #include "include/errorcode.h"
-#include "src/runtime/opencl/opencl_runtime.h"
-#include "src/runtime/kernel/arm/base/dequant.h"
+#include "src/runtime/gpu/opencl/opencl_runtime.h"
+#include "mindspore/lite/src/dequant.h"
 #include "src/runtime/kernel/opencl/utils.h"
+#include "nnacl/resize_parameter.h"
 
 using mindspore::lite::RET_ERROR;
 using mindspore::lite::RET_OK;
@@ -35,15 +36,15 @@ namespace mindspore::kernel {
 
 struct OpenCLToFormatParameter {
   OpParameter op_parameter{};
-  schema::Format src_format{schema::Format::Format_NHWC};
-  schema::Format dst_format{schema::Format::Format_NHWC4};
   lite::opencl::MemType out_mem_type{lite::opencl::MemType::IMG};
 };
 
 template <typename SrcT, typename DstT>
 void Broadcast2GpuShape(DstT *dst, const SrcT *src, int src_num) {
   MS_ASSERT(dst);
-  MS_ASSERT(src);
+  if (src == nullptr || src_num <= 0) {
+    return;
+  }
   auto *N = dst;
   auto *H = dst + 1;
   auto *W = dst + 2;
@@ -70,15 +71,19 @@ void Broadcast2GpuShape(DstT *dst, const SrcT *src, int src_num) {
 template <typename SrcT, typename DstT>
 void Broadcast2GpuShape(DstT *dst, const SrcT *src, int src_num, DstT default_value) {
   MS_ASSERT(dst);
-  MS_ASSERT(src);
   for (int i = 0; i < 4; ++i) {
     dst[i] = default_value;
+  }
+  if (src == nullptr || src_num <= 0) {
+    return;
   }
   Broadcast2GpuShape(dst, src, src_num);
 }
 
 struct GpuTensorInfo {
+  GpuTensorInfo() = default;
   explicit GpuTensorInfo(const lite::Tensor *tensor) {
+    auto ocl_runtime_wrap_ = lite::opencl::OpenCLRuntimeWrapper();
     if (tensor == nullptr) {
       return;
     }
@@ -90,16 +95,24 @@ struct GpuTensorInfo {
     H = shape.s[1];
     W = shape.s[2];
     C = shape.s[3];
+    MS_ASSERT(N > 0);
+    MS_ASSERT(H > 0);
+    MS_ASSERT(W > 0);
+    MS_ASSERT(C > 0);
     Slice = UP_DIV(C, C4NUM);
 
     FLT_size = tensor->data_type() == kNumberTypeFloat16 ? sizeof(cl_half) : sizeof(cl_float);
     FLT4_size = FLT_size * 4;
-    if (W * Slice <= MAX_IMAGE2D_SIZE) {
+    if (W * Slice <= ocl_runtime_wrap_.GetInstance()->GetMaxImage2DWidth()) {
       height = N * H;
       width = W * Slice;
     } else {
-      height = W;
-      width = N * H * Slice;
+      height = N * H * W;
+      width = Slice;
+      if (height > ocl_runtime_wrap_.GetInstance()->GetMaxImage2DHeight()) {
+        height = -1;
+        width = -1;
+      }
     }
 
     ElementsNum = N * H * W * C;
@@ -126,6 +139,8 @@ struct GpuTensorInfo {
     }
     return static_cast<int>(no_neg_axis + 4 - NDim);
   }
+
+  bool IsImageSizeValid() { return width > 0 && height > 0; }
 
   size_t N{1};
   size_t H{1};
@@ -156,20 +171,20 @@ struct BaseTuningParameter {
 class OpenCLKernel : public LiteKernel {
  public:
   OpenCLKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-               const std::vector<lite::Tensor *> &outputs)
-      : LiteKernel(parameter, inputs, outputs, nullptr, nullptr) {
+               const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : LiteKernel(parameter, inputs, outputs, ctx) {
     ocl_runtime_ = ocl_runtime_wrap_.GetInstance();
   }
   ~OpenCLKernel() override = default;
   int AlignGlobalLocal(const std::vector<size_t> &global, const std::vector<size_t> &local);
 
   int Prepare() override { return RET_OK; }
-  int PreProcess() override { return RET_ERROR; }
+  int PreProcess() override;
   int PostProcess() override;
-  int ReSize() override { return RET_ERROR; }
+  int ReSize() override;
   int Run() override { return RET_ERROR; }
 
-  virtual int CheckSpecs() { return RET_ERROR; }
+  virtual int CheckSpecs();
   virtual int InitWeights() { return RET_OK; }
   virtual void SetConstArgs() {}
   virtual void SetGlobalLocal() {}
@@ -181,14 +196,15 @@ class OpenCLKernel : public LiteKernel {
   virtual int AssignTuningParam(const BaseTuningParameter &param);
   virtual int Tune();
 
-  int GetImageSize(size_t idx, std::vector<size_t> *img_size);
+  int GetImageSize(size_t idx, lite::opencl::ImageSize *img_size);
   void PrintOutput(int print_num = 10, const std::string &out_file = "");
   lite::opencl::MemType GetMemType() { return out_mem_type_; }
   void SetMemType(lite::opencl::MemType mem_type) { out_mem_type_ = mem_type; }
   OpParameter *GetParameter() { return op_parameter_; }
-  double GetProfilingTimeMs();
+  virtual double GetProfilingTimeMs();
   int DequantWeight();
   void FreeDequantedWeight();
+  virtual int InferShape();
 
  protected:
   static std::set<size_t> GenerateLocalByGlobal(size_t global_i);
@@ -221,15 +237,24 @@ class OpenCLKernel : public LiteKernel {
 template <class T>
 kernel::LiteKernel *OpenCLKernelCreator(const std::vector<lite::Tensor *> &inputs,
                                         const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                        const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                        const mindspore::lite::PrimitiveC *primitive) {
-  auto *kernel = new (std::nothrow) T(reinterpret_cast<OpParameter *>(opParameter), inputs, outputs);
+                                        const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
+  auto *kernel = new (std::nothrow) T(reinterpret_cast<OpParameter *>(opParameter), inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "kernel " << opParameter->name_ << "is nullptr.";
     free(opParameter);
     return nullptr;
   }
+  if (!opParameter->infer_flag_) {
+    MS_LOG(WARNING) << "kernel don't infer shape yet!";
+    return kernel;
+  }
   auto ret = kernel->CheckSpecs();
+  if (ret != mindspore::lite::RET_OK) {
+    MS_LOG(ERROR) << "Check " << opParameter->name_ << " specification failed!";
+    delete kernel;
+    return nullptr;
+  }
+  ret = kernel->OpenCLKernel::CheckSpecs();
   if (ret != mindspore::lite::RET_OK) {
     MS_LOG(ERROR) << "Check " << opParameter->name_ << " specification failed!";
     delete kernel;

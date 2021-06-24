@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -233,7 +233,7 @@ Status CacheBase::UpdateColumnMapFromCache() {
   // Get the schema from the server. It may not be there yet. So tolerate the error.
   if (column_name_id_map_.empty()) {
     rc = cache_client_->FetchSchema(&column_name_id_map_);
-    if (rc == Status(StatusCode::kFileNotExist)) {
+    if (rc == Status(StatusCode::kMDFileNotExist)) {
       MS_LOG(DEBUG) << "Schema not in the server yet.";
       rc = Status::OK();
     }
@@ -304,14 +304,14 @@ Status CacheBase::Prefetcher(int32_t worker_id) {
       int32_t retry_count = 0;
       do {
         rc = PrefetchRows(prefetch_keys, &cache_miss);
-        if (rc.IsNetWorkError() && retry_count < max_retries) {
+        if (rc == StatusCode::kMDNetWorkError && retry_count < max_retries) {
           // If we get some network error, we will attempt some retries
           retry_count++;
-        } else if (rc.IsError()) {
+        } else if (rc.IsError() && rc.StatusCode() != StatusCode::kMDInterrupted) {
           MS_LOG(WARNING) << rc.ToString();
           return rc;
         }
-      } while (rc.IsNetWorkError());
+      } while (rc == StatusCode::kMDNetWorkError);
       // In case any thread is waiting for the rows to come back and blocked on a semaphore,
       // we will put an empty row in the local cache.
       if (rc.IsError() && AllowCacheMiss()) {

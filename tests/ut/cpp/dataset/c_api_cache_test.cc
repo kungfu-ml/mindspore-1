@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,6 @@
 #include "minddata/dataset/include/datasets.h"
 #include "minddata/dataset/include/vision.h"
 
-#include "minddata/dataset/engine/ir/datasetops/source/csv_node.h"
-
 using namespace mindspore::dataset;
 
 // Helper function to get the session id from SESSION_ID env variable
@@ -26,10 +24,7 @@ Status GetSessionFromEnv(session_id_type *session_id);
 
 class MindDataTestCacheOp : public UT::DatasetOpTesting {
  public:
-  void SetUp() override {
-    DatasetOpTesting::SetUp();
-    GlobalInit();
-  }
+  void SetUp() override { DatasetOpTesting::SetUp(); }
 };
 
 TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCApiSamplerNull) {
@@ -62,11 +57,11 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCApiNestedCache) {
 
   // Create an ImageFolder Dataset, this folder_path only has 2 images in it
   std::string folder_path = datasets_root_path_ + "/testImageNetData/train/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create objects for the tensor ops
-  std::shared_ptr<TensorOperation> decode_op = vision::Decode();
+  std::shared_ptr<TensorTransform> decode_op = std::make_shared<vision::Decode>();
   EXPECT_NE(decode_op, nullptr);
 
   // Create a Map operation on ds
@@ -90,7 +85,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheImageFolderCApi) {
 
   // Create an ImageFolder Dataset, this folder_path only has 2 images in it
   std::string folder_path = datasets_root_path_ + "/testImageNetData/train/";
-  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds = ImageFolder(folder_path, false, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -104,14 +99,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheImageFolderCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -133,7 +128,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCocoCApi) {
   std::string folder_path = datasets_root_path_ + "/testCOCO/train/";
   std::string annotation_file_path = datasets_root_path_ + "/testCOCO/annotations/train.json";
   std::shared_ptr<Dataset> ds =
-    Coco(folder_path, annotation_file_path, "Detection", false, RandomSampler(), some_cache);
+    Coco(folder_path, annotation_file_path, "Detection", false, std::make_shared<RandomSampler>(), some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -147,14 +142,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCocoCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -174,7 +169,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheMnistCApi) {
 
   // Create a Mnist Dataset
   std::string folder_path = datasets_root_path_ + "/testMnistData/";
-  std::shared_ptr<Dataset> ds = Mnist(folder_path, "all", RandomSampler(false, 10), some_cache);
+  std::shared_ptr<Dataset> ds = Mnist(folder_path, "all", std::make_shared<RandomSampler>(false, 10), some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -188,14 +183,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheMnistCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -215,7 +210,8 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCelebaCApi) {
 
   // Create a CelebA Dataset, this folder_path has 4 records in it
   std::string folder_path = datasets_root_path_ + "/testCelebAData/";
-  std::shared_ptr<Dataset> ds = CelebA(folder_path, "all", RandomSampler(false, 10), false, {}, some_cache);
+  std::shared_ptr<Dataset> ds =
+    CelebA(folder_path, "all", std::make_shared<RandomSampler>(false, 10), false, {}, some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -229,14 +225,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCelebaCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -256,7 +252,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheManifestCApi) {
 
   // Create a Manifest Dataset, this file_path has 2 records in it
   std::string file_path = datasets_root_path_ + "/testManifestData/cpp.json";
-  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", RandomSampler(), {}, false, some_cache);
+  std::shared_ptr<Dataset> ds = Manifest(file_path, "train", std::make_shared<RandomSampler>(), {}, false, some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -270,14 +266,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheManifestCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -297,7 +293,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCifar10CApi) {
 
   // Create a Cifar10 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar10Data/";
-  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", RandomSampler(false, 10), some_cache);
+  std::shared_ptr<Dataset> ds = Cifar10(folder_path, "all", std::make_shared<RandomSampler>(false, 10), some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -311,14 +307,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCifar10CApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -338,7 +334,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCifar100CApi) {
 
   // Create a Cifar100 Dataset
   std::string folder_path = datasets_root_path_ + "/testCifar100Data/";
-  std::shared_ptr<Dataset> ds = Cifar100(folder_path, "all", RandomSampler(false, 10), some_cache);
+  std::shared_ptr<Dataset> ds = Cifar100(folder_path, "all", std::make_shared<RandomSampler>(false, 10), some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -352,14 +348,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCifar100CApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -379,7 +375,8 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheVocCApi) {
 
   // Create a VOC Dataset, this folder_path has 9 records in it
   std::string folder_path = datasets_root_path_ + "/testVOC2012/";
-  std::shared_ptr<Dataset> ds = VOC(folder_path, "Detection", "train", {}, false, RandomSampler(), some_cache);
+  std::shared_ptr<Dataset> ds =
+    VOC(folder_path, "Detection", "train", {}, false, std::make_shared<RandomSampler>(), some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -393,14 +390,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheVocCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -422,7 +419,8 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheAlbumCApi) {
   std::string schema_file = datasets_root_path_ + "/testAlbum/datasetSchema.json";
   std::vector<std::string> column_names = {"image", "label", "id"};
   // Create a Album Dataset, 7 records in it
-  std::shared_ptr<Dataset> ds = Album(folder_path, schema_file, column_names, false, RandomSampler(), some_cache);
+  std::shared_ptr<Dataset> ds =
+    Album(folder_path, schema_file, column_names, false, std::make_shared<RandomSampler>(), some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -436,7 +434,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheAlbumCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -461,9 +459,10 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheRandomDataCApi) {
 
   // Create a RandomDataset
   std::shared_ptr<SchemaObj> schema = Schema();
-  schema->add_column("image", mindspore::TypeId::kNumberTypeUInt8, {2});
-  schema->add_column("label", mindspore::TypeId::kNumberTypeUInt8, {1});
-  std::shared_ptr<Dataset> ds = RandomData(4, schema, {}, some_cache);
+
+  schema->add_column("image", mindspore::DataType::kNumberTypeUInt8, {2});
+  schema->add_column("label", mindspore::DataType::kNumberTypeUInt8, {1});
+  std::shared_ptr<Dataset> ds = RandomData(8, schema, {}, some_cache);
   EXPECT_NE(ds, nullptr);
 
   // Create a Repeat operation on ds
@@ -477,7 +476,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheRandomDataCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -486,7 +485,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheRandomDataCApi) {
     iter->GetNextRow(&row);
   }
 
-  EXPECT_EQ(i, 8);
+  EXPECT_EQ(i, 16);
 
   // Manually terminate the pipeline
   iter->Stop();
@@ -518,14 +517,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheTFRecordCApi1) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -569,14 +568,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheTFRecordCApi2) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -616,14 +615,14 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheTFRecordCApi3) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter->GetNextRow(&row);
   }
 
@@ -661,7 +660,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheTextfileCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -705,7 +704,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheCsvCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -750,7 +749,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCacheClueCApi) {
   EXPECT_NE(iter, nullptr);
 
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -775,23 +774,23 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCApiCacheShare1) {
 
   // Create an ImageFolder Dataset, this folder_path only has 2 images in it
   std::string folder_path = datasets_root_path_ + "/testImageNetData/train/";
-  std::shared_ptr<Dataset> ds1 = ImageFolder(folder_path, false, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds1 = ImageFolder(folder_path, false, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds1, nullptr);
-  std::shared_ptr<Dataset> ds2 = ImageFolder(folder_path, false, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds2 = ImageFolder(folder_path, false, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds2, nullptr);
 
   // Create and launch the Execution Tree for ds1
   std::shared_ptr<Iterator> iter1 = ds1->CreateIterator();
   EXPECT_NE(iter1, nullptr);
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter1->GetNextRow(&row);
 
   uint64_t i = 0;
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter1->GetNextRow(&row);
   }
   EXPECT_EQ(i, 2);
@@ -808,7 +807,7 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCApiCacheShare1) {
   while (row.size() != 0) {
     i++;
     auto image = row["image"];
-    MS_LOG(INFO) << "Tensor image shape: " << image->shape();
+    MS_LOG(INFO) << "Tensor image shape: " << image.Shape();
     iter2->GetNextRow(&row);
   }
   EXPECT_EQ(i, 2);
@@ -829,16 +828,17 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCApiCacheShare2) {
   std::string folder_path = datasets_root_path_ + "/testImageNetData/train/";
   // The first pipeline is ImageFolder with RandomSampler, the second pipeline is ImageFolder with SequentialSampler
   // Since sampler does not influence the data in the source, these two pipelines can share a common cache.
-  std::shared_ptr<Dataset> ds1 = ImageFolder(folder_path, true, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds1 = ImageFolder(folder_path, true, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds1, nullptr);
-  std::shared_ptr<Dataset> ds2 = ImageFolder(folder_path, true, SequentialSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds2 =
+    ImageFolder(folder_path, true, std::make_shared<SequentialSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds2, nullptr);
 
   // Create and launch the Execution Tree for ds1
   std::shared_ptr<Iterator> iter1 = ds1->CreateIterator();
   EXPECT_NE(iter1, nullptr);
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter1->GetNextRow(&row);
 
   uint64_t i = 0;
@@ -879,16 +879,16 @@ TEST_F(MindDataTestCacheOp, DISABLED_TestCApiCacheShareFailure1) {
 
   // Create an ImageFolder Dataset, this folder_path only has 2 images in it
   std::string folder_path = datasets_root_path_ + "/testImageNetData/train/";
-  std::shared_ptr<Dataset> ds1 = ImageFolder(folder_path, true, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds1 = ImageFolder(folder_path, true, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds1, nullptr);
-  std::shared_ptr<Dataset> ds2 = ImageFolder(folder_path, false, RandomSampler(), {}, {}, some_cache);
+  std::shared_ptr<Dataset> ds2 = ImageFolder(folder_path, false, std::make_shared<RandomSampler>(), {}, {}, some_cache);
   EXPECT_NE(ds2, nullptr);
 
   // Create and launch the Execution Tree for ds1
   std::shared_ptr<Iterator> iter1 = ds1->CreateIterator();
   EXPECT_NE(iter1, nullptr);
   // Iterate the dataset and get each row
-  std::unordered_map<std::string, std::shared_ptr<Tensor>> row;
+  std::unordered_map<std::string, mindspore::MSTensor> row;
   iter1->GetNextRow(&row);
 
   uint64_t i = 0;

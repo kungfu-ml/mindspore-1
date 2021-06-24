@@ -17,7 +17,6 @@
 #include <memory>
 #include "src/common/log_adapter.h"
 #include "common/common_test.h"
-#include "mindspore/lite/src/runtime/opencl/opencl_runtime.h"
 #include "mindspore/lite/src/runtime/kernel/opencl/opencl_subgraph.h"
 #include "mindspore/lite/src/runtime/kernel/opencl/kernel/fill.h"
 using mindspore::lite::Tensor;
@@ -61,7 +60,7 @@ TEST_F(TestFillOpenCLCI, Fp32testfill) {
   }
 
   auto *fill_kernel =
-    new (std::nothrow) kernel::FillOpenCLKernel(reinterpret_cast<OpParameter *>(param), inputs, outputs);
+    new (std::nothrow) kernel::FillOpenCLKernel(reinterpret_cast<OpParameter *>(param), inputs, outputs, nullptr);
   if (fill_kernel == nullptr) {
     MS_LOG(INFO) << " new kernel::FillOpenCLKernel failed ";
     delete param;
@@ -109,15 +108,15 @@ TEST_F(TestFillOpenCLCI, Fp32testshape) {
   std::vector<lite::Tensor *> outputs{&output_tensor};
 
   MS_LOG(INFO) << " initialize tensors ";
-  auto param = reinterpret_cast<ShapeParameter *>(malloc(sizeof(ShapeParameter)));
-  param->op_parameter_.type_ = PrimitiveType_Shape;
+  auto param = reinterpret_cast<OpParameter *>(malloc(sizeof(OpParameter)));
+  param->type_ = PrimitiveType_Shape;
   if (param == nullptr) {
     MS_LOG(INFO) << " new FillParameter failed ";
     return;
   }
 
   auto *fill_kernel =
-    new (std::nothrow) kernel::FillOpenCLKernel(reinterpret_cast<OpParameter *>(param), inputs, outputs);
+    new (std::nothrow) kernel::FillOpenCLKernel(reinterpret_cast<OpParameter *>(param), inputs, outputs, nullptr);
   if (fill_kernel == nullptr) {
     MS_LOG(INFO) << " new kernel::FillOpenCLKernel failed ";
     delete param;

@@ -49,10 +49,13 @@ class PrimitivePy : public Primitive {
 
   void AddPyAttr(const py::str &name, const py::object &obj);
 
+  void DelPyAttr(const py::str &name);
+
   py::dict GetAttrDict();
   void set_hook(const py::function &hook) { hook_ = hook; }
   py::function hook() const { return hook_; }
   BaseRef RunHookFunction(const VectorRef &args) const override;
+  BaseRef RunBpropHookFunction(const py::tuple &py_args) const;
   BaseRef RunComputeFunction(const VectorRef &args) const override;
   py::object RunPyComputeFunction(const py::tuple &py_args) const;
   bool HasComputeFunction() const;

@@ -41,7 +41,7 @@ class EmbeddingLookUpCPUKernel : public CPUKernel {
   size_t first_dim_size_{1};
   size_t outer_dim_size_{1};
   TypeId indices_data_type_{kNumberTypeInt32};
-  CNodePtr node_ = nullptr;
+  CNodeWeakPtr node_wpt_;
 };
 
 MS_REG_CPU_KERNEL(
@@ -52,11 +52,6 @@ MS_REG_CPU_KERNEL(
 MS_REG_CPU_KERNEL(
   EmbeddingLookup,
   KernelAttr().AddInputAttr(kNumberTypeInt32).AddInputAttr(kNumberTypeInt32).AddOutputAttr(kNumberTypeInt32),
-  EmbeddingLookUpCPUKernel);
-
-MS_REG_CPU_KERNEL(
-  EmbeddingLookup,
-  KernelAttr().AddInputAttr(kNumberTypeInt64).AddInputAttr(kNumberTypeInt64).AddOutputAttr(kNumberTypeInt64),
   EmbeddingLookUpCPUKernel);
 
 MS_REG_CPU_KERNEL(

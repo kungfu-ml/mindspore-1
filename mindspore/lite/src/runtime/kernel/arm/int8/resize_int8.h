@@ -19,7 +19,7 @@
 #include <vector>
 #include "src/lite_kernel.h"
 #include "src/runtime/kernel/arm/base/resize_base.h"
-#include "nnacl/quantization/quantize.h"
+#include "mindspore/lite/nnacl/int8/quantize.h"
 
 using mindspore::schema::PrimitiveType_Resize;
 using mindspore::schema::ResizeMethod;
@@ -28,9 +28,8 @@ namespace mindspore::kernel {
 class ResizeInt8CPUKernel : public ResizeBaseCPUKernel {
  public:
   ResizeInt8CPUKernel(OpParameter *parameter, const std::vector<lite::Tensor *> &inputs,
-                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx,
-                      const mindspore::lite::PrimitiveC *primitive)
-      : ResizeBaseCPUKernel(parameter, inputs, outputs, ctx, primitive) {}
+                      const std::vector<lite::Tensor *> &outputs, const lite::InnerContext *ctx)
+      : ResizeBaseCPUKernel(parameter, inputs, outputs, ctx) {}
 
   ~ResizeInt8CPUKernel() override;
 

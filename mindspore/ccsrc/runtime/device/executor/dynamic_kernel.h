@@ -23,11 +23,10 @@
 #include <map>
 #include "ir/anf.h"
 #include "ir/tensor.h"
+#include "abstract/primitive_infer_map.h"
 
 namespace mindspore {
 namespace device {
-constexpr auto kDynamicShapeDepends = "dynamic_shape_depends";
-
 class DynamicKernel {
  public:
   DynamicKernel(void *stream, const CNodePtr &cnode_ptr)
@@ -46,7 +45,7 @@ class DynamicKernel {
   bool is_output_dynamic_shape() const { return is_output_dynamic_shape_; }
   bool have_depends() const { return !depend_list_.empty(); }
   virtual void Initialize();
-  std::string GetKernelName() { return cnode_ptr_->fullname_with_scope(); }
+  std::string GetKernelName() { return cnode_ptr_.lock()->fullname_with_scope(); }
   int GetKernelType();
 
  protected:
@@ -55,7 +54,7 @@ class DynamicKernel {
   void InferShapeForNopNode(AnfNodePtr *input_node);
 
   void *stream_;
-  const CNodePtr cnode_ptr_;
+  const CNodeWeakPtr cnode_ptr_;
   bool is_dynamic_shape_;
   bool is_input_dynamic_shape_;
   bool is_output_dynamic_shape_;

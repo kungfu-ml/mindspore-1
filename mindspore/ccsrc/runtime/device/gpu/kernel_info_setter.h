@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,8 +32,11 @@
 namespace mindspore {
 namespace device {
 namespace gpu {
-// map<opName, (inputFormatPosition, outputFormatPosition)>, used for getting the insert position of format transform.
-// If input position is empty, then insert all the input positions, because the input numbers of this op are variable.
+const size_t kAllPositions = SIZE_MAX;
+
+// Map<opName, (inputFormatPosition, outputFormatPosition)>, used for getting the inserted position of format transform.
+// If the inserted position is kAllPositions, then insert all the positions, because the input or output numbers of
+// this op are variable.
 static std::map<std::string, std::pair<std::vector<size_t>, std::vector<size_t>>> kKernelFormatPositionMap = {
   // Format sensitive.
   {prim::kPrimConv2D->name(), {{0, 1}, {0}}},
@@ -42,13 +45,13 @@ static std::map<std::string, std::pair<std::vector<size_t>, std::vector<size_t>>
   {prim::kPrimMaxPool->name(), {{0}, {0}}},
   {prim::kPrimMaxPoolGrad->name(), {{0, 1, 2}, {0}}},
   {kAvgPoolOpName, {{0}, {0}}},
-  {kAvgPoolGradGpuOpName, {{0, 1, 2}, {0}}},
-  {kFusedBatchNormEx, {{0}, {0}}},
-  {kFusedBatchNormExWithActivation, {{0}, {0}}},
-  {kFusedBatchNormExWithAddAndActivation, {{0, 5}, {0}}},
-  {kFusedBatchNormGradEx, {{0, 1}, {0}}},
-  {kFusedBatchNormGradExWithActivation, {{0, 1, 7}, {0}}},
-  {kFusedBatchNormGradExWithAddAndActivation, {{0, 1, 7}, {0, 3}}},
+  {kAvgPoolGradOpName, {{0, 1, 2}, {0}}},
+  {kBatchNorm, {{0}, {0}}},
+  {kBatchNormWithActivation, {{0}, {0}}},
+  {kBatchNormWithAddAndActivation, {{0, 5}, {0}}},
+  {kBatchNormGradOpName, {{0, 1}, {0}}},
+  {kBatchNormGradWithActivation, {{0, 1, 7}, {0}}},
+  {kBatchNormGradWithAddAndActivation, {{0, 1, 7}, {0, 3}}},
   {kBiasAddOpName, {{0}, {0}}},
   {prim::kPrimBiasAddGrad->name(), {{0}, {}}},
   // Format insensitive.
@@ -58,8 +61,8 @@ static std::map<std::string, std::pair<std::vector<size_t>, std::vector<size_t>>
   {prim::kPrimRelu6Grad->name(), {{0, 1}, {0}}},
   {kSliceOpName, {{0}, {0}}},
   {kTensorAddOpName, {{0, 1}, {0}}},
-  {prim::kPrimConcat->name(), {{}, {0}}},
-  {prim::kPrimAddN->name(), {{}, {0}}},
+  {prim::kPrimConcat->name(), {{kAllPositions}, {0}}},
+  {prim::kPrimAddN->name(), {{kAllPositions}, {0}}},
 };
 
 void SetKernelInfo(const CNodePtr &kernel_node, KernelType kernel_type = KernelType::UNKNOWN_KERNEL_TYPE);

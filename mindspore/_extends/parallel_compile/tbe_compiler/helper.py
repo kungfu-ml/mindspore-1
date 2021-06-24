@@ -16,9 +16,9 @@
 import sys
 import os
 from te.platform.cce_conf import te_set_version
-from .common import get_args, get_build_in_impl_path, TBEException
+from .tbe_common import get_args, get_built_in_impl_path, TBEException
 
-build_in_impl_path = get_build_in_impl_path()
+build_in_impl_path = get_built_in_impl_path()
 
 
 def _op_select_format(kernel_info):
@@ -81,6 +81,7 @@ def _check_supported(kernel_info):
     try:
         op_name = kernel_info['op_info']['name']
         is_dynamic_shape = kernel_info['op_info']['is_dynamic_shape']
+        te_set_version(kernel_info["op_info"]["socVersion"])
         impl_path = build_in_impl_path
         custom_flag = False
         if 'impl_path' in kernel_info and kernel_info['impl_path'] is not None:

@@ -1,4 +1,5 @@
 #ifdef __aarch64__
+#include "nnacl/assembly_global.h"
 
 .text
 .align 5
@@ -11,7 +12,7 @@
 //                            size_t input_stride, size_t relu, size_t relu6)
 // x0: output, x1: input, x2: weights, x3: bias, x4: channels, x5: output_width, x6: input_stride, x7: relu, x8: relu6
 
-ConvDwFp32Indirect3x3:
+asm_function ConvDwFp32Indirect3x3
     sub sp, sp, #16
     stp x19, x20, [sp], #16
 
@@ -128,7 +129,7 @@ ConvDwFp32Indirect3x3:
                 tbnz w11, #1, Write2
                 tbnz w11, #0, Write1
             Write2:
-                str d29, [x0], #8
+                st1 {v29.2s}, [x0], #8
                 ext v29.16b, v29.16b, v29.16b, #8
                 tbz w11, #0, NextPixel
             Write1:

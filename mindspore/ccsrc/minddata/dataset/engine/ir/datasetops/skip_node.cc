@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,10 @@ void SkipNode::Print(std::ostream &out) const { out << Name() + "(skip_count:" +
 
 // Function to build the SkipOp
 Status SkipNode::Build(std::vector<std::shared_ptr<DatasetOp>> *const node_ops) {
-  node_ops->push_back(std::make_shared<SkipOp>(skip_count_, connector_que_size_));
+  auto op = std::make_shared<SkipOp>(skip_count_, connector_que_size_);
+  op->set_total_repeats(GetTotalRepeats());
+  op->set_num_repeats_per_epoch(GetNumRepeatsPerEpoch());
+  node_ops->push_back(op);
   return Status::OK();
 }
 
@@ -73,15 +76,22 @@ Status SkipNode::GetDatasetSize(const std::shared_ptr<DatasetSizeGetter> &size_g
 }
 
 // Visitor accepting method for IRNodePass
-Status SkipNode::Accept(IRNodePass *p, bool *modified) {
+Status SkipNode::Accept(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->Visit(shared_from_base<SkipNode>(), modified);
 }
 
 // Visitor accepting method for IRNodePass
-Status SkipNode::AcceptAfter(IRNodePass *p, bool *modified) {
+Status SkipNode::AcceptAfter(IRNodePass *const p, bool *const modified) {
   // Downcast shared pointer then call visitor
   return p->VisitAfter(shared_from_base<SkipNode>(), modified);
+}
+
+Status SkipNode::to_json(nlohmann::json *out_json) {
+  nlohmann::json args;
+  args["count"] = skip_count_;
+  *out_json = args;
+  return Status::OK();
 }
 }  // namespace dataset
 }  // namespace mindspore

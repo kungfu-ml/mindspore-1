@@ -25,12 +25,27 @@ from mindspore._checkparam import Validator as validator
 from mindspore.ops.primitive import constexpr
 
 
+@constexpr
+def _check_shape(input_shape, out_shape):
+    if input_shape != out_shape:
+        raise ValueError("Cannot broadcast the shape of x to the shape of clip_value_min or clip_value_max.")
+
+
 def clip_by_value(x, clip_value_min, clip_value_max):
-    """
+    r"""
     Clips tensor values to a specified min and max.
 
     Limits the value of :math:`x` to a range, whose lower limit is 'clip_value_min'
     and upper limit is 'clip_value_max'.
+
+    .. math::
+
+        out_i= \left\{
+        \begin{array}{align}
+            clip\_value_{max} & \text{ if } x_i\ge  clip\_value_{max} \\
+            x_i & \text{ if } clip\_value_{min} \lt x_i \lt clip\_value_{max} \\
+            clip\_value_{min} & \text{ if } x_i \le clip\_value_{min} \\
+        \end{array}\right.
 
     Note:
         'clip_value_min' needs to be less than or equal to 'clip_value_max'.
@@ -63,6 +78,7 @@ def clip_by_value(x, clip_value_min, clip_value_max):
     max_op = P.Maximum()
     x_min = min_op(x, clip_value_max)
     x_max = max_op(x_min, clip_value_min)
+    _check_shape(F.shape(x), F.shape(x_max))
     return x_max
 
 
@@ -147,10 +163,11 @@ def clip_by_global_norm(x, clip_norm=1.0, use_norm=None):
         >>> input_x = (Tensor(x1), Tensor(x2))
         >>> out = clip_by_global_norm(input_x, 1.0)
         >>> print(out)
-        ([[ 2.98142403e-01,  4.47213590e-01],
-         [ 1.49071202e-01,  2.98142403e-01]],
+        (Tensor(shape=[2, 2], dtype=Float32, value=
+        [[ 2.98142403e-01,  4.47213590e-01],
+         [ 1.49071202e-01,  2.98142403e-01]]), Tensor(shape=[2, 2], dtype=Float32, value=
         [[ 1.49071202e-01,  5.96284807e-01],
-         [ 4.47213590e-01,  1.49071202e-01]])
+         [ 4.47213590e-01,  1.49071202e-01]]))
     """
 
     clip_norm = _check_value(clip_norm)

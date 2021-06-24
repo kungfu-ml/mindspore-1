@@ -20,7 +20,6 @@
 
 namespace mindspore {
 namespace lite {
-
 /// \brief TrainModel Defines a class that allows to import and export a mindsport trainable model
 struct TrainModel : public lite::LiteModel {
   /// \brief Static method to create a TrainModel object
@@ -44,6 +43,13 @@ struct TrainModel : public lite::LiteModel {
   ///
   /// \return Pointer to buffer with exported model
   char *ExportBuf(char *buf, size_t *len) const;
+
+  /// \brief Get Model buffer
+  ///
+  /// \param[in,out] len Return size of the buffer
+  ///
+  /// \return Pointer to model buffer
+  char *GetBuffer(size_t *len) const;
 };
 }  // namespace lite
 }  // namespace mindspore

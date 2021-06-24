@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,8 @@ from mindspore.common import dtype as mstype
 from mindspore import log as logger
 from mindspore.common.api import _executor
 from mindspore.train.mind_ir_pb2 import ModelProto as mindir_model
-from mindspore.train.anf_ir_pb2 import ModelProto as anf_model
+from mindspore.train.checkpoint_pb2 import Checkpoint
+from mindspore.train.node_strategy_pb2 import ParallelStrategyMap as ckpt_strategy
 
 from .lineage_pb2 import DatasetGraph, TrainLineage, EvaluationLineage, UserDefinedInfo
 
@@ -78,7 +79,7 @@ def _make_directory(path: str):
     """Make directory."""
     if path is None or not isinstance(path, str) or path.strip() == "":
         logger.error("The path(%r) is invalid type.", path)
-        raise TypeError("Input path is invaild type")
+        raise TypeError("Input path is invalid type")
 
     path = os.path.realpath(path)
     logger.debug("The abs path is %r", path)
@@ -88,7 +89,10 @@ def _make_directory(path: str):
     else:
         logger.debug("The directory(%s) doesn't exist, will create it", path)
         try:
-            os.makedirs(path, exist_ok=True)
+            permissions = os.R_OK | os.W_OK | os.X_OK
+            os.umask(permissions << 3 | permissions)
+            mode = permissions << 6
+            os.makedirs(path, mode=mode, exist_ok=True)
             real_path = path
         except PermissionError as e:
             logger.error("No write permission on the directory(%r), error = %r", path, e)
@@ -205,13 +209,14 @@ def check_value_type(arg_name, arg_value, valid_types):
                         f'but got {type(arg_value).__name__}.')
 
 
-def read_proto(file_name, proto_format="MINDIR"):
+def read_proto(file_name, proto_format="MINDIR", display_data=False):
     """
     Read protobuf file.
 
     Args:
         file_name (str): File name.
-        proto_format (str): Proto format.
+        proto_format (str): Proto format {MINDIR, CKPT, CKPT_STRATEGY}.  Default: MINDIR.
+        display_data (bool): Whether display data. Default: False.
 
     Returns:
         Object, proto object.
@@ -219,8 +224,10 @@ def read_proto(file_name, proto_format="MINDIR"):
 
     if proto_format == "MINDIR":
         model = mindir_model()
-    elif model_format == "ANF":
-        model = anf_model()
+    elif proto_format == "CKPT":
+        model = Checkpoint()
+    elif proto_format == "CKPT_STRATEGY":
+        model = ckpt_strategy()
     else:
         raise ValueError("Unsupported proto format.")
 
@@ -231,4 +238,13 @@ def read_proto(file_name, proto_format="MINDIR"):
     except BaseException as e:
         logger.error("Failed to read the file `%s`, please check the correct of the file.", file_name)
         raise ValueError(e.__str__())
+
+    if proto_format == "MINDIR" and not display_data:
+        for param_proto in model.graph.parameter:
+            param_proto.raw_data = b'\0'
+
+    if proto_format == "CKPT" and not display_data:
+        for element in model.value:
+            element.tensor.tensor_content = b'\0'
+
     return model

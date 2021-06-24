@@ -61,21 +61,30 @@ int DropoutCPUKernel::Execute(int task_id) {
   auto input_ptr = reinterpret_cast<float *>(in_tensors_.at(kInputIndex)->MutableData());
   auto output_ptr = reinterpret_cast<float *>(out_tensors_.at(kOutputIndex)->MutableData());
   auto mask = reinterpret_cast<float *>(out_tensors_.at(1)->MutableData());
-  auto length = in_tensors_.at(kInputIndex)->ElementsNum();
   auto param = reinterpret_cast<DropoutParameter *>(op_parameter_);
+  auto length = in_tensors_.at(kInputIndex)->ElementsNum();
+
+  int stride = UP_DIV(length, thread_count_);
+  int count = MSMIN(stride, length - stride * task_id);
+
+  int start = stride * task_id;
+  int end = start + count;
+
   if (param == nullptr) {
     MS_LOG(ERROR) << "Dropout op_parameter_ nullptr";
     return RET_NULL_PTR;
   }
-  if (IsEval()) {
-    std::copy(input_ptr, input_ptr + length, output_ptr);
-  } else {
-    std::default_random_engine generator;
-    std::bernoulli_distribution distribution(param->ratio_);
+  if (count > 0) {
+    if (IsEval()) {
+      std::copy(&(input_ptr[start]), &(input_ptr[end]), &(output_ptr[start]));
+    } else {
+      std::default_random_engine generator;
+      std::bernoulli_distribution distribution(param->ratio_);
 
-    for (int i = 0; i < length; i++) {
-      mask[i] = distribution(generator);
-      output_ptr[i] = input_ptr[i] * mask[i] * scale_;
+      for (int i = start; i < end; i++) {
+        mask[i] = distribution(generator);
+        output_ptr[i] = input_ptr[i] * mask[i] * scale_;
+      }
     }
   }
   return RET_OK;
@@ -92,7 +101,7 @@ int RunDropout(void *cdata, int task_id) {
 }
 
 int DropoutCPUKernel::Run() {
-  int error_code = ParallelLaunch(this->context_->thread_pool_, RunDropout, this, 1);
+  int error_code = ParallelLaunch(this->context_->thread_pool_, RunDropout, this, thread_count_);
   if (error_code != RET_OK) {
     MS_LOG(ERROR) << "Dropout function error error_code[" << error_code << "]";
     return RET_ERROR;
@@ -102,8 +111,7 @@ int DropoutCPUKernel::Run() {
 
 kernel::LiteKernel *CpuDropoutFp32KernelCreator(const std::vector<lite::Tensor *> &inputs,
                                                 const std::vector<lite::Tensor *> &outputs, OpParameter *opParameter,
-                                                const lite::InnerContext *ctx, const kernel::KernelKey &desc,
-                                                const mindspore::lite::PrimitiveC *primitive) {
+                                                const lite::InnerContext *ctx, const kernel::KernelKey &desc) {
   if (opParameter == nullptr) {
     MS_LOG(ERROR) << "Dropout opParameter nullptr.";
     return nullptr;
@@ -112,7 +120,7 @@ kernel::LiteKernel *CpuDropoutFp32KernelCreator(const std::vector<lite::Tensor *
     MS_LOG(ERROR) << "Dropout desc type should be " << schema::PrimitiveType_Dropout << " got " << desc.type;
     return nullptr;
   }
-  auto *kernel = new (std::nothrow) DropoutCPUKernel(opParameter, inputs, outputs, ctx, primitive);
+  auto *kernel = new (std::nothrow) DropoutCPUKernel(opParameter, inputs, outputs, ctx);
   if (kernel == nullptr) {
     MS_LOG(ERROR) << "Dropout new kernel failed.";
     return nullptr;
