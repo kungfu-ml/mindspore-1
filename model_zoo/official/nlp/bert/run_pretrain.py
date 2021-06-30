@@ -291,5 +291,5 @@ def run_pretrain():
 
 
 if __name__ == '__main__':
-    set_seed(0)
+    set_seed(1)
     run_pretrain()
