@@ -33,7 +33,7 @@ export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore
     -np $RANK_SIZE \
     -logfile kungfu-run.log \
     -logdir ./log \
-    python run_squad.py  \
+    python run_squad_kungfu.py  \
         --device_target="GPU" \
         --distribute="true" \
         --do_train="true" \

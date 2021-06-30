@@ -25,11 +25,12 @@ export CUDA_VISIBLE_DEVICES=0
 
 mkdir -p ms_log
 CUR_DIR=`pwd`
-PROJECT_DIR=$(cd "$(dirname "$0")" || exit; pwd)
 export GLOG_log_dir=${CUR_DIR}/ms_log
-export GLOG_logtostderr=0
 
-python ${PROJECT_DIR}/../run_squad.py  \
+. /home/marcel/Mindspore/kungfu-mindspore/ld_library_path.sh
+export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore/mindspore)
+
+python run_squad.py  \
     --device_target="GPU" \
     --do_train="true" \
     --do_eval="true" \

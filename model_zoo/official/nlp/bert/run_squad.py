@@ -35,12 +35,13 @@ from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint, TimeMon
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 import mindspore.communication.management as D
 from mindspore.context import ParallelMode
+from mindspore.train.serialization import save_checkpoint
 
 _cur_dir = os.getcwd()
 
 """ seed """
-#  from mindspore.common import set_seed
-#  set_seed(1)
+from mindspore.common import set_seed
+set_seed(1)
 
 
 def _set_bert_all_reduce_split():
@@ -114,7 +115,10 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     model = Model(netwithgrads)
     callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
 
-    """ callbacks """
+    # SAVE CHECKPOINT
+    #  save_checkpoint(network, "./marcel.ckpt")
+
+    # CALLBACKS 
     if distributed:
         rank = D.get_rank()
         summary_path = "./summary_{}".format(rank)
