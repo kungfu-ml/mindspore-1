@@ -33,17 +33,12 @@ from mindspore.train.model import Model
 from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint, TimeMonitor,
                                       SummaryCollector, LossMonitor)
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
-import mindspore.communication.management as D
-from mindspore.context import ParallelMode
 import mindspore.ops.operations.kungfu_comm_ops as kfops
 from mindspore.common import set_seed
+from src.kungfu_mindspore_optimizer import KungFuLamb
 
 
 _cur_dir = os.getcwd()
-
-
-def _set_bert_all_reduce_split():
-    context.set_auto_parallel_context(parameter_broadcast=True)
 
 
 def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoint_path="",
@@ -72,7 +67,7 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
                                        warmup_steps=int(steps_per_epoch * epoch_num * 0.1),
                                        decay_steps=steps_per_epoch * epoch_num,
                                        power=optimizer_cfg.Lamb.power)
-        optimizer = Lamb(network.trainable_params(), learning_rate=lr_schedule)
+        optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
     elif optimizer_cfg.optimizer == 'Momentum':
         optimizer = Momentum(network.trainable_params(), learning_rate=optimizer_cfg.Momentum.learning_rate,
                              momentum=optimizer_cfg.Momentum.momentum)
@@ -95,7 +90,7 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
     """ callbacks """
     if distributed:
-        rank = D.get_rank()
+        rank = kfops.kungfu_current_rank()
         summary_path = "./summary_{}".format(rank)
     else:
         summary_path = "./summary"
@@ -192,7 +187,6 @@ def run_squad():
     else:
         distributed = False
     if distributed:
-        D.init()
         kfops.init(args_opt.device_target)
         device_num = kfops.kungfu_current_cluster_size() 
         rank = kfops.kungfu_current_rank()
@@ -200,11 +194,6 @@ def run_squad():
 
         save_finetune_checkpoint_path = os.path.join(save_finetune_checkpoint_path,
                                                      "ckpt_" + str(rank))
-
-        context.reset_auto_parallel_context()
-        context.set_auto_parallel_context(parallel_mode=ParallelMode.DATA_PARALLEL, gradients_mean=True,
-                                          device_num=device_num)
-        _set_bert_all_reduce_split()
     else:
         device_num = 1
         rank = 0
@@ -228,10 +217,6 @@ def run_squad():
                                   schema_file_path=args_opt.schema_file_path,
                                   do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
                                   device_num=device_num, rank=rank)
-        # DEBUGGING
-        print("DEBUGGING")
-        ds_size = ds.get_dataset_size()
-        print("Size {}".format(ds_size))
 
         do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,
                 epoch_num, distributed)
