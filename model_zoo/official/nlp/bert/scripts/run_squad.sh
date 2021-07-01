@@ -39,11 +39,11 @@ python run_squad.py  \
     --num_class=2 \
     --train_data_shuffle="true" \
     --eval_data_shuffle="false" \
-    --train_batch_size=8 \
+    --train_batch_size=24 \
     --eval_batch_size=1 \
     --vocab_file_path="/home/marcel/Mindspore/bert_uncased_L-12_H-768_A-12/vocab.txt" \
     --save_finetune_checkpoint_path="./checkpoint" \
-    --load_pretrain_checkpoint_path="/home/marcel/Mindspore/bert_base.ckpt" \
+    --load_pretrain_checkpoint_path="/home/marcel/Mindspore/bert_base_squad.ckpt" \
     --train_data_file_path="/data/squad1/train.tf_record" \
     --eval_json_path="/data/squad1/dev-v1.1.json" \
     --schema_file_path="/home/marcel/Mindspore/squad_schema.json" > squad_log.txt 2>&1

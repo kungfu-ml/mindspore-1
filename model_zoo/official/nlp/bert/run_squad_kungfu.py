@@ -36,14 +36,10 @@ from mindspore.train.serialization import load_checkpoint, load_param_into_net
 import mindspore.communication.management as D
 from mindspore.context import ParallelMode
 import mindspore.ops.operations.kungfu_comm_ops as kfops
+from mindspore.common import set_seed
 
 
 _cur_dir = os.getcwd()
-
-
-""" seed """
-from mindspore.common import set_seed
-set_seed(1)
 
 
 def _set_bert_all_reduce_split():
@@ -196,10 +192,11 @@ def run_squad():
     else:
         distributed = False
     if distributed:
+        D.init()
         kfops.init(args_opt.device_target)
         device_num = kfops.kungfu_current_cluster_size() 
         rank = kfops.kungfu_current_rank()
-        print('kungfu rank=%d, size=%d' % (rank, size))
+        print("kungfu rank={}, size={}".format(rank, device_num))
 
         save_finetune_checkpoint_path = os.path.join(save_finetune_checkpoint_path,
                                                      "ckpt_" + str(rank))
@@ -231,6 +228,11 @@ def run_squad():
                                   schema_file_path=args_opt.schema_file_path,
                                   do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
                                   device_num=device_num, rank=rank)
+        # DEBUGGING
+        print("DEBUGGING")
+        ds_size = ds.get_dataset_size()
+        print("Size {}".format(ds_size))
+
         do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,
                 epoch_num, distributed)
         if args_opt.do_eval.lower() == "true":
@@ -272,6 +274,9 @@ def run_squad():
 
         SQuad_postprocess(args_opt.eval_json_path, all_predictions, output_metrics=output_path)
 
+    kfops.finalize(args_opt.device_target)
+
 
 if __name__ == "__main__":
+    set_seed(1)
     run_squad()
