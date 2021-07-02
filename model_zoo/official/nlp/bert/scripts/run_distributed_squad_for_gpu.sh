@@ -21,7 +21,7 @@ echo "for example: bash scripts/run_squad.sh"
 echo "assessment_method include: [Accuracy]"
 echo "=============================================================================================================="
 
-RANK_SIZE=4
+RANK_SIZE=2
 EPOCH_SIZE=1
 DATA_DIR="/data/squad1/train.tf_record"
 SCHEMA_DIR="/home/marcel/Mindspore/squad_schema.json"
@@ -40,9 +40,9 @@ export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore
         --device_id=0 \
         --epoch_num=${EPOCH_SIZE} \
         --num_class=2 \
-        --train_data_shuffle="false" \
+        --train_data_shuffle="true" \
         --eval_data_shuffle="false" \
-        --train_batch_size=6 \
+        --train_batch_size=12 \
         --eval_batch_size=1 \
         --vocab_file_path="/home/marcel/Mindspore/bert_uncased_L-12_H-768_A-12/vocab.txt" \
         --save_finetune_checkpoint_path="./checkpoint" \
