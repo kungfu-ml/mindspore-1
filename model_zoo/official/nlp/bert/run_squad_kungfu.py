@@ -193,7 +193,7 @@ def run_squad():
         distributed = False
     if distributed:
         kfops.init(args_opt.device_target)
-        device_num = kfops.kungfu_current_cluster_size() 
+        device_num = kfops.kungfu_current_cluster_size()
         rank = kfops.kungfu_current_rank()
         print("kungfu rank={}, size={}".format(rank, device_num))
 

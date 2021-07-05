@@ -26,6 +26,8 @@ EPOCH_SIZE=1
 DATA_DIR="/data/squad1/train.tf_record"
 SCHEMA_DIR="/home/marcel/Mindspore/squad_schema.json"
 
+export CUDA_VISIBLE_DEVICES=1,2
+
 . /home/marcel/Mindspore/kungfu-mindspore/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore/mindspore)
 
@@ -33,6 +35,7 @@ export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore
     -np $RANK_SIZE \
     -logfile kungfu-run.log \
     -logdir ./log \
+    -port-range 10500-11000 \
     python run_squad_kungfu.py  \
         --device_target="GPU" \
         --distribute="true" \
