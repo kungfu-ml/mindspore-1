@@ -39,7 +39,7 @@ python run_squad.py  \
     --num_class=2 \
     --train_data_shuffle="true" \
     --eval_data_shuffle="false" \
-    --train_batch_size=24 \
+    --train_batch_size=12 \
     --eval_batch_size=1 \
     --vocab_file_path="/home/marcel/Mindspore/bert_uncased_L-12_H-768_A-12/vocab.txt" \
     --save_finetune_checkpoint_path="./checkpoint" \
