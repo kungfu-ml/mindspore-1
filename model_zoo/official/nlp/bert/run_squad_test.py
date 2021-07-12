@@ -19,7 +19,7 @@ import argparse
 import collections
 import os
 
-from src.lamb import Lamb
+import mindspore
 import mindspore.common.dtype as mstype
 import mindspore.communication.management as D
 import numpy as np
@@ -32,7 +32,9 @@ from mindspore.nn.optim import AdamWeightDecay, Momentum
 from mindspore.nn.wrap.loss_scale import DynamicLossScaleUpdateCell
 from mindspore.train.callback import (CheckpointConfig, LossMonitor,
                                       ModelCheckpoint, SummaryCollector,
-                                      TimeMonitor)
+                                      TimeMonitor, _InternalCallbackParam)
+from mindspore.train.dataset_helper import (DatasetHelper,
+                                            connect_network_with_dataset)
 from mindspore.train.model import Model
 from mindspore.train.serialization import (load_checkpoint,
                                            load_param_into_net,
@@ -42,6 +44,7 @@ from src.bert_for_finetune import BertSquad, BertSquadCell
 from src.dataset import create_squad_dataset
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
 from src.kungfu_mindspore_optimizer import KungFuLambDebug
+from src.lamb import Lamb
 from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
                        make_directory)
 
@@ -97,8 +100,7 @@ def do_train(dataset=None,
             warmup_steps=int(steps_per_epoch * epoch_num * 0.1),
             decay_steps=steps_per_epoch * epoch_num,
             power=optimizer_cfg.Lamb.power)
-        optimizer = Lamb(network.trainable_params(),
-                                    learning_rate=lr_schedule)
+        optimizer = Lamb(network.trainable_params(), learning_rate=lr_schedule)
     elif optimizer_cfg.optimizer == 'Momentum':
         optimizer = Momentum(
             network.trainable_params(),
@@ -132,9 +134,6 @@ def do_train(dataset=None,
         LossCallBack(dataset.get_dataset_size()), ckpoint_cb
     ]
 
-    # SAVE CHECKPOINT
-    #  save_checkpoint(network, "./marcel.ckpt")
-
     # CALLBACKS
     if distributed:
         rank = D.get_rank()
@@ -144,10 +143,83 @@ def do_train(dataset=None,
     callbacks.append(SummaryCollector(summary_path))
     callbacks.append(LossMonitor())
 
-    model.train(epoch_num,
-                dataset,
-                callbacks=callbacks,
-                dataset_sink_mode=False)
+    print("parallel: {}".format(model._parallel_mode))
+    a_or_b = False
+    if a_or_b:
+        cb_params = _InternalCallbackParam()
+        cb_params.train_network = model._build_train_network()
+        cb_params.epoch_num = 1
+        cb_params.mode = "train"
+        cb_params.train_dataset = dataset
+
+        for next_element in iter(dataset):
+            outputs = model._train_network(*next_element)
+            return
+    else:  # b
+        cb_params = _InternalCallbackParam()
+        cb_params.train_network = model._build_train_network()
+        cb_params.epoch_num = 1
+        cb_params.mode = "train"
+        cb_params.train_dataset = dataset
+
+        dataset_helper = DatasetHelper(dataset, False, -1, cb_params.epoch_num)
+
+        model._train_network.set_train(True)
+
+        for next_element in dataset_helper:
+            outputs = model._train_network(*next_element)
+            return
+    return
+
+    def _transfer_tensor_to_tuple(inputs):
+        if isinstance(inputs, Tensor):
+            print("inputs is Tensor")
+            return (inputs, )
+        return inputs
+
+    cb_params = _InternalCallbackParam()
+    cb_params.train_network = model._build_train_network(
+    )  # checked netwithgrads
+    cb_params.epoch_num = 1
+    cb_params.batch_num = dataset.get_dataset_size()
+    cb_params.mode = "train"  # checked "eval"
+    cb_params.loss_fn = None
+    cb_params.optimizer = None
+    cb_params.parallel_mode = mindspore.context.ParallelMode.STAND_ALONE  # checked None
+    cb_params.device_number = 1
+    cb_params.train_dataset = dataset
+    cb_params.list_callback = model._transform_callbacks(None)
+    cb_params.train_dataset_element = None
+    cb_params.network = netwithgrads
+
+    # _exec_preprocess(network, is_train, phase, dataset, dataset_sink_mode,
+    #    sink_size=-1, epoch_num=1, dataset_helper=None)
+    dataset_helper, _ = model._exec_preprocess(cb_params.train_network,
+                                               is_train=True,
+                                               phase=cb_params.mode,
+                                               dataset=dataset,
+                                               dataset_sink_mode=False,
+                                               epoch_num=cb_params.epoch_num)
+
+    cb_params.cur_step_num = 0
+    cb_params.dataset_sink_mode = False  # checked True
+
+    for i in range(cb_params.epoch_num):
+        cb_params.cur_epoch_num = i + 1
+
+        # checked for next_element in iter(dataset):
+        for next_element in dataset_helper:
+            next_element = _transfer_tensor_to_tuple(next_element)
+            cb_params.cur_step_num += 1
+
+            cb_params.train_dataset_element = next_element
+            outputs = model._train_network(*next_element)
+            cb_params.net_outputs = outputs
+
+        dataset.reset()
+
+        # if param is cache enable, flush data from cache to host before epoch end
+        model._flush_from_cache(cb_params)
 
 
 def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
