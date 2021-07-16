@@ -28,7 +28,7 @@ from mindspore import log as logger
 from mindspore.common import set_seed
 from mindspore.common.tensor import Tensor
 from mindspore.context import ParallelMode
-from mindspore.nn.optim import AdamWeightDecay, Momentum
+from mindspore.nn.optim import AdamWeightDecay, Lamb, Momentum
 from mindspore.nn.wrap.loss_scale import DynamicLossScaleUpdateCell
 from mindspore.train.callback import (CheckpointConfig, LossMonitor,
                                       ModelCheckpoint, SummaryCollector,
@@ -43,8 +43,6 @@ from mindspore.train.serialization import (load_checkpoint,
 from src.bert_for_finetune import BertSquad, BertSquadCell
 from src.dataset import create_squad_dataset
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
-from src.kungfu_mindspore_optimizer import KungFuLambDebug
-from src.lamb import Lamb
 from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
                        make_directory)
 
