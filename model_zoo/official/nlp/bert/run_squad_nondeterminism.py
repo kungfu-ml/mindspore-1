@@ -365,6 +365,10 @@ def run_squad():
     else:
         raise Exception("Target error, GPU or Ascend is supported.")
 
+    # DEBUGGING
+    print("bert net cfg num_hidden_layers")
+    print(bert_net_cfg.num_hidden_layers)
+
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     if args_opt.do_train.lower() == "true":

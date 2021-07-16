@@ -13,6 +13,6 @@ mccmp() {
 }
 
 mccmp \
-    ./checkpoint/init-train-net.ckpt \
-    ./checkpoint/final-train-net.ckpt \
+    ./checkpoint_0/final-train-net.ckpt \
+    ./checkpoint_1/final-train-net.ckpt \
     > diff-init-final-net.txt

@@ -22,7 +22,7 @@ echo "==========================================================================
 
 DEVICE_ID=0
 EPOCH_SIZE=1
-DATA_DIR="/data/enwiki/tfrecord"
+DATA_DIR="/data/enwiki/tfrecord_one"
 SCHEMA_DIR="/home/marcel/Mindspore/pretraining_schema.json"
 
 export CUDA_VISIBLE_DEVICES=$DEVICE_ID

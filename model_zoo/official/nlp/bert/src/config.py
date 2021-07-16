@@ -15,40 +15,69 @@
 """
 network config setting, will be used in dataset.py, run_pretrain.py
 """
-from easydict import EasyDict as edict
 import mindspore.common.dtype as mstype
+from easydict import EasyDict as edict
+
 from .bert_model import BertConfig
+
 cfg = edict({
-    'batch_size': 32,
-    'bert_network': 'base',
-    'loss_scale_value': 65536,
-    'scale_factor': 2,
-    'scale_window': 1000,
-    'optimizer': 'Lamb',
-    'enable_global_norm': False,
-    'AdamWeightDecay': edict({
-        'learning_rate': 3e-5,
-        'end_learning_rate': 0.0,
-        'power': 5.0,
-        'weight_decay': 1e-5,
-        'decay_filter': lambda x: 'layernorm' not in x.name.lower() and 'bias' not in x.name.lower(),
-        'eps': 1e-6,
-        'warmup_steps': 10000,
+    'batch_size':
+    32,
+    'bert_network':
+    'tiny',
+    'loss_scale_value':
+    65536,
+    'scale_factor':
+    2,
+    'scale_window':
+    1000,
+    'optimizer':
+    'Lamb',
+    'enable_global_norm':
+    False,
+    'AdamWeightDecay':
+    edict({
+        'learning_rate':
+        3e-5,
+        'end_learning_rate':
+        0.0,
+        'power':
+        5.0,
+        'weight_decay':
+        1e-5,
+        'decay_filter':
+        lambda x: 'layernorm' not in x.name.lower() and 'bias' not in x.name.
+        lower(),
+        'eps':
+        1e-6,
+        'warmup_steps':
+        10000,
     }),
-    'Lamb': edict({
-        'learning_rate': 3e-4,
-        'end_learning_rate': 0.0,
-        'power': 2.0,
-        'warmup_steps': 10000,
-        'weight_decay': 0.01,
-        'decay_filter': lambda x: 'layernorm' not in x.name.lower() and 'bias' not in x.name.lower(),
-        'eps': 1e-8,
+    'Lamb':
+    edict({
+        'learning_rate':
+        3e-4,
+        'end_learning_rate':
+        0.0,
+        'power':
+        2.0,
+        'warmup_steps':
+        10000,
+        'weight_decay':
+        0.01,
+        'decay_filter':
+        lambda x: 'layernorm' not in x.name.lower() and 'bias' not in x.name.
+        lower(),
+        'eps':
+        1e-8,
     }),
-    'Momentum': edict({
+    'Momentum':
+    edict({
         'learning_rate': 2e-5,
         'momentum': 0.9,
     }),
-    'Thor': edict({
+    'Thor':
+    edict({
         'lr_max': 0.0034,
         'lr_min': 3.244e-5,
         'lr_power': 1.0,
@@ -63,7 +92,6 @@ cfg = edict({
         'frequency': 100,
     }),
 })
-
 '''
 Including two kinds of network: \
 base: Google BERT-base(the base version of BERT model).
@@ -72,58 +100,69 @@ large: BERT-NEZHA(a Chinese pretrained language model developed by Huawei, which
 '''
 if cfg.bert_network == 'base':
     cfg.batch_size = 16
-    bert_net_cfg = BertConfig(
-        seq_length=128,
-        vocab_size=30522,
-        hidden_size=768,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        intermediate_size=3072,
-        hidden_act="gelu",
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
-        max_position_embeddings=512,
-        type_vocab_size=2,
-        initializer_range=0.02,
-        use_relative_positions=False,
-        dtype=mstype.float32,
-        compute_type=mstype.float16
-    )
+    bert_net_cfg = BertConfig(seq_length=128,
+                              vocab_size=30522,
+                              hidden_size=768,
+                              num_hidden_layers=12,
+                              num_attention_heads=12,
+                              intermediate_size=3072,
+                              hidden_act="gelu",
+                              hidden_dropout_prob=0.1,
+                              attention_probs_dropout_prob=0.1,
+                              max_position_embeddings=512,
+                              type_vocab_size=2,
+                              initializer_range=0.02,
+                              use_relative_positions=False,
+                              dtype=mstype.float32,
+                              compute_type=mstype.float16)
 if cfg.bert_network == 'nezha':
     cfg.batch_size = 96
-    bert_net_cfg = BertConfig(
-        seq_length=128,
-        vocab_size=21128,
-        hidden_size=1024,
-        num_hidden_layers=24,
-        num_attention_heads=16,
-        intermediate_size=4096,
-        hidden_act="gelu",
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
-        max_position_embeddings=512,
-        type_vocab_size=2,
-        initializer_range=0.02,
-        use_relative_positions=True,
-        dtype=mstype.float32,
-        compute_type=mstype.float16
-    )
+    bert_net_cfg = BertConfig(seq_length=128,
+                              vocab_size=21128,
+                              hidden_size=1024,
+                              num_hidden_layers=24,
+                              num_attention_heads=16,
+                              intermediate_size=4096,
+                              hidden_act="gelu",
+                              hidden_dropout_prob=0.1,
+                              attention_probs_dropout_prob=0.1,
+                              max_position_embeddings=512,
+                              type_vocab_size=2,
+                              initializer_range=0.02,
+                              use_relative_positions=True,
+                              dtype=mstype.float32,
+                              compute_type=mstype.float16)
 if cfg.bert_network == 'large':
     cfg.batch_size = 24
-    bert_net_cfg = BertConfig(
-        seq_length=512,
-        vocab_size=30522,
-        hidden_size=1024,
-        num_hidden_layers=24,
-        num_attention_heads=16,
-        intermediate_size=4096,
-        hidden_act="gelu",
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
-        max_position_embeddings=512,
-        type_vocab_size=2,
-        initializer_range=0.02,
-        use_relative_positions=False,
-        dtype=mstype.float32,
-        compute_type=mstype.float16
-    )
+    bert_net_cfg = BertConfig(seq_length=512,
+                              vocab_size=30522,
+                              hidden_size=1024,
+                              num_hidden_layers=24,
+                              num_attention_heads=16,
+                              intermediate_size=4096,
+                              hidden_act="gelu",
+                              hidden_dropout_prob=0.1,
+                              attention_probs_dropout_prob=0.1,
+                              max_position_embeddings=512,
+                              type_vocab_size=2,
+                              initializer_range=0.02,
+                              use_relative_positions=False,
+                              dtype=mstype.float32,
+                              compute_type=mstype.float16)
+if cfg.bert_network == 'tiny':
+    cfg.batch_size = 8
+    bert_net_cfg = BertConfig(seq_length=128,
+                              vocab_size=30522,
+                              hidden_size=128,
+                              num_hidden_layers=2,
+                              num_attention_heads=2,
+                              intermediate_size=512,
+                              hidden_act="gelu",
+                              hidden_dropout_prob=0.1,
+                              attention_probs_dropout_prob=0.1,
+                              max_position_embeddings=512,
+                              type_vocab_size=2,
+                              initializer_range=0.02,
+                              use_relative_positions=False,
+                              dtype=mstype.float32,
+                              compute_type=mstype.float16)
