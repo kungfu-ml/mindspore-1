@@ -143,83 +143,20 @@ def do_train(dataset=None,
     callbacks.append(SummaryCollector(summary_path))
     callbacks.append(LossMonitor())
 
-    print("parallel: {}".format(model._parallel_mode))
-    a_or_b = False
-    if a_or_b:
-        cb_params = _InternalCallbackParam()
-        cb_params.train_network = model._build_train_network()
-        cb_params.epoch_num = 1
-        cb_params.mode = "train"
-        cb_params.train_dataset = dataset
-
-        for next_element in iter(dataset):
-            outputs = model._train_network(*next_element)
-            return
-    else:  # b
-        cb_params = _InternalCallbackParam()
-        cb_params.train_network = model._build_train_network()
-        cb_params.epoch_num = 1
-        cb_params.mode = "train"
-        cb_params.train_dataset = dataset
-
-        dataset_helper = DatasetHelper(dataset, False, -1, cb_params.epoch_num)
-
-        model._train_network.set_train(True)
-
-        for next_element in dataset_helper:
-            outputs = model._train_network(*next_element)
-            return
-    return
-
-    def _transfer_tensor_to_tuple(inputs):
-        if isinstance(inputs, Tensor):
-            print("inputs is Tensor")
-            return (inputs, )
-        return inputs
-
+    # TRAIN
     cb_params = _InternalCallbackParam()
-    cb_params.train_network = model._build_train_network(
-    )  # checked netwithgrads
+    cb_params.train_network = model._build_train_network()
     cb_params.epoch_num = 1
-    cb_params.batch_num = dataset.get_dataset_size()
-    cb_params.mode = "train"  # checked "eval"
-    cb_params.loss_fn = None
-    cb_params.optimizer = None
-    cb_params.parallel_mode = mindspore.context.ParallelMode.STAND_ALONE  # checked None
-    cb_params.device_number = 1
+    cb_params.mode = "train"
     cb_params.train_dataset = dataset
-    cb_params.list_callback = model._transform_callbacks(None)
-    cb_params.train_dataset_element = None
-    cb_params.network = netwithgrads
 
-    # _exec_preprocess(network, is_train, phase, dataset, dataset_sink_mode,
-    #    sink_size=-1, epoch_num=1, dataset_helper=None)
-    dataset_helper, _ = model._exec_preprocess(cb_params.train_network,
-                                               is_train=True,
-                                               phase=cb_params.mode,
-                                               dataset=dataset,
-                                               dataset_sink_mode=False,
-                                               epoch_num=cb_params.epoch_num)
+    dataset_helper = DatasetHelper(dataset, False, -1, cb_params.epoch_num)
 
-    cb_params.cur_step_num = 0
-    cb_params.dataset_sink_mode = False  # checked True
+    model._train_network.set_train(True)
 
-    for i in range(cb_params.epoch_num):
-        cb_params.cur_epoch_num = i + 1
-
-        # checked for next_element in iter(dataset):
-        for next_element in dataset_helper:
-            next_element = _transfer_tensor_to_tuple(next_element)
-            cb_params.cur_step_num += 1
-
-            cb_params.train_dataset_element = next_element
-            outputs = model._train_network(*next_element)
-            cb_params.net_outputs = outputs
-
-        dataset.reset()
-
-        # if param is cache enable, flush data from cache to host before epoch end
-        model._flush_from_cache(cb_params)
+    for next_element in dataset_helper:
+        outputs = model._train_network(*next_element)
+        return
 
 
 def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
