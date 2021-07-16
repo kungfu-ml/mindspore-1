@@ -143,6 +143,13 @@ def do_train(dataset=None,
     callbacks.append(SummaryCollector(summary_path))
     callbacks.append(LossMonitor())
 
+    # CHECKPOINT
+    save_checkpoint(network, save_checkpoint_path + "/init.ckpt")
+    save_checkpoint(netwithgrads,
+                    save_checkpoint_path + "/init-with-grads.ckpt")
+    save_checkpoint(model._train_network,
+                    save_checkpoint_path + "/init-train-net.ckpt")
+
     # TRAIN
     cb_params = _InternalCallbackParam()
     cb_params.train_network = model._build_train_network()
@@ -155,8 +162,11 @@ def do_train(dataset=None,
     model._train_network.set_train(True)
 
     for next_element in dataset_helper:
-        outputs = model._train_network(*next_element)
-        return
+        _ = model._train_network(*next_element)
+
+    # CHECKPOINT
+    save_checkpoint(model._train_network,
+                    save_checkpoint_path + "/final-train-net.ckpt")
 
 
 def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
