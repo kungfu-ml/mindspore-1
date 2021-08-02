@@ -21,7 +21,7 @@ echo "for example: bash scripts/run_squad.sh"
 echo "assessment_method include: [Accuracy]"
 echo "=============================================================================================================="
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2,3
 
 mkdir -p ms_log
 CUR_DIR=`pwd`
@@ -30,6 +30,7 @@ export GLOG_log_dir=${CUR_DIR}/ms_log
 . /home/marcel/Elasticity/Repository/kungfu-mindspore/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Elasticity/Repository/kungfu-mindspore/mindspore)
 
+kungfu-run -np 2 \
 python run_squad_training_state.py  \
     --device_target="GPU" \
     --do_train="true" \
