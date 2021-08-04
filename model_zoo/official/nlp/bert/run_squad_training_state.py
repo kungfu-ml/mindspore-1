@@ -19,6 +19,7 @@ import argparse
 import collections
 import os
 
+import kungfu.python as kfpy
 import mindspore.common.dtype as mstype
 import mindspore.communication.management as D
 import numpy as np
