@@ -37,12 +37,13 @@ from mindspore.train.serialization import (load_checkpoint,
                                            load_param_into_net,
                                            save_checkpoint)
 
-from manager import TrainingState, TrainingStateCallback, TrainingStateManager
 from src.bert_for_finetune import BertSquad, BertSquadCell
 from src.dataset import create_squad_dataset
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
 from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
                        make_directory)
+
+from manager import TrainingState, TrainingStateCallback, TrainingStateManager
 
 _cur_dir = os.getcwd()
 

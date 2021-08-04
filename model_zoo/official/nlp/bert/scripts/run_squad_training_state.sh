@@ -30,7 +30,7 @@ export GLOG_log_dir=${CUR_DIR}/ms_log
 . /home/marcel/Elasticity/Repository/kungfu-mindspore/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Elasticity/Repository/kungfu-mindspore/mindspore)
 
-kungfu-run -np 2 \
+/home/marcel/KungFu/kungfu/bin/kungfu-run -np 2 \
 python run_squad_training_state.py  \
     --device_target="GPU" \
     --do_train="true" \
