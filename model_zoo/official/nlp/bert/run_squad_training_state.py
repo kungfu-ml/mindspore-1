@@ -20,7 +20,6 @@ import argparse
 import collections
 import os
 
-import kungfu.python as kfpy
 import mindspore.common.dtype as mstype
 import mindspore.ops.operations.kungfu_comm_ops as kfops
 from mindspore import context
@@ -34,7 +33,7 @@ from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint,
 from mindspore.train.model import Model
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
-#  from manager import TrainingState, TrainingStateCallback, TrainingStateManager
+from manager import TrainingState, TrainingStateCallback, TrainingStateManager
 from src.bert_for_finetune import BertSquad, BertSquadCell
 from src.callback import KungFuSummaryCallback
 from src.dataset import create_squad_dataset
@@ -102,11 +101,10 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     callbacks.append(KungFuSummaryCallback(summary_path))
 
     # TRAINING STATE
-    # DEBUG
-    #  training_state = TrainingState(dataset, model, optimizer)
-    #  training_state_manager = TrainingStateManager(training_state)
-    #  training_state_callback = TrainingStateCallback(training_state_manager, "GPU")
-    #  callbacks.append(training_state_callback)
+    training_state = TrainingState(dataset, model, optimizer)
+    training_state_manager = TrainingStateManager(training_state)
+    training_state_callback = TrainingStateCallback(training_state_manager, "GPU")
+    callbacks.append(training_state_callback)
 
     model.train(epoch_num,
                 dataset,

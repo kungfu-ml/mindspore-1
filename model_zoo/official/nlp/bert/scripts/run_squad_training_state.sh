@@ -7,15 +7,17 @@ EPOCH_SIZE=1
 DATA_DIR="/data/squad1/train.tf_record"
 SCHEMA_DIR="/data/squad1/squad_schema.json"
 
-
 . /home/marcel/Elasticity/Repository/kungfu-mindspore/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Elasticity/Repository/kungfu-mindspore/mindspore)
 
+export KUNGFU_NO_AUTO_INIT=1
+
 /home/marcel/KungFu/kungfu/bin/kungfu-run \
+    -v \
     -np $RANK_SIZE \
     -logfile kungfu-run.log \
     -logdir ./log \
-    -port-range 10500-11000 \
+    -port-range 10900-11000 \
     python run_squad_training_state.py  \
         --device_target="GPU" \
         --distribute="true" \
