@@ -110,7 +110,12 @@ def create_squad_dataset(batch_size=1, repeat_count=1, data_file_path=None, sche
     """create finetune or evaluation dataset"""
     type_cast_op = C.TypeCast(mstype.int32)
     if is_training:
-        data_set = ds.TFRecordDataset([data_file_path], schema_file_path if schema_file_path != "" else None,
+        data_file_list = []
+        if isinstance(data_file_path, str):
+            data_file_list = [data_file_path]
+        else:
+            data_file_list = data_file_path
+        data_set = ds.TFRecordDataset(data_file_list, schema_file_path if schema_file_path != "" else None,
                                       columns_list=["input_ids", "input_mask", "segment_ids", "start_positions",
                                                     "end_positions", "unique_ids", "is_impossible"],
                                       shuffle=do_shuffle,

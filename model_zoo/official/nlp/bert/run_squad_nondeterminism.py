@@ -19,7 +19,6 @@ import argparse
 import collections
 import os
 
-import mindspore
 import mindspore.common.dtype as mstype
 import mindspore.communication.management as D
 import numpy as np
@@ -32,9 +31,7 @@ from mindspore.nn.optim import AdamWeightDecay, Lamb, Momentum
 from mindspore.nn.wrap.loss_scale import DynamicLossScaleUpdateCell
 from mindspore.train.callback import (CheckpointConfig, LossMonitor,
                                       ModelCheckpoint, SummaryCollector,
-                                      TimeMonitor, _InternalCallbackParam)
-from mindspore.train.dataset_helper import (DatasetHelper,
-                                            connect_network_with_dataset)
+                                      TimeMonitor)
 from mindspore.train.model import Model
 from mindspore.train.serialization import (load_checkpoint,
                                            load_param_into_net,
@@ -45,6 +42,8 @@ from src.dataset import create_squad_dataset
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
 from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
                        make_directory)
+
+from checkpoint_callback import CheckpointCallback
 
 _cur_dir = os.getcwd()
 
@@ -112,7 +111,8 @@ def do_train(dataset=None,
     # load checkpoint into network
     ckpt_config = CheckpointConfig(save_checkpoint_steps=250,
                                    keep_checkpoint_max=10)
-    #  ckpt_config = CheckpointConfig(save_checkpoint_steps=steps_per_epoch, keep_checkpoint_max=1)
+    #  ckpt_config = CheckpointConfig(save_checkpoint_steps=steps_per_epoch,
+    #  keep_checkpoint_max=1)
     ckpoint_cb = ModelCheckpoint(
         prefix="squad",
         directory=None if save_checkpoint_path == "" else save_checkpoint_path,
@@ -140,38 +140,24 @@ def do_train(dataset=None,
         summary_path = "./summary"
     callbacks.append(SummaryCollector(summary_path))
     callbacks.append(LossMonitor())
+    # Checkpoint callback
+    callbacks.append(CheckpointCallback(model, 50, save_checkpoint_path))
 
-    # CHECKPOINT
-    save_checkpoint(network, save_checkpoint_path + "/init.ckpt")
-    save_checkpoint(netwithgrads,
-                    save_checkpoint_path + "/init-with-grads.ckpt")
-    save_checkpoint(model._train_network,
-                    save_checkpoint_path + "/init-train-net.ckpt")
+    # DEBUGGING
+    # model parameters
+    params = list(model.train_network.get_parameters())
+    params_str = [str(param) for param in params]
+    params_one_str = "\n".join(params_str)
+    with open("parameters.txt", "w") as f:
+        f.write(params_one_str)
 
-    # TRAIN
-    cb_params = _InternalCallbackParam()
-    cb_params.train_network = model._build_train_network()
-    cb_params.epoch_num = 1
-    cb_params.mode = "train"
-    cb_params.train_dataset = dataset
-
-    dataset_helper = DatasetHelper(dataset, False, -1, cb_params.epoch_num)
-
-    model._train_network.set_train(True)
-
-    for next_element in dataset_helper:
-        _ = model._train_network(*next_element)
-
-    # CHECKPOINT
-    save_checkpoint(model._train_network,
-                    save_checkpoint_path + "/final-train-net.ckpt")
+    model.train(epoch_num,
+                dataset,
+                callbacks=callbacks,
+                dataset_sink_mode=False)
 
 
 def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
-    # DEBUGGING
-    ids_list = []
-    start_list = []
-    end_list = []
     """ do eval """
     if load_checkpoint_path == "":
         raise ValueError(
@@ -200,11 +186,6 @@ def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
         start = logits[1].asnumpy()
         end = logits[2].asnumpy()
 
-        # DEBUGGING
-        ids_list.append(ids)
-        start_list.append(start)
-        end_list.append(end)
-
         for i in range(eval_batch_size):
             unique_id = int(ids[i])
             start_logits = [float(x) for x in start[i].flat]
@@ -213,14 +194,6 @@ def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
                 RawResult(unique_id=unique_id,
                           start_logits=start_logits,
                           end_logits=end_logits))
-
-    # DEBUGGING
-    ids_np = np.stack(ids_list)
-    np.save("./eval_ids.npy", ids_np)
-    start_np = np.stack(start_list)
-    np.save("./eval_start.npy", start_np)
-    end_np = np.stack(end_list)
-    np.save("./eval_end.npy", end_np)
 
     return output
 
@@ -355,10 +328,7 @@ def run_squad():
                             device_target="Ascend",
                             device_id=args_opt.device_id)
     elif target == "GPU":
-        # DEBUGGING
-        context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
-
-        #  context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+        context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
             bert_net_cfg.compute_type = mstype.float32

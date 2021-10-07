@@ -3,8 +3,8 @@ set -e
 
 export CUDA_VISIBLE_DEVICES=3
 
-. /home/marcel/Mindspore/kungfu-mindspore/ld_library_path.sh
-export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Mindspore/kungfu-mindspore/mindspore)
+. /home/marcel/Elasticity/Repository/kungfu-mindspore/ld_library_path.sh
+export LD_LIBRARY_PATH=$(ld_library_path /home/marcel/Elasticity/Repository/kungfu-mindspore/mindspore)
 
 python run_squad_nondeterminism.py  \
     --device_target="GPU" \
@@ -19,7 +19,7 @@ python run_squad_nondeterminism.py  \
     --eval_batch_size=1 \
     --vocab_file_path="/home/marcel/Mindspore/bert_uncased_L-12_H-768_A-12/vocab.txt" \
     --save_finetune_checkpoint_path="./checkpoint" \
-    --load_pretrain_checkpoint_path="/home/marcel/Mindspore/bert_base_squad.ckpt" \
-    --train_data_file_path="/data/squad1/train_12.tf_record" \
+    --load_pretrain_checkpoint_path="/data/bert/bert_base_squad.ckpt" \
+    --train_data_file_path="/data/squad1/train.tf_record" \
     --eval_json_path="/data/squad1/dev-v1.1.json" \
-    --schema_file_path="/home/marcel/Mindspore/squad_schema.json" > squad.log 2>&1
+    --schema_file_path="/data/squad1/squad_schema.json" > squad.log 2>&1
