@@ -111,16 +111,16 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
         summary_path = "./summary.csv"
     callbacks.append(KungFuSummaryCallback(summary_path))
 
-    # CHECKPOINT
-    path = "./checkpoint"
-    callbacks.append(CheckpointCallback(model, path))
-
     # ELASTIC
-    max_progress = 1024
+    max_progress = 88641
     es = ElasticState(max_progress - DROPPED, True)
 
-    schedule = {25: 2, 27: 0}
-    schedule_cb = ElasticScheduleCallback(es, schedule)
+    path = "./checkpoint"
+    callbacks.append(CheckpointCallback(es, model, path))
+
+    schedule = {500: 2, 1000: 3, 1500: 4, 2000: 1, 2500: 2, 3000: 4, 3500: 1, 4000: 2, 4500: 3,
+            5000: 4}
+    schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
 
@@ -244,7 +244,8 @@ def run_squad():
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     # ELASTICITY
-    index_path = "/data/squad1/tf-index-1.idx.txt"
+    home = os.getenv("HOME")
+    index_path = os.path.join(home, "data/squad1/tf-index-1.idx.txt")
     global GLOBAL_BATCH_SIZE
     GLOBAL_BATCH_SIZE = args_opt.train_batch_size
     print("before create_tf_records")

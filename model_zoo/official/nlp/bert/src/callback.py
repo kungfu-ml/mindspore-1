@@ -29,17 +29,19 @@ class KungFuSummaryCallback(ms.train.callback.Callback):
 
 
 class CheckpointCallback(ms.train.callback.Callback):
-    def __init__(self, model, path):
+    def __init__(self, elastic_state, model, path):
         self._model = model
         self._path = path
+        self._elastic_state = elastic_state
+        self._every_step = 400
 
     def step_end(self, run_context):
-        cb_params = run_context.original_args()
-        step_num = cb_params.cur_step_num
+        progress = self._elastic_state._progress
         rank = current_rank()
-        ckpt_name = "model-{}-{}.ckpt".format(rank, step_num)
-        save_checkpoint(self._model.train_network,
-                        os.path.join(self._path, ckpt_name))
+        ckpt_name = "model-{}-{}.ckpt".format(rank, progress)
+        if progress % self._every_step == 0:
+            save_checkpoint(self._model.train_network,
+                            os.path.join(self._path, ckpt_name))
 
 
 def write_checkpoint(model, path, rank, step):
@@ -98,7 +100,7 @@ def save_step(es, step):
 
 
 class ElasticScheduleCallback(ms.train.callback.Callback):
-    def __init__(self, es, schedule):
+    def __init__(self, es, schedule, model):
         self._es = es
         self._schedule = schedule
         self._rank = current_rank()
@@ -112,6 +114,8 @@ class ElasticScheduleCallback(ms.train.callback.Callback):
 
         self._proc_start = int(os.getenv('KUNGFU_PROC_START_TIMESTAMP'))
         self._local_step = 0
+
+        self._model = model
 
     def begin(self, run_context):
         pass
@@ -147,6 +151,9 @@ class ElasticScheduleCallback(ms.train.callback.Callback):
             if current_rank() == 0:
                 new_size = self._schedule[self._step]
                 propose_new_size(new_size)
+
+                save_checkpoint(self._model.train_network,
+                                "./checkpoint/model.ckpt")
 
     def end(self, run_context):
         if self._rank == 0:
