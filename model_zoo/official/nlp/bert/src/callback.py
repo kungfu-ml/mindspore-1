@@ -33,13 +33,13 @@ class CheckpointCallback(ms.train.callback.Callback):
         self._model = model
         self._path = path
         self._elastic_state = elastic_state
-        self._every_step = 400
+        self._every_step = 666
 
     def step_end(self, run_context):
         progress = self._elastic_state._progress
         rank = current_rank()
         ckpt_name = "model-{}-{}.ckpt".format(rank, progress)
-        if progress % self._every_step == 0:
+        if progress % self._every_step == 0 and progress > 0:
             save_checkpoint(self._model.train_network,
                             os.path.join(self._path, ckpt_name))
 
