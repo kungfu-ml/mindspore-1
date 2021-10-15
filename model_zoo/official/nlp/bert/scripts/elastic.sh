@@ -38,7 +38,7 @@ python -m kungfu.cmd.elastic_run \
         --num_class=2 \
         --train_data_shuffle="true" \
         --eval_data_shuffle="false" \
-        --train_batch_size=16 \
+        --train_batch_size=8 \
         --eval_batch_size=1 \
         --vocab_file_path="${DATA_DIR}/bert/bert_uncased_L-12_H-768_A-12/vocab.txt" \
         --save_finetune_checkpoint_path="./checkpoint" \
