@@ -4,8 +4,8 @@
 
 RANK_SIZE=1
 EPOCH_SIZE=1
-DATA_DIR="${HOME}/data"
-REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
+DATA_DIR="/data"
+REPO_DIR="${HOME}/Elasticity/Repository/kungfu-mindspore"
 
 . ${REPO_DIR}/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
@@ -18,8 +18,8 @@ fi
 mkdir ${CKPT_DIR}
 cp ${DATA_DIR}/bert/bert_base_squad.ckpt ${CKPT_DIR}/model.ckpt
 
-# kungfu-run \
-python -m kungfu.cmd.elastic_run \
+# python -m kungfu.cmd.elastic_run \
+kungfu-run \
     -np $RANK_SIZE \
     -logfile kungfu-run.log \
     -logdir ./log \

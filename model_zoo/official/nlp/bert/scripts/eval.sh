@@ -2,7 +2,7 @@
 set -e
 
 DATA_DIR="${HOME}/data"
-REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
+REPO_DIR="${HOME}/Elasticity/Repository/kungfu-mindspore"
 
 . ${REPO_DIR}/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)

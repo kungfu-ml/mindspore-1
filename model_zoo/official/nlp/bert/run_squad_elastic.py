@@ -36,8 +36,8 @@ from mindspore.train.model import Model
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
 from src.bert_for_finetune import BertSquad, BertSquadCell
-from src.callback import (ElasticScheduleCallback, KungFuSummaryCallback, 
-                          CheckpointCallback)
+from src.callback import (CheckpointCallback, ElasticScheduleCallback,
+                          KungFuSummaryCallback)
 from src.dataset import create_squad_dataset
 from src.elastic_state import ElasticCallback, ElasticState
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
@@ -118,8 +118,8 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-    schedule = {1600: 2, 3200: 1, 4800: 3, 5600: 4, 16000: 3, 32000: 2, 48000: 1,
-                56000: 2, 72000: 3}
+    schedule = {1600: 2, 3200: 3, 4800: 4, 5600: 3, 16000: 2, 32000: 1, 48000: 2,
+                56000: 3, 72000: 4}
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
@@ -244,8 +244,7 @@ def run_squad():
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     # ELASTICITY
-    home = os.getenv("HOME")
-    index_path = os.path.join(home, "data/squad1/tf-index-1.idx.txt")
+    index_path = "/data/squad1/tf-index-1.idx.txt"
     global GLOBAL_BATCH_SIZE
     GLOBAL_BATCH_SIZE = args_opt.train_batch_size
     print("before create_tf_records")

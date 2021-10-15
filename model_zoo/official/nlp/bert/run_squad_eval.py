@@ -94,7 +94,7 @@ def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
 def extract_rank_progress(path):
     import re
 
-    pattern = r".*model-(\d+)*-(\d+)*.ckpt"
+    pattern = r"(.)*model-(\d+)*-(\d+)*.ckpt"
     match = re.search(pattern, path)
     if match is None:
         print("Regex match of entry name is None")
@@ -111,6 +111,7 @@ def in_tread(args_opt, dataset, checkpoints, eval_examples,
     from src.squad_postprocess import SQuad_postprocess
 
     for entry in checkpoints:
+        print("GPU {} starts with {}".format(gpu_id, entry.name))
         outputs = do_eval(dataset, entry.path, args_opt.eval_batch_size)
         all_predictions = write_predictions(eval_examples, eval_features,
                                             outputs, 20, 30, True)
@@ -299,20 +300,21 @@ def run_squad():
         rank=rank)
 
     # THREADS
-    import threading
+    import multiprocessing as mp
     num_gpus = args_opt.num_gpus
     entries = os.scandir(args_opt.checkpoint_path)
     entries_splits = split_list(list(entries), num_gpus)
-    threads = []
-    for i, split in enumerate(entries_splits):
-        thr = threading.Thread(target=in_tread,
-                               args=(args_opt, dataset, split, eval_examples,
-                                     eval_features, i))
-        thr.start()
-        threads.append(thr)
 
-    for thr in threads:
-        thr.join()
+    processes = []
+    for i, split in enumerate(entries_splits):
+        proc = mp.Process(target=in_tread,
+                          args=(args_opt, dataset, split, eval_examples,
+                                eval_features, i))
+        proc.start()
+        processes.append(proc)
+
+    for proc in processes:
+        proc.join()
 
 
 
