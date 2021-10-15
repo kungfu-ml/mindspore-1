@@ -88,47 +88,27 @@ class DebugTwoCallback(ms.train.callback.Callback):
 def ckpt(es):
     return 'progress-%010d.log' % (es._progress)
 
-
-def read_step(es):
-    with open(ckpt(es)) as f:
-        return int(f.read().strip())
-
-
-def save_step(es, step):
+def save_progress(es, progress):
     with open(ckpt(es), 'w') as f:
-        f.write('%d\n' % (step))
-
+        f.write('%d\n' % (progress))
 
 class ElasticScheduleCallback(ms.train.callback.Callback):
     def __init__(self, es, schedule, model):
         self._es = es
         self._schedule = schedule
         self._rank = current_rank()
-        self._step = 0
-        if self._es._progress > 0:
-            # all ranks should read
-            self._step = read_step(self._es)
 
         if self._rank == 0:
-            print('starting from step %d' % (self._step))
+            print('starting from progress %d' % (self._es._progress))
 
         self._proc_start = int(os.getenv('KUNGFU_PROC_START_TIMESTAMP'))
         self._local_step = 0
 
         self._model = model
 
-    def begin(self, run_context):
-        pass
-
-    def epoch_begin(self, run_context):
-        pass
-
-    def epoch_end(self, run_context):
-        pass
-
     def step_begin(self, run_context):
         if self._rank == 0:
-            print('running step %d' % (self._step))
+            print('running progress %d' % (self._es._progress))
 
         if self._rank == 0 and self._local_step == 0:
             d = time.time() - self._proc_start
@@ -137,26 +117,27 @@ class ElasticScheduleCallback(ms.train.callback.Callback):
         self._step_begin_ts = time.time()
 
     def step_end(self, run_context):
+        progress = self._es._progress
         step_took = time.time() - self._step_begin_ts
 
-        self._step += 1
         self._local_step += 1
         if self._rank == 0:
             if self._local_step == 1:
                 d = time.time() - self._proc_start
                 print('first step END after reload took %.fs' % (d))
-            print('local step %d took %.fs' % (self._local_step, step_took))
+            print('progress %d took %.fs' % (progress, step_took))
 
-        if self._step in self._schedule:
+        if self._es._progress in self._schedule:
             if current_rank() == 0:
-                new_size = self._schedule[self._step]
+                new_size = self._schedule[progress]
                 propose_new_size(new_size)
 
                 save_checkpoint(self._model.train_network,
                                 "./checkpoint/model.ckpt")
 
     def end(self, run_context):
+        progress = self._es._progress
         if self._rank == 0:
-            # only save from 0
-            save_step(self._es, self._step)
-            print('stopping at step %d' % (self._step))
+            save_progress(self._es, progress)
+            print('stopping at progress %d' % (progress))
+

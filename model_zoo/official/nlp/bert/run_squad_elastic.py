@@ -118,8 +118,8 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-    schedule = {500: 2, 1000: 1, 1500: 2, 2000: 1, 2500: 2, 3000: 1, 3500: 2, 4000: 1,
-                4500: 2, 5000: 1}
+    schedule = {1600: 2, 3200: 1, 4800: 3, 5600: 4, 16000: 3, 32000: 2, 48000: 1,
+                56000: 2, 72000: 3}
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))

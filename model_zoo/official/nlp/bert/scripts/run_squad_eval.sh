@@ -15,7 +15,7 @@ export KUNGFU_NO_AUTO_INIT=1
 
 python run_squad.py  \
     --device_target="GPU" \
-    --do_train="true" \
+    --do_train="false" \
     --do_eval="true" \
     --device_id=0 \
     --epoch_num=1 \
