@@ -16,41 +16,22 @@
 Bert finetune and evaluation script.
 '''
 import argparse
-import collections
-import os
 
 import mindspore as ms
 import mindspore.common.dtype as mstype
-import mindspore.communication.management as D
-import numpy as np
 from mindspore import context
 from mindspore import log as logger
 from mindspore.common.tensor import Tensor
-from mindspore.context import ParallelMode
-from mindspore.nn.optim import AdamWeightDecay, Lamb, Momentum
-from mindspore.nn.wrap.loss_scale import DynamicLossScaleUpdateCell
-from mindspore.train.callback import (CheckpointConfig, LossMonitor,
-                                      ModelCheckpoint, SummaryCollector,
-                                      TimeMonitor)
 from mindspore.train.model import Model
-from mindspore.train.serialization import (load_checkpoint,
-                                           load_param_into_net,
-                                           save_checkpoint)
+from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
-from src.bert_for_finetune import BertSquad, BertSquadCell
+from src.bert_for_finetune import BertSquad
 from src.dataset import create_squad_dataset
-from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
-from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
-                       make_directory)
-
-_cur_dir = os.getcwd()
-
-
-def _set_bert_all_reduce_split():
-    context.set_auto_parallel_context(parameter_broadcast=True)
+from src.finetune_eval_config import bert_net_cfg
 
 
 def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
+    import collections
     """ do eval """
     if load_checkpoint_path == "":
         raise ValueError(
@@ -104,15 +85,30 @@ def extract_rank_progress(path):
     return rank, progress
 
 
-def in_tread(args_opt, dataset, checkpoints, eval_examples,
+def in_tread(args_opt, checkpoints, eval_examples,
              eval_features, gpu_id):
-    ms.context.set_context(device_id=gpu_id)
+    import time
+
     from src.squad_get_predictions import write_predictions
     from src.squad_postprocess import SQuad_postprocess
 
+    ms.context.set_context(device_id=gpu_id)
+
     for entry in checkpoints:
         print("GPU {} starts with {}".format(gpu_id, entry.name))
+        dataset = create_squad_dataset(
+            batch_size=args_opt.eval_batch_size,
+            repeat_count=1,
+            data_file_path=eval_features,
+            schema_file_path=args_opt.schema_file_path,
+            is_training=False,
+            do_shuffle=(args_opt.eval_data_shuffle.lower() == "true"),
+            device_num=gpu_id,
+            rank=0)
+        start = time.time()
         outputs = do_eval(dataset, entry.path, args_opt.eval_batch_size)
+        duration = time.time() - start
+        print(f"do eval duration {duration}")
         all_predictions = write_predictions(eval_examples, eval_features,
                                             outputs, 20, 30, True)
 
@@ -132,6 +128,7 @@ def split_list(li: list, num_pieces: int):
 
 
 def run_squad():
+    import os
     """run squad task"""
     parser = argparse.ArgumentParser(description="run squad")
     parser.add_argument("--device_target",
@@ -239,33 +236,9 @@ def run_squad():
             raise ValueError(
                 "'tokenization_file_path' must be set when do evaluation task")
     """ distributed """
-    if args_opt.distribute.lower() == "true":
-        distributed = True
-    else:
-        distributed = False
-    if distributed:
-        D.init()
-        device_num = D.get_group_size()
-        rank = D.get_rank()
-        save_finetune_checkpoint_path = os.path.join(
-            save_finetune_checkpoint_path, "ckpt_" + str(rank))
-
-        context.reset_auto_parallel_context()
-        context.set_auto_parallel_context(
-            parallel_mode=ParallelMode.DATA_PARALLEL,
-            gradients_mean=True,
-            device_num=device_num)
-        _set_bert_all_reduce_split()
-    else:
-        device_num = 1
-        rank = 0
 
     target = args_opt.device_target
-    if target == "Ascend":
-        context.set_context(mode=context.GRAPH_MODE,
-                            device_target="Ascend",
-                            device_id=args_opt.device_id)
-    elif target == "GPU":
+    if target == "GPU":
         context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
@@ -289,15 +262,6 @@ def run_squad():
         is_training=False,
         output_fn=None,
         vocab_file=args_opt.vocab_file_path)
-    dataset = create_squad_dataset(
-        batch_size=args_opt.eval_batch_size,
-        repeat_count=1,
-        data_file_path=eval_features,
-        schema_file_path=args_opt.schema_file_path,
-        is_training=False,
-        do_shuffle=(args_opt.eval_data_shuffle.lower() == "true"),
-        device_num=device_num,
-        rank=rank)
 
     # THREADS
     import multiprocessing as mp
@@ -308,15 +272,14 @@ def run_squad():
     processes = []
     for i, split in enumerate(entries_splits):
         proc = mp.Process(target=in_tread,
-                          args=(args_opt, dataset, split, eval_examples,
+                          args=(args_opt, split,
+                                eval_examples,
                                 eval_features, i))
         proc.start()
         processes.append(proc)
 
     for proc in processes:
         proc.join()
-
-
 
 
 if __name__ == "__main__":

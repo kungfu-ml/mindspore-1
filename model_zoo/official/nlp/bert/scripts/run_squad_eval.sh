@@ -4,8 +4,8 @@ mkdir -p ms_log
 CUR_DIR=$(pwd -P)
 export GLOG_log_dir=${CUR_DIR}/ms_log
 
-DATA_DIR="/data"
-REPO_DIR="${HOME}/Elasticity/Repository/kungfu-mindspore"
+DATA_DIR="${HOME}/data"
+REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
 
 . ${REPO_DIR}/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
@@ -14,7 +14,7 @@ export KUNGFU_NO_AUTO_INIT=1
 python run_squad_eval.py  \
     --device_target="GPU" \
     --do_eval="true" \
-    --num_gpus=4 \
+    --num_gpus=2 \
     --num_class=2 \
     --train_data_shuffle="true" \
     --eval_data_shuffle="false" \
