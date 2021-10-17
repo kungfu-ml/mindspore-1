@@ -267,7 +267,8 @@ def run_squad():
     import multiprocessing as mp
     num_gpus = args_opt.num_gpus
     entries = os.scandir(args_opt.checkpoint_path)
-    entries_splits = split_list(list(entries), num_gpus)
+    entries = [entry for entry in entries if entry.is_file()]
+    entries_splits = split_list(entries, num_gpus)
 
     processes = []
     for i, split in enumerate(entries_splits):

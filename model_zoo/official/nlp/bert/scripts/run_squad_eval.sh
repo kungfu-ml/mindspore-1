@@ -14,7 +14,7 @@ export KUNGFU_NO_AUTO_INIT=1
 python run_squad_eval.py  \
     --device_target="GPU" \
     --do_eval="true" \
-    --num_gpus=2 \
+    --num_gpus=4 \
     --num_class=2 \
     --train_data_shuffle="true" \
     --eval_data_shuffle="false" \

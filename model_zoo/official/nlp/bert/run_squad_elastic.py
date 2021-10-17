@@ -118,8 +118,10 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-    schedule = {1600: 2, 3200: 3, 4800: 4, 5600: 3, 16000: 2, 32000: 1, 48000: 2,
-                56000: 3, 72000: 4}
+    #  schedule = {1600: 2, 3200: 3, 4800: 4, 5600: 3, 16000: 2, 32000: 1, 48000: 2,
+                #  56000: 3, 72000: 4}
+    schedule = {800: 4, 2400: 3, 8000: 2, 12000: 1, 24000: 4, 36000: 3, 42000: 2,
+                58000: 1, 68000: 4}
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
@@ -178,7 +180,7 @@ def run_squad():
     parser.add_argument("--do_eval", type=str, default="false", choices=["true", "false"],
                         help="Eable eval, default is false")
     parser.add_argument("--device_id", type=int, default=0, help="Device id, default is 0.")
-    parser.add_argument("--epoch_num", type=int, default=3, help="Epoch number, default is 1.")
+    parser.add_argument("--epoch_num", type=int, default=1, help="Epoch number, default is 1.")
     parser.add_argument("--num_class", type=int, default=2, help="The number of class, default is 2.")
     parser.add_argument("--train_data_shuffle", type=str, default="true", choices=["true", "false"],
                         help="Enable train data shuffle, default is true")
@@ -244,7 +246,8 @@ def run_squad():
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     # ELASTICITY
-    index_path = "/data/squad1/tf-index-1.idx.txt"
+    home = os.getenv("HOME")
+    index_path = os.path.join(home, "data/squad1/tf-index-1.idx.txt")
     global GLOBAL_BATCH_SIZE
     GLOBAL_BATCH_SIZE = args_opt.train_batch_size
     print("before create_tf_records")
