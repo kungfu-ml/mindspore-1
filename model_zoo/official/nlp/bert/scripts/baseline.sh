@@ -11,7 +11,6 @@ REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
 export KUNGFU_NO_AUTO_INIT=1
 export NCCL_P2P_LEVEL="NVL"
-# export NCCL_P2P_DISABLE=1
 
 CKPT_DIR="./checkpoint"
 if [ -d ${CKPT_DIR} ]; then
@@ -30,7 +29,7 @@ kungfu-run \
     -elastic-mode reload \
     -config-server http://127.0.0.1:9100/config \
     -builtin-config-port 9100 \
-    python run_squad_equivalence.py \
+    python run_squad_baseline_elastic.py \
         --device_target="GPU" \
         --distribute="true" \
         --do_train="true" \

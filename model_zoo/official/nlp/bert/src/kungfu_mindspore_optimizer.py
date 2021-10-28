@@ -60,18 +60,3 @@ class KungFuLamb(ms.nn.Lamb):
         mean_grads = self.hyper_map(F.partial(grad_scale, self.cluster_size),
                                     gradients)
         return super(KungFuLamb, self).construct(mean_grads)
-
-
-class KungFuLambDebug(ms.nn.Lamb):
-    def __init__(self, *args, **kwargs):
-        super(KungFuLambDebug, self).__init__(*args, **kwargs)
-        self.map_ = C.Map()
-        self.log_tensor = kfops.KungFuLogTensor()
-
-    def construct(self, gradients):
-        print("Type: {}".format(type(gradients[0])))
-        for i, grad in enumerate(gradients):
-            np.save("{}.npy".format(i), grad.asnumpy())
-
-        gradients = self.map_(self.log_tensor, gradients)
-        return super(KungFuLambDebug, self).construct(gradients)

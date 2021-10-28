@@ -60,36 +60,42 @@ def write_checkpoint(model, path, rank, step):
 class DebugCallback(ms.train.callback.Callback):
     def __init__(self, model):
         self._model = model
-        self._first_time = True
 
-    def check_for_change(self):
-        changed, detached = kfpy.resize()
-        return changed
-
-    def step_begin(self, run_context):
-        rank = kfpy.current_local_rank()
-        size = kfpy.current_cluster_size()
-        cb_params = run_context.original_args()
-        step = cb_params.cur_step_num
-        print("ElasticCallback step_begin {}".format(step))
-
-        if size == 2 and self._first_time:
-            self._first_time = False
-            write_checkpoint(self._model, "./checkpoint", rank, step)
-
-
-class DebugTwoCallback(ms.train.callback.Callback):
-    def __init__(self, model):
-        self._model = model
-
-    def step_begin(self, run_context):
-        cb_params = run_context.original_args()
+    def print_step(self, when, run_ctx):
+        cb_params = run_ctx.original_args()
         step = cb_params.cur_step_num
 
         params = list(self._model.train_network.get_parameters())
         for param in params:
             if param.name == "global_step":
-                print("step {}, global step {}".format(step, param.asnumpy()))
+                print("{}: step {}, global step {}".format(when, step, param.asnumpy()))
+
+    def step_begin(self, run_context):
+        self.print_step("step_begin", run_context)
+
+    def step_end(self, run_context):
+        self.print_step("step_end", run_context)
+
+
+class GlobalStepProgressCallback(ms.train.callback.Callback):
+    def __init__(self, model, elastic_state, global_batch_size):
+        self._model = model
+        self._elastic_state = elastic_state
+        self._global_batch_size = global_batch_size
+        self._global_step_offset = self._elastic_state._progress // global_batch_size
+        self._global_step = None
+        self._assign_op = ms.ops.Assign()
+
+    def step_begin(self, run_context):
+        cb_params = run_context.original_args()
+        step = cb_params.cur_step_num
+
+        if step == 1: # adjust global step only after rescale
+            for param in cb_params.train_network.get_parameters():
+                if param.name == "global_step":
+                    self._global_step = param
+                    break
+            self._assign_op(self._global_step, self._global_step + self._global_step_offset)
 
 
 def ckpt(es):

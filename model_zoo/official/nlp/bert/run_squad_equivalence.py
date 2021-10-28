@@ -37,7 +37,7 @@ from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
 from src.bert_for_finetune import BertSquad, BertSquadCell
 from src.callback import (CheckpointCallback, ElasticScheduleCallback,
-                          KungFuSummaryCallback)
+                          KungFuSummaryCallback, DebugCallback, GlobalStepProgressCallback)
 from src.dataset import create_squad_dataset
 from src.elastic_state import ElasticCallback, ElasticState
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
@@ -58,7 +58,10 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     """ do train """
     if load_checkpoint_path == "":
         raise ValueError("Pretrain model missed, finetune task must load pretrain model!")
-    steps_per_epoch = dataset.get_dataset_size()
+    #  steps_per_epoch = dataset.get_dataset_size()
+    steps_per_epoch = 2770 # HARDCODED
+    print("Dataset size {}".format(dataset.get_dataset_size())) # DEBUGGING
+    print("Optimiser {}".format(optimizer_cfg.optimizer)) # DEBUGGING
     # optimizer
     if optimizer_cfg.optimizer == 'AdamWeightDecay':
         lr_schedule = BertLearningRate(learning_rate=optimizer_cfg.AdamWeightDecay.learning_rate,
@@ -99,7 +102,6 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     netwithgrads = BertSquadCell(network, optimizer=optimizer, scale_update_cell=update_cell)
     model = Model(netwithgrads)
 
-    # DEBUGGING
     #  callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
     callbacks = []
 
@@ -113,18 +115,22 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
     # ELASTIC
     max_progress = 88641
+    print("max_progress {}".format(max_progress))
     es = ElasticState(max_progress - DROPPED, True)
 
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-    #  schedule = {1600: 2, 3200: 3, 4800: 4, 5600: 3, 16000: 2, 32000: 1, 48000: 2,
-                #  56000: 3, 72000: 4}
-    schedule = {800: 4, 2400: 3, 8000: 2, 12000: 1, 24000: 4, 36000: 3, 42000: 2,
-                58000: 1, 68000: 4}
+    callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
+
+    #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
+    schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
+    print("schedule {}".format(schedule))
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
+
+    callbacks.append(DebugCallback(model))
 
     model.train(epoch_num,
                 dataset,
