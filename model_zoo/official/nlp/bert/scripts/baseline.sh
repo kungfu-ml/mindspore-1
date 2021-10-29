@@ -3,9 +3,12 @@
 # export CUDA_VISIBLE_DEVICES=2,3
 
 RANK_SIZE=1
-EPOCH_SIZE=10 # ignored but should be high
+EPOCH_SIZE=1
 DATA_DIR="${HOME}/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
+
+export KUNGFU_CONFIG_LOG_LEVEL="DEBUG"
+export KUNGFU_CONFIG_ENABLE_STALL_DETECTION="true"
 
 . ${REPO_DIR}/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
@@ -26,7 +29,6 @@ kungfu-run \
     -logdir ./log \
     -port-range 10500-11000 \
     -w \
-    -elastic-mode reload \
     -config-server http://127.0.0.1:9100/config \
     -builtin-config-port 9100 \
     python run_squad_baseline_elastic.py \

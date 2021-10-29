@@ -16,40 +16,34 @@
 '''
 Bert finetune and evaluation script.
 '''
+import os
 import argparse
 import collections
-import os
-
+from src.bert_for_finetune import BertSquadCell, BertSquad
+from src.finetune_eval_config import optimizer_cfg, bert_net_cfg
+from src.dataset import create_squad_dataset
+from src.utils import (make_directory, LossCallBack, LoadNewestCkpt,
+                       BertLearningRate)
 import mindspore.common.dtype as mstype
-import mindspore.ops.operations.kungfu_comm_ops as kfops
-from kungfu.python.elastic import create_tf_records
 from mindspore import context
 from mindspore import log as logger
-from mindspore._c_expression import kungfu_nccl_finalize, kungfu_nccl_init
-from mindspore.common import set_seed
-from mindspore.common.tensor import Tensor
-from mindspore.nn.optim import AdamWeightDecay, Lamb, Momentum
 from mindspore.nn.wrap.loss_scale import DynamicLossScaleUpdateCell
-from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint,
-                                      SummaryCollector, TimeMonitor)
+from mindspore.nn.optim import AdamWeightDecay, Lamb, Momentum
+from mindspore.common.tensor import Tensor
 from mindspore.train.model import Model
-from mindspore.train.serialization import load_checkpoint, load_param_into_net
-
-from src.bert_for_finetune import BertSquad, BertSquadCell
-from src.callback import (CheckpointCallback, ElasticScheduleCallback,
-                          KungFuSummaryCallback, DebugCallback, GlobalStepProgressCallback)
-from src.dataset import create_squad_dataset
-from src.elastic_state import ElasticCallback, ElasticState
-from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
+from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint,
+                                      TimeMonitor, SummaryCollector)
+from mindspore.train.serialization import (load_checkpoint,
+                                           load_param_into_net)
+import mindspore.ops.operations.kungfu_comm_ops as kfops
+from mindspore.common import set_seed
 from src.kungfu_mindspore_optimizer import KungFuLamb
-from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
-                       make_directory)
+from src.elastic_state import ElasticCallback, ElasticState
+from src.callback import CheckpointCallback, ElasticScheduleCallback, KungFuSummaryCallback
+
 
 _cur_dir = os.getcwd()
 
-# HACK
-DROPPED = 0
-GLOBAL_BATCH_SIZE = 0
 SEED = 1
 
 
@@ -58,10 +52,7 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     """ do train """
     if load_checkpoint_path == "":
         raise ValueError("Pretrain model missed, finetune task must load pretrain model!")
-    #  steps_per_epoch = dataset.get_dataset_size()
-    steps_per_epoch = 2770 # HARDCODED
-    print("Dataset size {}".format(dataset.get_dataset_size())) # DEBUGGING
-    print("Optimiser {}".format(optimizer_cfg.optimizer)) # DEBUGGING
+    steps_per_epoch = dataset.get_dataset_size()
     # optimizer
     if optimizer_cfg.optimizer == 'AdamWeightDecay':
         lr_schedule = BertLearningRate(learning_rate=optimizer_cfg.AdamWeightDecay.learning_rate,
@@ -101,11 +92,9 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     update_cell = DynamicLossScaleUpdateCell(loss_scale_value=2**32, scale_factor=2, scale_window=1000)
     netwithgrads = BertSquadCell(network, optimizer=optimizer, scale_update_cell=update_cell)
     model = Model(netwithgrads)
+    callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
 
-    #  callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
-    callbacks = []
-
-    # Summary (loss)
+    # CALLBACK
     if distributed:
         rank = kfops.kungfu_current_rank()
         summary_path = "./summary_{}.csv".format(rank)
@@ -116,21 +105,20 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     # ELASTIC
     max_progress = 88641
     print("max_progress {}".format(max_progress))
-    es = ElasticState(max_progress - DROPPED, True)
+    es = ElasticState(max_progress, False)
 
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-    callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
 
     #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
-    schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
+    #  schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
+    schedule = {320: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
     print("schedule {}".format(schedule))
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
-    callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
-
-    callbacks.append(DebugCallback(model))
+    global_batch_size = 32
+    callbacks.append(ElasticCallback(es, global_batch_size))
 
     model.train(epoch_num,
                 dataset,
@@ -186,7 +174,7 @@ def run_squad():
     parser.add_argument("--do_eval", type=str, default="false", choices=["true", "false"],
                         help="Eable eval, default is false")
     parser.add_argument("--device_id", type=int, default=0, help="Device id, default is 0.")
-    parser.add_argument("--epoch_num", type=int, default=1, help="Epoch number, default is 1.")
+    parser.add_argument("--epoch_num", type=int, default=3, help="Epoch number, default is 1.")
     parser.add_argument("--num_class", type=int, default=2, help="The number of class, default is 2.")
     parser.add_argument("--train_data_shuffle", type=str, default="true", choices=["true", "false"],
                         help="Enable train data shuffle, default is true")
@@ -226,7 +214,6 @@ def run_squad():
         distributed = False
     if distributed:
         kfops.init(args_opt.device_target)
-        kungfu_nccl_init()
         device_num = kfops.kungfu_current_cluster_size()
         rank = kfops.kungfu_current_rank()
         print("kungfu rank={}, size={}".format(rank, device_num))
@@ -242,7 +229,6 @@ def run_squad():
         context.set_context(mode=context.GRAPH_MODE, device_target="Ascend", device_id=args_opt.device_id)
     elif target == "GPU":
         context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
-        #  context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
             bert_net_cfg.compute_type = mstype.float32
@@ -251,22 +237,9 @@ def run_squad():
 
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
-    # ELASTICITY
-    home = os.getenv("HOME")
-    index_path = os.path.join(home, "data/squad1/tf-index-1.idx.txt")
-    global GLOBAL_BATCH_SIZE
-    GLOBAL_BATCH_SIZE = args_opt.train_batch_size
-    print("before create_tf_records")
-    shard = create_tf_records(index_path, SEED, GLOBAL_BATCH_SIZE)
-    filenames = shard['filenames']
-    print("file names {}".format(filenames))
-    batch_size, _ = shard['batch_sizes'][0]
-    global DROPPED
-    DROPPED = shard['dropped']
-
     if args_opt.do_train.lower() == "true":
-        ds = create_squad_dataset(batch_size=batch_size, repeat_count=1,
-                                  data_file_path=filenames,
+        ds = create_squad_dataset(batch_size=args_opt.train_batch_size, repeat_count=1,
+                                  data_file_path=args_opt.train_data_file_path,
                                   schema_file_path=args_opt.schema_file_path,
                                   do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
                                   device_num=device_num, rank=rank)
@@ -283,8 +256,7 @@ def run_squad():
 
     if args_opt.do_eval.lower() == "true":
         from src import tokenization
-        from src.create_squad_data import (convert_examples_to_features,
-                                           read_squad_examples)
+        from src.create_squad_data import read_squad_examples, convert_examples_to_features
         from src.squad_get_predictions import write_predictions
         from src.squad_postprocess import SQuad_postprocess
         tokenizer = tokenization.FullTokenizer(vocab_file=args_opt.vocab_file_path, do_lower_case=True)
@@ -314,7 +286,6 @@ def run_squad():
         SQuad_postprocess(args_opt.eval_json_path, all_predictions, output_metrics=output_path)
 
     kfops.finalize(args_opt.device_target)
-    kungfu_nccl_finalize()
 
 
 if __name__ == "__main__":
