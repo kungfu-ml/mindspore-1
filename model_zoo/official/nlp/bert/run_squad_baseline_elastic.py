@@ -39,7 +39,8 @@ import mindspore.ops.operations.kungfu_comm_ops as kfops
 from mindspore.common import set_seed
 from src.kungfu_mindspore_optimizer import KungFuLamb
 from src.elastic_state import ElasticCallback, ElasticState
-from src.callback import CheckpointCallback, ElasticScheduleCallback, KungFuSummaryCallback
+from src.callback import (CheckpointCallback, ElasticScheduleCallback,
+                          KungFuSummaryCallback, GlobalStepProgressCallback)
 
 
 _cur_dir = os.getcwd()
@@ -92,7 +93,8 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     update_cell = DynamicLossScaleUpdateCell(loss_scale_value=2**32, scale_factor=2, scale_window=1000)
     netwithgrads = BertSquadCell(network, optimizer=optimizer, scale_update_cell=update_cell)
     model = Model(netwithgrads)
-    callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
+    #  callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
+    callbacks = []
 
     # CALLBACK
     if distributed:
@@ -105,20 +107,21 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     # ELASTIC
     max_progress = 88641
     print("max_progress {}".format(max_progress))
-    es = ElasticState(max_progress, False)
+    es = ElasticState(max_progress, True)
 
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-
     #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
     #  schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
-    schedule = {320: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
+    schedule = {}
     print("schedule {}".format(schedule))
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     global_batch_size = 32
     callbacks.append(ElasticCallback(es, global_batch_size))
+
+    callbacks.append(GlobalStepProgressCallback(model, es, global_batch_size))
 
     model.train(epoch_num,
                 dataset,

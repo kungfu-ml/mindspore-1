@@ -18,6 +18,7 @@ Bert finetune and evaluation script.
 '''
 import argparse
 import collections
+import json
 import os
 
 import mindspore.common.dtype as mstype
@@ -37,7 +38,7 @@ from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
 from src.bert_for_finetune import BertSquad, BertSquadCell
 from src.callback import (CheckpointCallback, ElasticScheduleCallback,
-                          KungFuSummaryCallback, DebugCallback, GlobalStepProgressCallback)
+                          GlobalStepProgressCallback, KungFuSummaryCallback)
 from src.dataset import create_squad_dataset
 from src.elastic_state import ElasticCallback, ElasticState
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
@@ -53,15 +54,35 @@ GLOBAL_BATCH_SIZE = 0
 SEED = 1
 
 
+def save_env_vars():
+    env_dict = {}
+
+    for k, v in os.environ.items():
+        env_dict[k] = v
+
+    with open("environment_variables.json", "w") as json_file:
+        json.dump(env_dict, json_file, indent=4)
+
+def save_python_args(args):
+    arg_dict = {}
+
+    arg_var = vars(args)
+    for k, v in arg_var.items():
+        arg_dict[k] = v
+
+    with open("python_arguments.json", "w") as json_file:
+        json.dump(arg_dict, json_file, indent=4)
+
+
 def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoint_path="",
              epoch_num=1, distributed=False):
     """ do train """
     if load_checkpoint_path == "":
         raise ValueError("Pretrain model missed, finetune task must load pretrain model!")
     #  steps_per_epoch = dataset.get_dataset_size()
-    steps_per_epoch = 2770 # HARDCODED
-    print("Dataset size {}".format(dataset.get_dataset_size())) # DEBUGGING
-    print("Optimiser {}".format(optimizer_cfg.optimizer)) # DEBUGGING
+    steps_per_epoch = 2770 # HARDCODED 88641//32
+    print("Dataset size {}".format(dataset.get_dataset_size()))
+    print("Optimiser {}".format(optimizer_cfg.optimizer))
     # optimizer
     if optimizer_cfg.optimizer == 'AdamWeightDecay':
         lr_schedule = BertLearningRate(learning_rate=optimizer_cfg.AdamWeightDecay.learning_rate,
@@ -77,10 +98,21 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
         optimizer = AdamWeightDecay(group_params, lr_schedule, eps=optimizer_cfg.AdamWeightDecay.eps)
     elif optimizer_cfg.optimizer == 'Lamb':
+        print("=== LEARNING RATE ===")
+        print("learning rate: {}".format(optimizer_cfg.Lamb.learning_rate))
+        print("end learning rate: {}".format(optimizer_cfg.Lamb.end_learning_rate))
+        print("step per epoch: {}".format(steps_per_epoch))
+        print("number of epochs: {}".format(epoch_num))
+        warmup_steps = int(steps_per_epoch * epoch_num * 0.1)
+        print("warmup steps: {}".format(warmup_steps))
+        decay_steps = steps_per_epoch * epoch_num
+        print("decay steps: {}".format(decay_steps))
+        print("power: {}".format(optimizer_cfg.Lamb.power))
+        print("=== LEARNING RATE ===")
         lr_schedule = BertLearningRate(learning_rate=optimizer_cfg.Lamb.learning_rate,
                                        end_learning_rate=optimizer_cfg.Lamb.end_learning_rate,
-                                       warmup_steps=int(steps_per_epoch * epoch_num * 0.1),
-                                       decay_steps=steps_per_epoch * epoch_num,
+                                       warmup_steps=warmup_steps,
+                                       decay_steps=decay_steps,
                                        power=optimizer_cfg.Lamb.power)
         optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
     elif optimizer_cfg.optimizer == 'Momentum':
@@ -118,21 +150,20 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     print("max_progress {}".format(max_progress))
     es = ElasticState(max_progress - DROPPED, True)
 
+    callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
+
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
-    callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
-
     #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
-    schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
+    #  schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
+    schedule = {}
     print("schedule {}".format(schedule))
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
 
-    callbacks.append(DebugCallback(model))
-
-    model.train(epoch_num,
+    model.train(100, # really high so that it does not stop too early, callback stops training
                 dataset,
                 callbacks=callbacks,
                 dataset_sink_mode=False)
@@ -209,6 +240,8 @@ def run_squad():
     save_finetune_checkpoint_path = args_opt.save_finetune_checkpoint_path
     load_finetune_checkpoint_path = args_opt.load_finetune_checkpoint_path
 
+    save_python_args(args_opt)
+
     if args_opt.do_train.lower() == "false" and args_opt.do_eval.lower() == "false":
         raise ValueError("At least one of 'do_train' or 'do_eval' must be true")
     if args_opt.do_train.lower() == "true" and args_opt.train_data_file_path == "":
@@ -268,7 +301,8 @@ def run_squad():
         ds = create_squad_dataset(batch_size=batch_size, repeat_count=1,
                                   data_file_path=filenames,
                                   schema_file_path=args_opt.schema_file_path,
-                                  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
+                                  #  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
+                                  do_shuffle=False, # debug
                                   device_num=device_num, rank=rank)
 
         do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,
@@ -318,5 +352,7 @@ def run_squad():
 
 
 if __name__ == "__main__":
+    save_env_vars()
+
     set_seed(SEED)
     run_squad()

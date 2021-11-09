@@ -84,6 +84,20 @@ def extract_rank_progress(path):
 
     return rank, progress
 
+def extract_rank_step(path):
+    import re
+
+    print(f"path {path}") # debug
+
+    pattern = r"squad-(\d+)_(\d+).ckpt"
+    match = re.search(pattern, path)
+    if match is None:
+        print("Regex match of entry name is None")
+    rank = int(match.group(1))
+    progress = int(match.group(2))
+
+    return rank, progress
+
 
 def in_tread(args_opt, checkpoints, eval_examples,
              eval_features, gpu_id):
@@ -112,8 +126,15 @@ def in_tread(args_opt, checkpoints, eval_examples,
         all_predictions = write_predictions(eval_examples, eval_features,
                                             outputs, 20, 30, True)
 
-        rank, progress = extract_rank_progress(entry.path)
+        using_progress = True
+        if using_progress:
+            rank, progress = extract_rank_progress(entry.path)
+        else:
+            rank, step = extract_rank_step(entry.path)
+            global_batch_size = 32
+            progress = step * global_batch_size
         output_path = "./output_{}_{}.json".format(rank, progress)
+
 
         SQuad_postprocess(args_opt.eval_json_path,
                           all_predictions,

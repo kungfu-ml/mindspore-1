@@ -89,6 +89,17 @@ def do_train(dataset=None,
                                     lr_schedule,
                                     eps=optimizer_cfg.AdamWeightDecay.eps)
     elif optimizer_cfg.optimizer == 'Lamb':
+        print("=== LEARNING RATE ===")
+        print("learning rate: {}".format(optimizer_cfg.Lamb.learning_rate))
+        print("end learning rate: {}".format(optimizer_cfg.Lamb.end_learning_rate))
+        print("step per epoch: {}".format(steps_per_epoch))
+        print("number of epochs: {}".format(epoch_num))
+        warmup_steps = int(steps_per_epoch * epoch_num * 0.1)
+        print("warmup steps: {}".format(warmup_steps))
+        decay_steps = steps_per_epoch * epoch_num
+        print("decay steps: {}".format(decay_steps))
+        print("power: {}".format(optimizer_cfg.Lamb.power))
+        print("=== LEARNING RATE ===")
         lr_schedule = BertLearningRate(
             learning_rate=optimizer_cfg.Lamb.learning_rate,
             end_learning_rate=optimizer_cfg.Lamb.end_learning_rate,
@@ -107,8 +118,8 @@ def do_train(dataset=None,
         )
 
     # load checkpoint into network
-    ckpt_config = CheckpointConfig(save_checkpoint_steps=250,
-                                   keep_checkpoint_max=10)
+    ckpt_config = CheckpointConfig(save_checkpoint_steps=50,
+                                   keep_checkpoint_max=1000)
     #  ckpt_config = CheckpointConfig(save_checkpoint_steps=steps_per_epoch,
     #  keep_checkpoint_max=1)
     ckpoint_cb = ModelCheckpoint(
@@ -317,6 +328,7 @@ def run_squad():
                             device_id=args_opt.device_id)
     elif target == "GPU":
         context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+        #  context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
             bert_net_cfg.compute_type = mstype.float32
@@ -326,14 +338,18 @@ def run_squad():
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     if args_opt.do_train.lower() == "true":
+        print("batch size: {}".format(args_opt.train_batch_size)) # debug
+
         ds = create_squad_dataset(
             batch_size=args_opt.train_batch_size,
             repeat_count=1,
             data_file_path=args_opt.train_data_file_path,
             schema_file_path=args_opt.schema_file_path,
-            do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
+            #  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
+            do_shuffle=False, # debug
             device_num=device_num,
             rank=rank)
+
         do_train(ds, netwithloss, load_pretrain_checkpoint_path,
                  save_finetune_checkpoint_path, epoch_num, distributed)
         if args_opt.do_eval.lower() == "true":

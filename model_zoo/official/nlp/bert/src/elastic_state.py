@@ -41,14 +41,10 @@ class ElasticCallback(ms.train.callback.Callback):
         print('ElasticCallback::step_begin')
         should_sync = self._elastic_state.begin()
 
-        print("A") # debug
-
         if should_sync:
             print(
                 'TODO: sync state to %d, no need to sync dataset state in reload mode'
                 % (self._elastic_state._progress))
-
-        print("B") # debug
 
         duration = time.time() - self._job_start
         p = (float(self._elastic_state._progress) /

@@ -16,13 +16,13 @@ export KUNGFU_NO_AUTO_INIT=1
 python run_squad.py  \
     --device_target="GPU" \
     --do_train="true" \
-    --do_eval="true" \
+    --do_eval="false" \
     --device_id=0 \
     --epoch_num=1 \
     --num_class=2 \
     --train_data_shuffle="true" \
     --eval_data_shuffle="false" \
-    --train_batch_size=12 \
+    --train_batch_size=32 \
     --eval_batch_size=1 \
     --vocab_file_path="${DATA_DIR}/bert/bert_uncased_L-12_H-768_A-12/vocab.txt" \
     --save_finetune_checkpoint_path="${CUR_DIR}/checkpoint" \

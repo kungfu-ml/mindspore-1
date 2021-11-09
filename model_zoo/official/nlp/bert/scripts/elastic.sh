@@ -2,8 +2,8 @@
 
 # export CUDA_VISIBLE_DEVICES=2,3
 
-RANK_SIZE=1
-EPOCH_SIZE=10 # ignored but should be high
+RANK_SIZE=2
+EPOCH_SIZE=1
 DATA_DIR="${HOME}/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
 
@@ -11,7 +11,7 @@ REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
 export KUNGFU_NO_AUTO_INIT=1
 export NCCL_P2P_LEVEL="NVL"
-# export NCCL_P2P_DISABLE=1
+export MAX_SAMPLE_PER_FILE=98642
 
 CKPT_DIR="./checkpoint"
 if [ -d ${CKPT_DIR} ]; then

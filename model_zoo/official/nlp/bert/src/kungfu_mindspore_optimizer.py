@@ -60,3 +60,44 @@ class KungFuLamb(ms.nn.Lamb):
         mean_grads = self.hyper_map(F.partial(grad_scale, self.cluster_size),
                                     gradients)
         return super(KungFuLamb, self).construct(mean_grads)
+
+
+class KungFuLambDebug(ms.nn.Lamb):
+    def __init__(self, *args, **kwargs):
+        super(KungFuLambDebug, self).__init__(*args, **kwargs)
+        self.map_ = C.Map()
+        self.all_reduce = KungFuAllReduce()
+
+        # FIXME: make it dynamic
+        cluster_size = float(kfops.kungfu_current_cluster_size())
+        scalar_shape = []
+        self.cluster_size = ms.Parameter(
+            ms.Tensor(
+                np.ones(scalar_shape) * cluster_size,
+                ms.int32,
+            ))
+
+        self._rank = kfops.kungfu_current_rank()
+
+    def construct(self, gradients):
+        gradients = self.map_(self.all_reduce, gradients)
+        mean_grads = self.hyper_map(F.partial(grad_scale, self.cluster_size),
+                                    gradients)
+
+        # debug
+        for i, grad in enumerate(mean_grads):
+            np.save("./grads/grad-{}-{}.npy".format(self._rank, i), grad.asnumpy())
+
+        return super(KungFuLambDebug, self).construct(mean_grads)
+
+
+class LambDebug(ms.nn.Lamb):
+    def __init__(self, *args, **kwargs):
+        super(LambDebug, self).__init__(*args, **kwargs)
+        self._rank = 0
+
+    def construct(self, gradients):
+        for i, grad in enumerate(gradients):
+            np.save("./grads/grad-{}-{}.npy".format(self._rank, i), grad.asnumpy())
+
+        return super(LambDebug, self).construct(gradients)

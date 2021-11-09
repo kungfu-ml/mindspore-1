@@ -51,6 +51,71 @@ class CheckpointCallback(ms.train.callback.Callback):
         self.save_checkpoint()
 
 
+class CheckpointPowerCallback(ms.train.callback.Callback):
+    def __init__(self, elastic_state, model, path):
+        self._model = model
+        self._path = path
+        self._elastic_state = elastic_state
+        self._batch_size = 32
+
+    def is_power_bs(self, progress):
+        current_value = self._batch_size
+        while current_value <= progress:
+            if progress == current_value:
+                return True
+            else:
+                current_value = current_value * 2
+        return False
+
+    def save_checkpoint(self):
+        progress = self._elastic_state._progress
+        rank = current_rank()
+        ckpt_name = "model-{}-{}.ckpt".format(rank, progress)
+        if self.is_power_bs(progress):
+            save_checkpoint(self._model.train_network,
+                            os.path.join(self._path, ckpt_name))
+
+
+    def step_end(self, run_context):
+        self.save_checkpoint()
+
+    def end(self, run_context):
+        self.save_checkpoint()
+
+
+class CheckpointPowerStepCallback(ms.train.callback.Callback):
+    def __init__(self, model, path):
+        self._model = model
+        self._path = path
+
+    def is_power_bs(self, step):
+        current_value = 1
+        while current_value <= step:
+            if step == current_value:
+                return True
+            else:
+                current_value = current_value * 2
+        return False
+
+    def save_checkpoint(self, step):
+        rank = 0
+        ckpt_name = "model-{}-{}.ckpt".format(rank, step)
+        if self.is_power_bs(step):
+            save_checkpoint(self._model.train_network,
+                            os.path.join(self._path, ckpt_name))
+
+
+    def step_end(self, run_context):
+        cb_params = run_context.original_args()
+        step = cb_params.cur_step_num
+        self.save_checkpoint(step)
+
+    def end(self, run_context):
+        cb_params = run_context.original_args()
+        step = cb_params.cur_step_num
+        self.save_checkpoint(step)
+
+
 def write_checkpoint(model, path, rank, step):
     ckpt_name = "model-{}-{}.ckpt".format(rank, step)
     save_checkpoint(model.train_network,
@@ -75,6 +140,39 @@ class DebugCallback(ms.train.callback.Callback):
 
     def step_end(self, run_context):
         self.print_step("step_end", run_context)
+
+
+class LogStepCallback(ms.train.callback.Callback):
+    def __init__(self, model):
+        self._model = model
+        self._begin_steps = []
+        self._end_steps = []
+        self._begin_path = "./begin_steps.npy"
+        self._end_path = "./end_steps.npy"
+
+    def get_steps(self, run_ctx):
+        cb_params = run_ctx.original_args()
+        step = cb_params.cur_step_num
+
+        params = list(self._model.train_network.get_parameters())
+        global_step = None
+        for param in params:
+            if param.name == "global_step":
+                global_step = param.asnumpy()
+
+        return [step, int(global_step)]
+
+    def step_begin(self, run_context):
+        step_pair = self.get_steps(run_context)
+        self._begin_steps.append(step_pair)
+        steps_np = np.array(self._begin_steps)
+        np.save(self._begin_path, steps_np)
+
+    def step_end(self, run_context):
+        step_pair = self.get_steps(run_context)
+        self._end_steps.append(step_pair)
+        steps_np = np.array(self._end_steps)
+        np.save(self._end_path, steps_np)
 
 
 class GlobalStepProgressCallback(ms.train.callback.Callback):
@@ -153,4 +251,15 @@ class ElasticScheduleCallback(ms.train.callback.Callback):
         if self._rank == 0:
             save_progress(self._es, progress)
             print('stopping at progress %d' % (progress))
+
+
+class StopAfterCallback(ms.train.callback.Callback):
+    def __init__(self, step):
+        self._step = step
+
+    def step_end(self, run_context):
+        cb_params = run_context.original_args()
+        step = cb_params.cur_step_num
+        if step == self._step:
+            run_context.request_stop()
 

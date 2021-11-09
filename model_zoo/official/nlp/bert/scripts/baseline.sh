@@ -2,7 +2,7 @@
 
 # export CUDA_VISIBLE_DEVICES=2,3
 
-RANK_SIZE=1
+RANK_SIZE=2
 EPOCH_SIZE=1
 DATA_DIR="${HOME}/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
@@ -29,6 +29,7 @@ kungfu-run \
     -logdir ./log \
     -port-range 10500-11000 \
     -w \
+    -elastic-mode reload \
     -config-server http://127.0.0.1:9100/config \
     -builtin-config-port 9100 \
     python run_squad_baseline_elastic.py \
