@@ -63,6 +63,7 @@ def save_env_vars():
     with open("environment_variables.json", "w") as json_file:
         json.dump(env_dict, json_file, indent=4)
 
+
 def save_python_args(args):
     arg_dict = {}
 
@@ -152,7 +153,7 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
     callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
 
-    path = "./checkpoint"
+    path = "/data/checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
     #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
@@ -285,8 +286,7 @@ def run_squad():
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     # ELASTICITY
-    home = os.getenv("HOME")
-    index_path = os.path.join(home, "data/squad1/tf-index-1.idx.txt")
+    index_path = "/data/squad1/tf-index-1.idx.txt"
     global GLOBAL_BATCH_SIZE
     GLOBAL_BATCH_SIZE = args_opt.train_batch_size
     print("before create_tf_records")
@@ -302,8 +302,7 @@ def run_squad():
                                   data_file_path=filenames,
                                   schema_file_path=args_opt.schema_file_path,
                                   #  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
-                                  do_shuffle=False, # debug
-                                  device_num=device_num, rank=rank)
+                                  do_shuffle=False)
 
         do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,
                 epoch_num, distributed)
@@ -335,8 +334,7 @@ def run_squad():
         ds = create_squad_dataset(batch_size=args_opt.eval_batch_size, repeat_count=1,
                                   data_file_path=eval_features,
                                   schema_file_path=args_opt.schema_file_path, is_training=False,
-                                  do_shuffle=(args_opt.eval_data_shuffle.lower() == "true"),
-                                  device_num=device_num, rank=rank)
+                                  do_shuffle=(args_opt.eval_data_shuffle.lower() == "true"))
         outputs = do_eval(ds, load_finetune_checkpoint_path, args_opt.eval_batch_size)
         all_predictions = write_predictions(eval_examples, eval_features, outputs, 20, 30, True)
 

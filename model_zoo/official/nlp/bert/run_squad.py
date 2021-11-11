@@ -50,6 +50,29 @@ def _set_bert_all_reduce_split():
     context.set_auto_parallel_context(parameter_broadcast=True)
 
 
+def debug_dataset(dataset, batch_size):
+    from hashlib import sha256
+
+    for batch in dataset:
+        hashes = []
+        for i, element in enumerate(batch):
+            hashes.append([])
+            element_np = element.asnumpy()
+            for sample in range(batch_size):
+                hashh = sha256(element_np[sample].data).hexdigest()
+                hashes[i].append(hashh)
+        break
+
+    num_elements = 7
+    with open("sample_hashes.txt", "w") as sample_file:
+        for sample in range(batch_size):
+            for element in range(num_elements):
+                if element == num_elements - 1:
+                    sample_file.write("{}\n".format(hashes[element][sample]))
+                else:
+                    sample_file.write("{} ".format(hashes[element][sample]))
+
+
 def do_train(dataset=None,
              network=None,
              load_checkpoint_path="",
@@ -349,6 +372,10 @@ def run_squad():
             do_shuffle=False, # debug
             device_num=device_num,
             rank=rank)
+
+        # debug
+        debug_dataset(ds, args_opt.train_batch_size)
+        return
 
         do_train(ds, netwithloss, load_pretrain_checkpoint_path,
                  save_finetune_checkpoint_path, epoch_num, distributed)
