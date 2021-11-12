@@ -17,17 +17,19 @@
 Functional Cells used in Bert finetune and evaluation.
 """
 
-import os
-import math
 import collections
-import numpy as np
+import math
+import os
+
 import mindspore.nn as nn
+import numpy as np
 from mindspore import log as logger
-from mindspore.ops import operations as P
-from mindspore.common.tensor import Tensor
 from mindspore.common import dtype as mstype
+from mindspore.common.tensor import Tensor
+from mindspore.nn.learning_rate_schedule import (LearningRateSchedule,
+                                                 PolynomialDecayLR, WarmUpLR)
+from mindspore.ops import operations as P
 from mindspore.train.callback import Callback
-from mindspore.nn.learning_rate_schedule import LearningRateSchedule, PolynomialDecayLR, WarmUpLR
 
 
 class CrossEntropyCalculation(nn.Cell):
@@ -48,6 +50,12 @@ class CrossEntropyCalculation(nn.Cell):
         self.is_training = is_training
 
     def construct(self, logits, label_ids, num_labels):
+        # debug
+        import mindspore.ops.operations.kungfu_comm_ops as kfops
+        rank = kfops.kungfu_current_rank()
+        path = f"./logits-{rank}.npy"
+        np.save(path, logits.asnumpy())
+
         if self.is_training:
             label_ids = self.reshape(label_ids, self.last_idx)
             one_hot_labels = self.onehot(label_ids, num_labels, self.on_value, self.off_value)

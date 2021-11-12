@@ -43,8 +43,7 @@ from src.dataset import create_squad_dataset
 from src.elastic_state import ElasticCallback, ElasticState
 from src.finetune_eval_config import bert_net_cfg, optimizer_cfg
 from src.kungfu_mindspore_optimizer import KungFuLamb
-from src.utils import (BertLearningRate, LoadNewestCkpt, LossCallBack,
-                       make_directory)
+from src.utils import BertLearningRate, LoadNewestCkpt, make_directory
 
 _cur_dir = os.getcwd()
 
@@ -115,7 +114,11 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
                                        warmup_steps=warmup_steps,
                                        decay_steps=decay_steps,
                                        power=optimizer_cfg.Lamb.power)
-        optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
+        #  optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
+        from src.kungfu_mindspore_optimizer import KungFuLambDebug
+        optimizer = KungFuLambDebug(network.trainable_params(), learning_rate=lr_schedule)
+        #  from src.kungfu_mindspore_optimizer import KungFuLambDebugModel
+        #  optimizer = KungFuLambDebugModel(network.trainable_params(), learning_rate=lr_schedule)
     elif optimizer_cfg.optimizer == 'Momentum':
         optimizer = Momentum(network.trainable_params(), learning_rate=optimizer_cfg.Momentum.learning_rate,
                              momentum=optimizer_cfg.Momentum.momentum)
@@ -131,8 +134,12 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     param_dict = load_checkpoint(load_checkpoint_path)
     load_param_into_net(network, param_dict)
 
-    update_cell = DynamicLossScaleUpdateCell(loss_scale_value=2**32, scale_factor=2, scale_window=1000)
-    netwithgrads = BertSquadCell(network, optimizer=optimizer, scale_update_cell=update_cell)
+    update_cell = DynamicLossScaleUpdateCell(loss_scale_value=2**32,
+                                             scale_factor=2,
+                                             scale_window=1000)
+    netwithgrads = BertSquadCell(network,
+                                 optimizer=optimizer,
+                                 scale_update_cell=update_cell)
     model = Model(netwithgrads)
 
     #  callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
@@ -153,7 +160,7 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
     callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
 
-    path = "/data/checkpoint"
+    path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
 
     #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
@@ -163,6 +170,15 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
+
+    #  from src.callback import SaveModelCallback
+    #  callbacks.append(SaveModelCallback(model))
+
+    from src.callback import LossCallback
+    callbacks.append(LossCallback())
+
+    from src.callback import StopAfterCallback
+    callbacks.append(StopAfterCallback(2))
 
     model.train(100, # really high so that it does not stop too early, callback stops training
                 dataset,
@@ -275,8 +291,8 @@ def run_squad():
     if target == "Ascend":
         context.set_context(mode=context.GRAPH_MODE, device_target="Ascend", device_id=args_opt.device_id)
     elif target == "GPU":
-        context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
-        #  context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
+        #  context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+        context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
             bert_net_cfg.compute_type = mstype.float32
@@ -301,7 +317,6 @@ def run_squad():
         ds = create_squad_dataset(batch_size=batch_size, repeat_count=1,
                                   data_file_path=filenames,
                                   schema_file_path=args_opt.schema_file_path,
-                                  #  do_shuffle=(args_opt.train_data_shuffle.lower() == "true"),
                                   do_shuffle=False)
 
         do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,

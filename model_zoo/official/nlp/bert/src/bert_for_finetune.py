@@ -18,20 +18,20 @@ Bert for finetune script.
 '''
 
 import mindspore.nn as nn
-from mindspore.ops import operations as P
-from mindspore.ops import functional as F
-from mindspore.ops import composite as C
-from mindspore.common.tensor import Tensor
-from mindspore.common.parameter import Parameter
-from mindspore.common import dtype as mstype
-from mindspore.nn.wrap.grad_reducer import DistributedGradReducer
-from mindspore.context import ParallelMode
-from mindspore.communication.management import get_group_size
 from mindspore import context
+from mindspore.common import dtype as mstype
+from mindspore.common.parameter import Parameter
+from mindspore.common.tensor import Tensor
+from mindspore.communication.management import get_group_size
+from mindspore.context import ParallelMode
+from mindspore.nn.wrap.grad_reducer import DistributedGradReducer
+from mindspore.ops import composite as C
+from mindspore.ops import functional as F
+from mindspore.ops import operations as P
+
 from .bert_for_pre_training import clip_grad
 from .finetune_eval_model import BertCLSModel, BertNERModel, BertSquadModel
 from .utils import CrossEntropyCalculation
-
 
 GRADIENT_CLIP_TYPE = 1
 GRADIENT_CLIP_VALUE = 1.0
@@ -200,6 +200,8 @@ class BertSquadCell(nn.Cell):
         self.loss_scaling_manager = scale_update_cell
         if scale_update_cell:
             self.loss_scale = Parameter(Tensor(scale_update_cell.get_loss_scale(), dtype=mstype.float32))
+        else:  # debug
+            self.loss_scale = Tensor(1.0, dtype=mstype.float32)  # debug
 
     def construct(self,
                   input_ids,
@@ -258,7 +260,10 @@ class BertSquadCell(nn.Cell):
             cond = self.less_equal(self.base, flag_sum)
         overflow = cond
         if sens is None:
-            overflow = self.loss_scaling_manager(self.loss_scale, cond)
+            if self.loss_scaling_manager is None:
+                overflow = False
+            else:
+                overflow = self.loss_scaling_manager(self.loss_scale, cond)
         if overflow:
             succ = False
         else:

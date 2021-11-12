@@ -263,3 +263,26 @@ class StopAfterCallback(ms.train.callback.Callback):
         if step == self._step:
             run_context.request_stop()
 
+
+class SaveModelCallback(ms.train.callback.Callback):
+    def __init__(self, model):
+        self._model = model
+        self._dir_path = "./params"
+        self._rank = current_rank()
+
+    def step_end(self, run_context):
+        params = list(self._model.train_network.get_parameters())
+        for i, param in enumerate(params):
+            path = os.path.join(self._dir_path, "param-{}-{}.npy".format(self._rank , i))
+            np.save(path, param.asnumpy())
+
+
+class LossCallback(ms.train.callback.Callback):
+    def __init__(self):
+        super().__init__()
+
+    def step_end(self, run_context):
+        cb_params = run_context.original_args()
+        output = cb_params.net_outputs
+        loss = np.mean(output[0].asnumpy())
+        print(f"loss: {loss}")
