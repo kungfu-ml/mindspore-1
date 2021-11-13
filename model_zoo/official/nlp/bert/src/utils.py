@@ -51,10 +51,10 @@ class CrossEntropyCalculation(nn.Cell):
 
     def construct(self, logits, label_ids, num_labels):
         # debug
-        import mindspore.ops.operations.kungfu_comm_ops as kfops
-        rank = kfops.kungfu_current_rank()
-        path = f"./logits-{rank}.npy"
-        np.save(path, logits.asnumpy())
+        #  import mindspore.ops.operations.kungfu_comm_ops as kfops
+        #  rank = kfops.kungfu_current_rank()
+        #  path = f"./logits-{rank}.npy"
+        #  np.save(path, logits.asnumpy())
 
         if self.is_training:
             label_ids = self.reshape(label_ids, self.last_idx)
