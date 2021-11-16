@@ -23,6 +23,7 @@ import os
 
 import mindspore.common.dtype as mstype
 import mindspore.ops.operations.kungfu_comm_ops as kfops
+import numpy as np
 from kungfu.python.elastic import create_tf_records
 from mindspore import context
 from mindspore import log as logger
@@ -36,7 +37,7 @@ from mindspore.train.callback import (CheckpointConfig, ModelCheckpoint,
 from mindspore.train.model import Model
 from mindspore.train.serialization import load_checkpoint, load_param_into_net
 
-from src.bert_for_finetune import BertSquad, BertSquadCell
+from src.bert_for_finetune import BertSquad, BertSquadCell, BertSquadDebug
 from src.callback import (CheckpointCallback, ElasticScheduleCallback,
                           GlobalStepProgressCallback, KungFuSummaryCallback)
 from src.dataset import create_squad_dataset
@@ -143,11 +144,21 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
     # train
     from mindspore.train.dataset_helper import DatasetHelper
+
+    #  netwithgrads.set_train(True)
+    #  dataset_helper = DatasetHelper(dataset, False, -1, epoch_num)
+    #  for i, batch in enumerate(dataset_helper):
+        #  loss, cond = netwithgrads(*batch)
+        #  print(f"loss {i}: {loss}")
+        #  if i == 1:
+            #  break
+
+    rank = kfops.kungfu_current_rank()
+    network.set_train(True)
     dataset_helper = DatasetHelper(dataset, False, -1, epoch_num)
     for i, batch in enumerate(dataset_helper):
-        loss, cond = netwithgrads(*batch)
-        print(f"loss {i}: {loss}")
-
+        out = network(*batch)
+        np.save(f"logits-{rank}-{i}.npy", out.asnumpy())
         if i == 1:
             break
 
@@ -217,7 +228,8 @@ def run_squad():
     else:
         raise Exception("Target error, GPU or Ascend is supported.")
 
-    netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
+    #  netwithloss = BertSquad(bert_net_cfg, True, 2)
+    netwithloss = BertSquadDebug(bert_net_cfg, True, 2)
 
     # ELASTICITY
     index_path = "/data/squad1/tf-index-1.idx.txt"

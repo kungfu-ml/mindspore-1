@@ -114,9 +114,9 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
                                        warmup_steps=warmup_steps,
                                        decay_steps=decay_steps,
                                        power=optimizer_cfg.Lamb.power)
-        #  optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
-        from src.kungfu_mindspore_optimizer import KungFuLambDebug
-        optimizer = KungFuLambDebug(network.trainable_params(), learning_rate=lr_schedule)
+        optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
+        #  from src.kungfu_mindspore_optimizer import KungFuLambDebug
+        #  optimizer = KungFuLambDebug(network.trainable_params(), learning_rate=lr_schedule)
         #  from src.kungfu_mindspore_optimizer import KungFuLambDebugModel
         #  optimizer = KungFuLambDebugModel(network.trainable_params(), learning_rate=lr_schedule)
     elif optimizer_cfg.optimizer == 'Momentum':
@@ -170,15 +170,6 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
-
-    #  from src.callback import SaveModelCallback
-    #  callbacks.append(SaveModelCallback(model))
-
-    from src.callback import LossCallback
-    callbacks.append(LossCallback())
-
-    from src.callback import StopAfterCallback
-    callbacks.append(StopAfterCallback(2))
 
     model.train(100, # really high so that it does not stop too early, callback stops training
                 dataset,
@@ -299,6 +290,7 @@ def run_squad():
     else:
         raise Exception("Target error, GPU or Ascend is supported.")
 
+    # dropout_prob is unused
     netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
 
     # ELASTICITY

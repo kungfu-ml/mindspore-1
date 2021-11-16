@@ -16,6 +16,7 @@
 Bert finetune and evaluation script.
 '''
 import argparse
+import re
 
 import mindspore as ms
 import mindspore.common.dtype as mstype
@@ -73,28 +74,30 @@ def do_eval(dataset=None, load_checkpoint_path="", eval_batch_size=1):
 
 
 def extract_rank_progress(path):
-    import re
-
     pattern = r"(.)*model-(\d+)*-(\d+)*.ckpt"
     match = re.search(pattern, path)
     if match is None:
         print("Regex match of entry name is None")
-    rank = int(match.group(2))
-    progress = int(match.group(3))
+        return -1, -1
+    try:
+        rank = int(match.group(2))
+        progress = int(match.group(3))
+    except:
+        return -1, -1
 
     return rank, progress
 
 def extract_rank_step(path):
-    import re
-
-    print(f"path {path}") # debug
-
     pattern = r"squad-(\d+)_(\d+).ckpt"
     match = re.search(pattern, path)
     if match is None:
         print("Regex match of entry name is None")
-    rank = int(match.group(1))
-    progress = int(match.group(2))
+        return -1, -1
+    try:
+        rank = int(match.group(1))
+        progress = int(match.group(2))
+    except:
+        return -1, -1
 
     return rank, progress
 
@@ -110,6 +113,17 @@ def in_tread(args_opt, checkpoints, eval_examples,
 
     for entry in checkpoints:
         print("GPU {} starts with {}".format(gpu_id, entry.name))
+
+        using_progress = True
+        if using_progress:
+            rank, progress = extract_rank_progress(entry.path)
+        else:
+            rank, step = extract_rank_step(entry.path)
+            global_batch_size = 32
+            progress = step * global_batch_size
+        if rank == -1:
+            break
+
         dataset = create_squad_dataset(
             batch_size=args_opt.eval_batch_size,
             repeat_count=1,
@@ -126,16 +140,7 @@ def in_tread(args_opt, checkpoints, eval_examples,
         all_predictions = write_predictions(eval_examples, eval_features,
                                             outputs, 20, 30, True)
 
-        using_progress = True
-        if using_progress:
-            rank, progress = extract_rank_progress(entry.path)
-        else:
-            rank, step = extract_rank_step(entry.path)
-            global_batch_size = 32
-            progress = step * global_batch_size
         output_path = "./output_{}_{}.json".format(rank, progress)
-
-
         SQuad_postprocess(args_opt.eval_json_path,
                           all_predictions,
                           output_metrics=output_path)
@@ -146,6 +151,13 @@ def split_list(li: list, num_pieces: int):
     piece_length = length // num_pieces
     for i in range(num_pieces):
         yield li[i * piece_length: (i + 1) * piece_length]
+
+
+def is_rank_zero(entry):
+    ma = re.search("model-0", entry.name)
+    if ma:
+        return True
+    return False
 
 
 def run_squad():
@@ -289,6 +301,7 @@ def run_squad():
     num_gpus = args_opt.num_gpus
     entries = os.scandir(args_opt.checkpoint_path)
     entries = [entry for entry in entries if entry.is_file()]
+    entries = list(filter(is_rank_zero, entries))
     entries_splits = split_list(entries, num_gpus)
 
     processes = []

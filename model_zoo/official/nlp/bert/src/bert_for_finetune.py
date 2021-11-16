@@ -325,9 +325,9 @@ class BertSquad(nn.Cell):
     '''
     Train interface for SQuAD finetuning task.
     '''
-    def __init__(self, config, is_training, num_labels=2, dropout_prob=0.0, use_one_hot_embeddings=False):
+    def __init__(self, config, is_training, num_labels=2, use_one_hot_embeddings=False):
         super(BertSquad, self).__init__()
-        self.bert = BertSquadModel(config, is_training, num_labels, dropout_prob, use_one_hot_embeddings)
+        self.bert = BertSquadModel(config, is_training, num_labels, use_one_hot_embeddings)
         self.loss = CrossEntropyCalculation(is_training)
         self.num_labels = num_labels
         self.seq_length = config.seq_length
@@ -356,3 +356,12 @@ class BertSquad(nn.Cell):
             end_logits = end_logits + 100 * input_mask
             total_loss = (unique_id, start_logits, end_logits)
         return total_loss
+
+class BertSquadDebug(nn.Cell):
+    def __init__(self, config, is_training, num_labels=2, use_one_hot_embeddings=False):
+        super(BertSquadDebug, self).__init__()
+        self.bert = BertSquadModel(config, is_training, num_labels, use_one_hot_embeddings)
+
+    def construct(self, input_ids, input_mask, token_type_id, start_position, end_position, unique_id, is_impossible):
+        logits = self.bert(input_ids, input_mask, token_type_id)
+        return logits

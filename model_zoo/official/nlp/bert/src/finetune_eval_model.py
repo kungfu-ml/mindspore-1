@@ -20,7 +20,9 @@ Bert finetune and evaluation model script.
 import mindspore.nn as nn
 from mindspore.common.initializer import TruncatedNormal
 from mindspore.ops import operations as P
+
 from .bert_model import BertModel
+
 
 class BertCLSModel(nn.Cell):
     """
@@ -60,7 +62,7 @@ class BertSquadModel(nn.Cell):
     '''
     This class is responsible for SQuAD
     '''
-    def __init__(self, config, is_training, num_labels=2, dropout_prob=0.0, use_one_hot_embeddings=False):
+    def __init__(self, config, is_training, num_labels=2, use_one_hot_embeddings=False):
         super(BertSquadModel, self).__init__()
         if not is_training:
             config.hidden_dropout_prob = 0.0
