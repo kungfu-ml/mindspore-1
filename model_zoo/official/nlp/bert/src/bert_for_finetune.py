@@ -18,6 +18,7 @@ Bert for finetune script.
 '''
 
 import mindspore.nn as nn
+import numpy as np  # debug
 from mindspore import context
 from mindspore.common import dtype as mstype
 from mindspore.common.parameter import Parameter
@@ -200,8 +201,6 @@ class BertSquadCell(nn.Cell):
         self.loss_scaling_manager = scale_update_cell
         if scale_update_cell:
             self.loss_scale = Parameter(Tensor(scale_update_cell.get_loss_scale(), dtype=mstype.float32))
-        else:  # debug
-            self.loss_scale = Tensor(1.0, dtype=mstype.float32)  # debug
 
     def construct(self,
                   input_ids,
@@ -340,9 +339,17 @@ class BertSquad(nn.Cell):
         self.argmax = P.ArgMaxWithValue(axis=1)
         self.squeeze = P.Squeeze(axis=-1)
 
+        # debug
+        #  import mindspore.ops.operations.kungfu_comm_ops as kfops
+        #  self._rank = kfops.kungfu_current_rank()
+
     def construct(self, input_ids, input_mask, token_type_id, start_position, end_position, unique_id, is_impossible):
         """interface for SQuAD finetuning task"""
         logits = self.bert(input_ids, input_mask, token_type_id)
+
+        # debug
+        #  np.save("./logits-{}.npy".format(self._rank), logits.asnumpy())
+
         if self.is_training:
             unstacked_logits_0 = self.squeeze(logits[:, :, 0:1])
             unstacked_logits_1 = self.squeeze(logits[:, :, 1:2])
@@ -356,12 +363,3 @@ class BertSquad(nn.Cell):
             end_logits = end_logits + 100 * input_mask
             total_loss = (unique_id, start_logits, end_logits)
         return total_loss
-
-class BertSquadDebug(nn.Cell):
-    def __init__(self, config, is_training, num_labels=2, use_one_hot_embeddings=False):
-        super(BertSquadDebug, self).__init__()
-        self.bert = BertSquadModel(config, is_training, num_labels, use_one_hot_embeddings)
-
-    def construct(self, input_ids, input_mask, token_type_id, start_position, end_position, unique_id, is_impossible):
-        logits = self.bert(input_ids, input_mask, token_type_id)
-        return logits

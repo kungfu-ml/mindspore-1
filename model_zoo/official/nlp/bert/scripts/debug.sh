@@ -2,7 +2,7 @@
 
 # export CUDA_VISIBLE_DEVICES=2,3
 
-RANK_SIZE=1
+RANK_SIZE=2
 EPOCH_SIZE=1
 DATA_DIR="${HOME}/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"

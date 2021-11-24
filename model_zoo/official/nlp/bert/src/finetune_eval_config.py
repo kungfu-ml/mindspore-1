@@ -17,8 +17,9 @@
 config settings, will be used in finetune.py
 """
 
-from easydict import EasyDict as edict
 import mindspore.common.dtype as mstype
+from easydict import EasyDict as edict
+
 from .bert_model import BertConfig
 
 optimizer_cfg = edict({
@@ -52,8 +53,10 @@ bert_net_cfg = BertConfig(
     num_attention_heads=12,
     intermediate_size=3072,
     hidden_act="gelu",
-    hidden_dropout_prob=0.1,
-    attention_probs_dropout_prob=0.1,
+    #  hidden_dropout_prob=0.1,
+    #  attention_probs_dropout_prob=0.1,
+    hidden_dropout_prob=0.0,
+    attention_probs_dropout_prob=0.0,
     max_position_embeddings=512,
     type_vocab_size=2,
     initializer_range=0.02,

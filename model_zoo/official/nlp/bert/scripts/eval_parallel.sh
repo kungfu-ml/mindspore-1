@@ -26,3 +26,4 @@ python run_squad_eval.py  \
     --eval_json_path="${DATA_DIR}/squad1/dev-v1.1.json" \
     --schema_file_path="${DATA_DIR}/squad1/squad_schema.json"
     # --schema_file_path="${DATA_DIR}/squad1/squad_schema.json" > squad.log 2>&1
+    # --checkpoint_path="/data/marcel/experiment_snapshots/2gpu_0drop_short/checkpoint" \

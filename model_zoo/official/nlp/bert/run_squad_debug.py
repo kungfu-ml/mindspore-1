@@ -97,11 +97,12 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
     print("decay steps: {}".format(decay_steps))
     print("power: {}".format(optimizer_cfg.Lamb.power))
     print("=== LEARNING RATE ===")
-    lr_schedule = BertLearningRate(learning_rate=optimizer_cfg.Lamb.learning_rate,
-                                   end_learning_rate=optimizer_cfg.Lamb.end_learning_rate,
-                                   warmup_steps=warmup_steps,
-                                   decay_steps=decay_steps,
-                                   power=optimizer_cfg.Lamb.power)
+    #  lr_schedule = BertLearningRate(learning_rate=optimizer_cfg.Lamb.learning_rate,
+                                   #  end_learning_rate=optimizer_cfg.Lamb.end_learning_rate,
+                                   #  warmup_steps=warmup_steps,
+                                   #  decay_steps=decay_steps,
+                                   #  power=optimizer_cfg.Lamb.power)
+    lr_schedule = optimizer_cfg.Lamb.learning_rate
     optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
     #  from src.kungfu_mindspore_optimizer import KungFuLambDebug
     #  optimizer = KungFuLambDebug(network.trainable_params(), learning_rate=lr_schedule)
@@ -118,49 +119,24 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
                                  scale_update_cell=update_cell)
     model = Model(netwithgrads)
 
-    callbacks = []
-
-    # ELASTIC
-    max_progress = 88641
-    print("max_progress {}".format(max_progress))
-    es = ElasticState(max_progress - DROPPED, True)
-
-    callbacks.append(GlobalStepProgressCallback(model, es, GLOBAL_BATCH_SIZE))
-
-    path = "./checkpoint"
-    callbacks.append(CheckpointCallback(es, model, path))
-
-    schedule = {}
-    print("schedule {}".format(schedule))
-    schedule_cb = ElasticScheduleCallback(es, schedule, model)
-    callbacks.append(schedule_cb)
-    callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
-
-    from src.callback import LossCallback
-    callbacks.append(LossCallback())
-
-    from src.callback import StopAfterCallback
-    callbacks.append(StopAfterCallback(2))
-
     # train
     from mindspore.train.dataset_helper import DatasetHelper
 
-    #  netwithgrads.set_train(True)
-    #  dataset_helper = DatasetHelper(dataset, False, -1, epoch_num)
-    #  for i, batch in enumerate(dataset_helper):
-        #  loss, cond = netwithgrads(*batch)
-        #  print(f"loss {i}: {loss}")
-        #  if i == 1:
-            #  break
-
     rank = kfops.kungfu_current_rank()
-    network.set_train(True)
     dataset_helper = DatasetHelper(dataset, False, -1, epoch_num)
+
+    #  network.set_train(True)
+    #  for i, batch in enumerate(dataset_helper):
+        #  logits = network(*batch)
+        #  np.save(f"logits-{rank}-{i}.npy", logits.asnumpy())
+        #  break
+
+    netwithgrads.set_train(True)
     for i, batch in enumerate(dataset_helper):
-        out = network(*batch)
-        np.save(f"logits-{rank}-{i}.npy", out.asnumpy())
-        if i == 1:
-            break
+        logits = netwithgrads(*batch)
+        #  np.save(f"logits-{rank}-{i}.npy", logits.asnumpy())
+        #  if i == 9:
+        break
 
 
 def run_squad():
@@ -211,25 +187,23 @@ def run_squad():
 
     kfops.init(args_opt.device_target)
     kungfu_nccl_init()
-    device_num = kfops.kungfu_current_cluster_size()
     rank = kfops.kungfu_current_rank()
-    print("kungfu rank={}, size={}".format(rank, device_num))
 
     save_finetune_checkpoint_path = os.path.join(save_finetune_checkpoint_path,
                                                  "ckpt_" + str(rank))
 
     target = args_opt.device_target
     if target == "GPU":
-        context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
-        #  context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
+        #  context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
+        context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
             bert_net_cfg.compute_type = mstype.float32
     else:
         raise Exception("Target error, GPU or Ascend is supported.")
 
-    #  netwithloss = BertSquad(bert_net_cfg, True, 2)
-    netwithloss = BertSquadDebug(bert_net_cfg, True, 2)
+    netwithloss = BertSquad(bert_net_cfg, True, 2)
+    #  netwithloss = BertSquadDebug(bert_net_cfg, True, 2)
 
     # ELASTICITY
     index_path = "/data/squad1/tf-index-1.idx.txt"

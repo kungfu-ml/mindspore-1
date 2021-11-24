@@ -28,6 +28,27 @@ class KungFuSummaryCallback(ms.train.callback.Callback):
             summary_file.write("{},{}\n".format(step, loss))
 
 
+class CheckpointEveryStepCallback(ms.train.callback.Callback):
+    def __init__(self, elastic_state, model, path):
+        self._model = model
+        self._path = path
+        self._elastic_state = elastic_state
+
+    def save_checkpoint(self):
+        progress = self._elastic_state._progress
+        rank = current_rank()
+        ckpt_name = "model-{}-{}.ckpt".format(rank, progress)
+        save_checkpoint(self._model.train_network,
+                        os.path.join(self._path, ckpt_name))
+
+
+    def step_end(self, run_context):
+        self.save_checkpoint()
+
+    def end(self, run_context):
+        self.save_checkpoint()
+
+
 class CheckpointCallback(ms.train.callback.Callback):
     def __init__(self, elastic_state, model, path):
         self._model = model
@@ -122,24 +143,31 @@ def write_checkpoint(model, path, rank, step):
                     os.path.join(path, ckpt_name))
 
 
-class DebugCallback(ms.train.callback.Callback):
-    def __init__(self, model):
-        self._model = model
 
-    def print_step(self, when, run_ctx):
-        cb_params = run_ctx.original_args()
+class DebugStepCallback(ms.train.callback.Callback):
+    def print_step(self, run_context, when):
+        cb_params = run_context.original_args()
+
         step = cb_params.cur_step_num
+        print(f"{when}: run_context_step {step}")
 
-        params = list(self._model.train_network.get_parameters())
-        for param in params:
+        for param in cb_params.train_network.get_parameters():
             if param.name == "global_step":
-                print("{}: step {}, global step {}".format(when, step, param.asnumpy()))
+                global_step = param.asnumpy()
+                print(f"{when}: global_step {global_step}")
+                break
+
+        for param in cb_params.train_network.get_parameters():
+            if param.name == "current_iterator_step":
+                current_iterator_step = param.asnumpy()
+                print(f"{when}: current_iterator_step {current_iterator_step}")
+                break
 
     def step_begin(self, run_context):
-        self.print_step("step_begin", run_context)
+        self.print_step(run_context, "begin")
 
     def step_end(self, run_context):
-        self.print_step("step_end", run_context)
+        self.print_step(run_context, "end")
 
 
 class LogStepCallback(ms.train.callback.Callback):
@@ -182,18 +210,27 @@ class GlobalStepProgressCallback(ms.train.callback.Callback):
         self._global_batch_size = global_batch_size
         self._global_step_offset = self._elastic_state._progress // global_batch_size
         self._global_step = None
+        self._current_iterator_step = None
         self._assign_op = ms.ops.Assign()
 
     def step_begin(self, run_context):
         cb_params = run_context.original_args()
         step = cb_params.cur_step_num
 
-        if step == 1: # adjust global step only after rescale
+        if step == 1:  # adjust global step only after rescale
             for param in cb_params.train_network.get_parameters():
                 if param.name == "global_step":
                     self._global_step = param
                     break
-            self._assign_op(self._global_step, self._global_step + self._global_step_offset)
+            self._assign_op(self._global_step,
+                            self._global_step + self._global_step_offset)
+
+            for param in cb_params.train_network.get_parameters():
+                if param.name == "current_iterator_step":
+                    self._current_iterator_step = param
+                    break
+            self._assign_op(self._current_iterator_step,
+                            self._current_iterator_step + self._global_step_offset)
 
 
 def ckpt(es):

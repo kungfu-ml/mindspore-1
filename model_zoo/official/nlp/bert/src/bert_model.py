@@ -14,17 +14,18 @@
 # ============================================================================
 """Bert model."""
 
-import math
 import copy
-import numpy as np
+import math
+
 import mindspore.common.dtype as mstype
 import mindspore.nn as nn
 import mindspore.ops.functional as F
+import numpy as np
 from mindspore.common.initializer import TruncatedNormal, initializer
-from mindspore.ops import operations as P
-from mindspore.ops import composite as C
-from mindspore.common.tensor import Tensor
 from mindspore.common.parameter import Parameter
+from mindspore.common.tensor import Tensor
+from mindspore.ops import composite as C
+from mindspore.ops import operations as P
 
 
 class BertConfig:
@@ -177,6 +178,7 @@ class EmbeddingPostprocessor(nn.Cell):
         self.array_mul = P.MatMul()
         self.reshape = P.Reshape()
         self.shape = tuple(embedding_shape)
+        print(f"EmbeddingPostprocessor dropout_prob: {dropout_prob}")
         self.dropout = nn.Dropout(1 - dropout_prob)
         self.gather = P.Gather()
         self.use_relative_positions = use_relative_positions
@@ -224,6 +226,7 @@ class BertOutput(nn.Cell):
         super(BertOutput, self).__init__()
         self.dense = nn.Dense(in_channels, out_channels,
                               weight_init=TruncatedNormal(initializer_range)).to_float(compute_type)
+        print(f"BertOutput dropout_prob: {dropout_prob}")
         self.dropout = nn.Dropout(1 - dropout_prob)
         self.dropout_prob = dropout_prob
         self.add = P.Add()
@@ -439,6 +442,7 @@ class BertAttention(nn.Cell):
         self.matmul = P.BatchMatMul()
 
         self.softmax = nn.Softmax()
+        print(f"BertAttention dropout_prob: {attention_probs_dropout_prob}")
         self.dropout = nn.Dropout(1 - attention_probs_dropout_prob)
 
         if self.has_attention_mask:

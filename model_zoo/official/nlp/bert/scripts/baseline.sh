@@ -2,18 +2,16 @@
 
 # export CUDA_VISIBLE_DEVICES=2,3
 
-RANK_SIZE=2
+RANK_SIZE=1
 EPOCH_SIZE=1
 DATA_DIR="${HOME}/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
-
-export KUNGFU_CONFIG_LOG_LEVEL="DEBUG"
-export KUNGFU_CONFIG_ENABLE_STALL_DETECTION="true"
 
 . ${REPO_DIR}/ld_library_path.sh
 export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
 export KUNGFU_NO_AUTO_INIT=1
 export NCCL_P2P_LEVEL="NVL"
+export MAX_SAMPLE_PER_FILE=98642
 
 CKPT_DIR="./checkpoint"
 if [ -d ${CKPT_DIR} ]; then
@@ -22,7 +20,6 @@ fi
 mkdir ${CKPT_DIR}
 cp ${DATA_DIR}/bert/bert_base_squad.ckpt ${CKPT_DIR}/model.ckpt
 
-# python -m kungfu.cmd.elastic_run \
 kungfu-run \
     -np $RANK_SIZE \
     -logfile kungfu-run.log \
@@ -32,7 +29,7 @@ kungfu-run \
     -elastic-mode reload \
     -config-server http://127.0.0.1:9100/config \
     -builtin-config-port 9100 \
-    python run_squad_baseline_elastic.py \
+    python run_squad_baseline.py \
         --device_target="GPU" \
         --distribute="true" \
         --do_train="true" \

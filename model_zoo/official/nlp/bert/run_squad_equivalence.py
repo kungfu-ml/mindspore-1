@@ -116,9 +116,7 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
                                        power=optimizer_cfg.Lamb.power)
         optimizer = KungFuLamb(network.trainable_params(), learning_rate=lr_schedule)
         #  from src.kungfu_mindspore_optimizer import KungFuLambDebug
-        #  optimizer = KungFuLambDebug(network.trainable_params(), learning_rate=lr_schedule)
-        #  from src.kungfu_mindspore_optimizer import KungFuLambDebugModel
-        #  optimizer = KungFuLambDebugModel(network.trainable_params(), learning_rate=lr_schedule)
+        #  optimizer = KungFuLambDebug(network.trainable_params(), learning_rate=lr_schedule)  # debug
     elif optimizer_cfg.optimizer == 'Momentum':
         optimizer = Momentum(network.trainable_params(), learning_rate=optimizer_cfg.Momentum.learning_rate,
                              momentum=optimizer_cfg.Momentum.momentum)
@@ -126,11 +124,6 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
         raise Exception("Optimizer not supported. support: [AdamWeightDecay, Lamb, Momentum]")
 
     # load checkpoint into network
-    ckpt_config = CheckpointConfig(save_checkpoint_steps=500, keep_checkpoint_max=10)
-    #  ckpt_config = CheckpointConfig(save_checkpoint_steps=steps_per_epoch, keep_checkpoint_max=1)
-    ckpoint_cb = ModelCheckpoint(prefix="squad",
-                                 directory=None if save_checkpoint_path == "" else save_checkpoint_path,
-                                 config=ckpt_config)
     param_dict = load_checkpoint(load_checkpoint_path)
     load_param_into_net(network, param_dict)
 
@@ -142,7 +135,6 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
                                  scale_update_cell=update_cell)
     model = Model(netwithgrads)
 
-    #  callbacks = [TimeMonitor(dataset.get_dataset_size()), LossCallBack(dataset.get_dataset_size()), ckpoint_cb]
     callbacks = []
 
     # Summary (loss)
@@ -162,14 +154,20 @@ def do_train(dataset=None, network=None, load_checkpoint_path="", save_checkpoin
 
     path = "./checkpoint"
     callbacks.append(CheckpointCallback(es, model, path))
+    #  from src.callback import CheckpointEveryStepCallback
+    #  callbacks.append(CheckpointEveryStepCallback(es, model, path))
 
-    #  schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
+    schedule = {8320: 2, 22400: 1, 32640: 2, 38400: 1, 46080: 2, 64640: 1, 75520: 2}
     #  schedule = {5120: 2, 12800: 1, 23680: 2, 30080: 1, 40320: 2, 67840: 1, 79360: 2}
-    schedule = {}
-    print("schedule {}".format(schedule))
+    #  schedule = {1600: 2, 3200: 0}
+    print(f"schedule {schedule}")
     schedule_cb = ElasticScheduleCallback(es, schedule, model)
     callbacks.append(schedule_cb)
     callbacks.append(ElasticCallback(es, GLOBAL_BATCH_SIZE))
+
+    # debug
+    #  from src.callback import DebugStepCallback
+    #  callbacks.append(DebugStepCallback())
 
     model.train(100, # really high so that it does not stop too early, callback stops training
                 dataset,
@@ -283,15 +281,14 @@ def run_squad():
         context.set_context(mode=context.GRAPH_MODE, device_target="Ascend", device_id=args_opt.device_id)
     elif target == "GPU":
         #  context.set_context(mode=context.GRAPH_MODE, device_target="GPU")
-        context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")
+        context.set_context(mode=context.PYNATIVE_MODE, device_target="GPU")  # debug
         if bert_net_cfg.compute_type != mstype.float32:
             logger.warning('GPU only support fp32 temporarily, run with fp32.')
             bert_net_cfg.compute_type = mstype.float32
     else:
         raise Exception("Target error, GPU or Ascend is supported.")
 
-    # dropout_prob is unused
-    netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
+    netwithloss = BertSquad(bert_net_cfg, True, 2)
 
     # ELASTICITY
     index_path = "/data/squad1/tf-index-1.idx.txt"
@@ -311,8 +308,9 @@ def run_squad():
                                   schema_file_path=args_opt.schema_file_path,
                                   do_shuffle=False)
 
-        do_train(ds, netwithloss, load_pretrain_checkpoint_path, save_finetune_checkpoint_path,
-                epoch_num, distributed)
+        do_train(ds, netwithloss, load_pretrain_checkpoint_path,
+                 save_finetune_checkpoint_path, epoch_num,
+                 distributed)
         if args_opt.do_eval.lower() == "true":
             if save_finetune_checkpoint_path == "":
                 load_finetune_checkpoint_dir = _cur_dir
@@ -346,7 +344,7 @@ def run_squad():
         all_predictions = write_predictions(eval_examples, eval_features, outputs, 20, 30, True)
 
         if distributed:
-            output_path = "./output_{}.json".format(rank)
+            output_path = f"./output_{rank}.json"
         else:
             output_path = "./output.json"
 
