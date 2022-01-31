@@ -291,7 +291,7 @@ def run_squad():
         raise Exception("Target error, GPU or Ascend is supported.")
 
     # dropout_prob is unused
-    netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
+    netwithloss = BertSquad(bert_net_cfg, True, 2)
 
     # ELASTICITY
     index_path = "/data/squad1/tf-index-1.idx.txt"
