@@ -21,6 +21,7 @@ import collections
 import math
 import os
 
+import mindspore.ops.operations.kungfu_comm_ops as kfops
 import mindspore.nn as nn
 import numpy as np
 from mindspore import log as logger
@@ -164,6 +165,12 @@ class BertLearningRate(LearningRateSchedule):
         self.one = Tensor(np.array([1.0]).astype(np.float32))
         self.cast = P.Cast()
 
+        # debug
+        self.rank = kfops.kungfu_current_rank()
+        if self.rank == 0:
+            with open("lr.csv", "a") as lr_file:
+                lr_file.write(f"global_step,lr\n")
+
     def construct(self, global_step):
         decay_lr = self.decay_lr(global_step)
         if self.warmup_flag:
@@ -172,6 +179,14 @@ class BertLearningRate(LearningRateSchedule):
             lr = (self.one - is_warmup) * decay_lr + is_warmup * warmup_lr
         else:
             lr = decay_lr
+
+        # debug
+        if self.rank == 0:
+            gs_np = global_step.asnumpy()[0]
+            lr_np = lr.asnumpy()[0]
+            with open("lr.csv", "a") as lr_file:
+                lr_file.write(f"{gs_np},{lr_np}\n")
+
         return lr
 
 

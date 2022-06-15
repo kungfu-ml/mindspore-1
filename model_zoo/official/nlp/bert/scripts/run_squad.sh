@@ -6,7 +6,7 @@ mkdir -p ms_log
 CUR_DIR=`pwd`
 export GLOG_log_dir=${CUR_DIR}/ms_log
 
-DATA_DIR="${HOME}/data"
+DATA_DIR="/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
 
 . ${REPO_DIR}/ld_library_path.sh
@@ -27,6 +27,7 @@ python run_squad.py  \
     --vocab_file_path="${DATA_DIR}/bert/bert_uncased_L-12_H-768_A-12/vocab.txt" \
     --save_finetune_checkpoint_path="${CUR_DIR}/checkpoint" \
     --load_pretrain_checkpoint_path="${DATA_DIR}/bert/bert_base_squad.ckpt" \
+    --load_finetune_checkpoint_path="${CUR_DIR}/checkpoint/squad-1_1250.ckpt" \
     --train_data_file_path="${DATA_DIR}/squad1/train.tf_record" \
     --eval_json_path="${DATA_DIR}/squad1/dev-v1.1.json" \
     --schema_file_path="${DATA_DIR}/squad1/squad_schema.json" > squad.log 2>&1

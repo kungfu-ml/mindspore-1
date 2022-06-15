@@ -208,29 +208,28 @@ class GlobalStepProgressCallback(ms.train.callback.Callback):
         self._model = model
         self._elastic_state = elastic_state
         self._global_batch_size = global_batch_size
-        self._global_step_offset = self._elastic_state._progress // global_batch_size
-        self._global_step = None
-        self._current_iterator_step = None
+        progress = self._elastic_state._progress
+        self._global_step_offset = progress // global_batch_size
         self._assign_op = ms.ops.Assign()
 
     def step_begin(self, run_context):
         cb_params = run_context.original_args()
         step = cb_params.cur_step_num
 
-        if step == 1:  # adjust global step only after rescale
-            for param in cb_params.train_network.get_parameters():
-                if param.name == "global_step":
-                    self._global_step = param
-                    break
-            self._assign_op(self._global_step,
-                            self._global_step + self._global_step_offset)
+        for param in cb_params.train_network.get_parameters():
+            if param.name == "global_step":
+                print(f"Global step {param.asnumpy()}")
+                if step == 1:
+                    self._assign_op(param,
+                                    param + self._global_step_offset)
+            if param.name == "current_iterator_step":
+                print(f"Current iterator step {param.asnumpy()}")
+                if step == 1:
+                    self._assign_op(param,
+                                    param + self._global_step_offset)
 
-            for param in cb_params.train_network.get_parameters():
-                if param.name == "current_iterator_step":
-                    self._current_iterator_step = param
-                    break
-            self._assign_op(self._current_iterator_step,
-                            self._current_iterator_step + self._global_step_offset)
+            if param.name == "last_overflow_iterator_step":
+                print(f"Last overflow iterator step {param.asnumpy()}")
 
 
 def ckpt(es):

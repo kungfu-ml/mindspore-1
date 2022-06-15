@@ -358,11 +358,9 @@ def run_squad():
     else:
         raise Exception("Target error, GPU or Ascend is supported.")
 
-    netwithloss = BertSquad(bert_net_cfg, True, 2, dropout_prob=0.1)
+    netwithloss = BertSquad(bert_net_cfg, True, 2)
 
     if args_opt.do_train.lower() == "true":
-        print("batch size: {}".format(args_opt.train_batch_size)) # debug
-
         ds = create_squad_dataset(
             batch_size=args_opt.train_batch_size,
             repeat_count=1,
@@ -372,10 +370,6 @@ def run_squad():
             do_shuffle=False, # debug
             device_num=device_num,
             rank=rank)
-
-        # debug
-        debug_dataset(ds, args_opt.train_batch_size)
-        return
 
         do_train(ds, netwithloss, load_pretrain_checkpoint_path,
                  save_finetune_checkpoint_path, epoch_num, distributed)

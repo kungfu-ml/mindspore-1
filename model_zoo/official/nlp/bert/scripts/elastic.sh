@@ -4,7 +4,7 @@
 
 RANK_SIZE=1
 EPOCH_SIZE=1
-DATA_DIR="${HOME}/data"
+DATA_DIR="/data"
 REPO_DIR="${HOME}/Elasticity/Repo/kungfu-mindspore"
 
 . ${REPO_DIR}/ld_library_path.sh
@@ -12,6 +12,7 @@ export LD_LIBRARY_PATH=$(ld_library_path ${REPO_DIR}/mindspore)
 export KUNGFU_NO_AUTO_INIT=1
 export NCCL_P2P_LEVEL="NVL"
 export MAX_SAMPLE_PER_FILE=98642
+export KUNGFU_CONFIG_LOG_LEVEL="DEBUG"
 
 CKPT_DIR="./checkpoint"
 if [ -d ${CKPT_DIR} ]; then
